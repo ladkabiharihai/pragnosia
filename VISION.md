@@ -16,6 +16,19 @@ The model must be capable, grow from infant like a child, and stand up to its na
 - **Context from 100 tokens to unbounded / streaming**, served at constant memory.
 - **Capable, and worthy of the name.**
 
+## 1b. North-star claims and success metrics (what "best in the world" means, falsifiable)
+Two headline flags, BOTH core to the identity; LEAD with (1) as the demonstrable substrate, (2) is the soul:
+1. **Constant-memory, constant-compute, unbounded/streaming context.** Serving memory + FLOPs/token + latency stay
+   FLAT as context grows 100 -> 1M -> streaming (a transformer's climb; architecturally it cannot match this). The
+   demonstrable, definitive win. Metric: flat-line plots of mem/compute/latency vs length, with needle/long-doc
+   accuracy held.
+2. **Verified continual learning at inference.** Learns new facts/skills online, RETAINS them, with minimal
+   catastrophic forgetting, and REFUSES to be poisoned (rejects unverified/false claims). Likely no competitor; we
+   must DEFINE a fair benchmark (retention, forgetting curve, poisoning-resistance, sample-efficiency) - a
+   contribution and a risk (design it fair, not self-serving).
+Supporting frontier: best capability-per-resource (per-param / per-FLOP / per-Joule) among continual/long-context
+models - NOT best absolute capability. Long-generation coherence (repetition/distinct-n) over 1k-10k+ tokens.
+
 ## 2. The machine (one unified design; these are not separate features)
 A brain with a fast short-term memory and a slow long-term memory, that grows and learns continually.
 - **Working memory = the recurrent state** (VChunkRecall). Fixed-size, O(1) memory per token, so context 100 to
@@ -143,7 +156,6 @@ this design.)
 ## 11. Open pieces to design (priority c done -> a done -> b next)
 - **a (DONE, captured in 7b):** fast episodic memory (fast-weights `M` + write-log + decay); propose gate
   (surprise x recurrence x salience, masking-bootstrapped); infant-growth fix (gated monotonic growth + grow-vocab).
-- **b (NEXT):** the EFFICIENCY targets and metrics we stake the "best in the world" claim on (tokens/param, long-context
-  per FLOP, constant serving memory, continual-learning retention/forgetting, latency, power). Define the benchmark.
-- **then:** the consolidation ("sleep") loop mechanics; the verification/retrieval component (corpus + internet trust);
-  measuring our arch's scaling curve; and only then, rebuild code minimally and prototype.
+- **b (DONE):** headline claims + metrics decided (see 1b).
+- **then (design still open):** consolidation ("sleep") loop mechanics; verification/retrieval component (corpus +
+  internet trust weighting + multi-source); measuring our arch's scaling curve; then rebuild code minimally + prototype.
