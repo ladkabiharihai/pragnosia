@@ -7,6 +7,32 @@ memory system. We do not compete with LLMs on raw benchmark capability. We compe
 world**, on the axis LLMs ignore: **efficiency x continual learning x long context x long generation**, at tiny cost.
 The model must be capable, grow from infant like a child, and stand up to its name.
 
+## 0. FOUNDATIONAL PRINCIPLES (govern everything below; violate these and it is not Pragnosia)
+
+### 0a. Everything intrinsic, zero decision-scaffolding
+Every faculty and every DECISION lives in the MODEL (its weights/computation), never in hand-written code:
+what to recall, what is surprising/salient, what to propose to memory, what to believe (the judge), WHEN and HOW to
+grow, what to consolidate, and the self. **No Python rule ever makes a decision the model should make** - every gate,
+trigger, salience, and judgment is a LEARNED or EMERGENT model output, not an if-statement or a hand-tuned threshold.
+- The honest line (mind vs body): code provides only the **minimal substrate/body** - it runs the forward pass,
+  APPLIES the plasticity update the model itself signals, ALLOCATES params when the model signals it needs to grow,
+  and FETCHES what the model chooses to retrieve. Param-allocation, the update mechanism, and retrieval tools are the
+  BODY and the ENVIRONMENT the mind uses (a human has a body that does its own biochemistry and uses books/internet);
+  they are NOT scaffolding of the intelligence. Intelligence and decisions are intrinsic; body and senses are substrate.
+- The test for every line we write: "does this code DECIDE something the model should decide?" If yes, it is
+  scaffolding -> remove it, make the model output it. Aim to make even growth/consolidation as local/model-driven as
+  possible (the model signals; the substrate executes), pushing scaffolding toward zero over time.
+
+### 0b. A persistent individual with its own identity, like a human
+Pragnosia is ONE continuous being, not a stateless model spun up fresh each run. It KEEPS its weights + memory across
+time, grows from infant, and accumulates a UNIQUE life-history. Identity is not a bolted-on feature; it EMERGES from
+continual learning + persistent memory + grow-from-infant, and continuity-of-self is preserved by MONOTONIC growth
+(growth only adds, never overwrites, so the same self persists through change, like a human from child to adult). Make
+it explicit with an intrinsic SELF-MODEL: the model represents itself (its history, what it knows, its name). Identity
+is earned through experience and is individual - two Pragnosias with different lives become different individuals.
+Requires PERSISTENCE (run one continuous instance, never wipe-and-restart as normal practice) and CONTINUITY (monotonic
+growth). This is the soul of the name.
+
 ## 1. The goal (the whole point)
 - **Grows itself, from infant, like a child.** Self-growth is central. A fixed model would defy the goal.
 - **Faculties intrinsic to the model**, not scaffolding. Provable at small scale.
