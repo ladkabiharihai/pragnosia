@@ -266,3 +266,9 @@ Verification gates consolidation; nothing becomes permanent unless validated. It
   (emb, Wk, Wq, Wv, Wo, bo). Required deriving TEMPORAL credit for the CAUSAL case: each write gets credit from all
   future reads via a REVERSE-CUMULATIVE learning signal (e-prop). Confirms pure-local == backprop at real-language
   scale, not just toy recall. §0c bet proven on the actual task/data.
+- **#3 end-to-end training (pc_derisk3_train.py + data_mix.py):** pure local plasticity TRAINS on the FULL 290B 32K
+  mix (all 11 corpora, weighted; data_mix.py owns "use all data"), loss curve tracks BPTT step-for-step, final gap
+  -0.029 (local a hair ahead; optimizer-path noise). Confirms the local rule OPTIMIZES correctly, not just computes
+  the right gradient. §0c load-bearing bet fully retired at small scale. (Absolute ppl high = tiny 1-layer core/600
+  steps; the point is local==BPTT.) Data layer for real training = data_mix.py (290B, faculty floors so math/code
+  not drowned by web bulk).
