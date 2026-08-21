@@ -153,7 +153,7 @@ this design.)
   a modest footprint. **Kill ONLY exact verified PIDs, never memory-threshold or broad -f patterns** (bounced prod
   twice that way). Training is the flexible one; the entropy sensor must be subsampled (full 32K-vocab float softmax OOMs).
 
-## 11. Open pieces to design (priority c done -> a done -> b next)
+## 11. Roadmap (design phase c -> a -> b all DONE)
 - **a (DONE, captured in 7b):** fast episodic memory (fast-weights `M` + write-log + decay); propose gate
   (surprise x recurrence x salience, masking-bootstrapped); infant-growth fix (gated monotonic growth + grow-vocab).
 - **b (DONE):** headline claims + metrics decided (see 1b).
