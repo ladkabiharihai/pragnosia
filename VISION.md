@@ -97,6 +97,27 @@ this design.)
 - Falsifiable test: growth stays monotonic (faculties never drop) AND beats from-scratch; inference-learning
   consolidates only verified knowledge and measurably retains it without forgetting.
 
+## 7b. Designed mechanisms (phase-a decisions)
+- **Fast episodic memory (#1) = a persistent, salience-gated, DECAYING fast-weight associative store `M`** in dedicated
+  "hippocampal" layers. Read by the recall organ alongside the transient state (`q·(S+M)`) for immediate PROVISIONAL
+  use (linear attention already is fast-weights `S += k⊗v`; `M` is the persistent, gated, decaying version). A
+  **write-log** `(key, value, source-episode)` makes it verifiable; **decay** makes it reversible (unverified fades;
+  verified is consolidated to slow weights before it fades, then freed). Fixed capacity -> interference is bounded
+  (brain-accurate). Provisional use of unverified info is accepted (transient, decaying, never committed unverified).
+- **Propose gate (#2) = surprise x recurrence x salience**, MULTIPLICATIVE and conservative (any low signal vetoes the
+  write -> refuses junk). Surprise = free per-token prediction-error/entropy. Recurrence/consistency = cheap `M`-lookup
+  + counter (write only for surprising AND recurring; one-offs filtered as noise). Salience = STAGED: explicit markers
+  first, then a small head BOOTSTRAPPED FROM RESPONSE-MASKING (learn "worth-remembering ~= answer/fact-like" from the
+  one proven supervision), then refined by delayed usefulness (recall-that-helped raises salience). Cheap every-token.
+- **Infant-growth fix (#3) = gated MONOTONIC growth**: new capacity via a per-unit gate alpha init 0 (ReZero) ->
+  grow-time exactly function-preserving, old-param gradients unchanged; new capacity gets its own HIGH LR, the trained
+  core stays PROTECTED at low LR (NO global optimizer reset, which was the thrash); the gate opens only where new
+  capacity reduces loss -> growth NEVER hurts (monotonic); triggered by intrinsic saturation + a generous Chinchilla
+  floor per stage. ROOT-CAUSE FIX: **grow the VOCABULARY too** - the infant starts with a SMALL vocab (so embeddings
+  are a small fraction and the real brain dominates) and grows its vocabulary as it matures, like a child learning
+  words (function-preserving vocab-extension already validated, old ids preserved). Growth axes: vocab + width + depth
+  + state, all function-preserving, all gated-monotonic.
+
 ## 8. Honest tensions to hold
 - Finite state + unbounded context means brain-like SELECTIVE memory (gist + consolidated facts), NOT perfect verbatim
   recall of everything. This is a feature, but be honest about it.
@@ -119,8 +140,10 @@ this design.)
   a modest footprint. **Kill ONLY exact verified PIDs, never memory-threshold or broad -f patterns** (bounced prod
   twice that way). Training is the flexible one; the entropy sensor must be subsampled (full 32K-vocab float softmax OOMs).
 
-## 11. Open pieces to design next (priority c done -> a -> b)
-- **a (next):** how the FAST EPISODIC MEMORY is structured; how SURPRISE / SALIENCE / consistency are computed; the
-  INFANT-GROWTH recipe fix (gated monotonic growth).
-- **b (after):** the EFFICIENCY targets and metrics we stake the "best in the world" claim on (tokens/param,
-  long-context per FLOP, constant serving memory, continual-learning retention, power).
+## 11. Open pieces to design (priority c done -> a done -> b next)
+- **a (DONE, captured in 7b):** fast episodic memory (fast-weights `M` + write-log + decay); propose gate
+  (surprise x recurrence x salience, masking-bootstrapped); infant-growth fix (gated monotonic growth + grow-vocab).
+- **b (NEXT):** the EFFICIENCY targets and metrics we stake the "best in the world" claim on (tokens/param, long-context
+  per FLOP, constant serving memory, continual-learning retention/forgetting, latency, power). Define the benchmark.
+- **then:** the consolidation ("sleep") loop mechanics; the verification/retrieval component (corpus + internet trust);
+  measuring our arch's scaling curve; and only then, rebuild code minimally and prototype.
