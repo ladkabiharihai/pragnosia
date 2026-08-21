@@ -247,3 +247,17 @@ Verification gates consolidation; nothing becomes permanent unless validated. It
       and test monotonicity + verified-retention + no-forgetting.
   Implementation-level specs (layer counts, `M` size, PC settling steps, growth/vocab schedule, fast/slow
   orchestration, self-model form) are decided in the build, not here.
+
+## 12. DE-RISK RESULTS (§0c load-bearing bet: PROVEN at small scale)
+- **#0 feedforward (pc_derisk.py):** pure local Predictive Coding, NO backprop -> 97.0% vs backprop 98.7% on 2-moons
+  (1.7pt gap). Local SPATIAL credit works.
+- **#1 recurrent recall (pc_derisk1_v3.py):** pure local ELIGIBILITY TRACES, NO backprop-through-time, NO autograd
+  (manual VJP) -> MQAR 100.0% == BPTT 100.0% (gap 0.0). Locality check: local-rule gradient == true gradient,
+  cosine = 1.0000 on ALL weights incl. memory-write Wk/Wv. Temporal credit is EXACTLY local because the read is
+  r = sum_t beta_t v_t / sum_t beta_t with beta_t = qf . kf_t; each write leaves an eligibility trace kf_t, credited
+  locally at the query. The linear Hebbian memory makes temporal credit assignment local BY CONSTRUCTION -> VChunkRecall
+  is the right substrate for a no-backprop brain.
+- **Architecture requirement found:** recall needs a key->NEXT-value SHIFT (short-conv); single-layer same-token linear
+  attention cannot bind (BPTT 40.8% -> 100% with shift). Bake the shift into the core.
+- CONCLUSION: pure local plasticity (PC spatial + eligibility temporal) trains our recurrent recall core, proven. Next
+  de-risks (larger scale, real sequences, then the full brain) build on this.
