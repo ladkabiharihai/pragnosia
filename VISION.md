@@ -33,6 +33,22 @@ is earned through experience and is individual - two Pragnosias with different l
 Requires PERSISTENCE (run one continuous instance, never wipe-and-restart as normal practice) and CONTINUITY (monotonic
 growth). This is the soul of the name.
 
+### 0b2. EFFICIENCY is a first-class principle (co-equal with growth, identity, local learning)
+Brain-like EFFICIENCY is as important as anything else in this project and drives every design/development choice:
+low memory, low compute, low power, fast, high serving throughput, HIGH CAPABILITY PER RESOURCE. The brain runs on
+~20W; that is the spirit. Every mechanism (core, memory, growth, consolidation, verification) is judged partly on its
+resource cost, not only its capability. Constant-memory/constant-compute streaming (1b flag 1) is the headline
+expression of this. When two designs give similar capability, the cheaper one wins. Efficiency is not a later
+optimization; it is a design constraint from the first line.
+
+### 0d. GROWTH SCHEDULE candidate: geometric / Fibonacci / 3-6-9 (test, do not assume)
+Organic growth in nature is geometric and self-similar (the true kernel behind "Fibonacci everywhere"). So the
+GROWTH-INCREMENT schedule (how much capacity each grow adds) is a real open choice, and a **geometric / Fibonacci-like
+progression** (each grow adds a proportionally larger increment, like an organism maturing), and 3-6-9-flavored
+structure, are CANDIDATE schedules to A/B empirically against flat/linear when we build the grower. Adopt only if it
+measurably beats the alternatives (prove-by-measuring; earned by data, not numerology). Parked as a first-class
+experiment for the growth phase, not forgotten.
+
 ### 0c. Learning mechanism: PURE LOCAL PLASTICITY, no backprop anywhere (decided: B-ii)
 Pragnosia learns entirely by LOCAL plasticity - no backpropagation, no external optimizer, ever (not even to
 meta-learn a rule; not in "evolution", not in life). Two complementary local mechanisms:
@@ -269,6 +285,9 @@ Verification gates consolidation; nothing becomes permanent unless validated. It
 - **#3 end-to-end training (pc_derisk3_train.py + data_mix.py):** pure local plasticity TRAINS on the FULL 290B 32K
   mix (all 11 corpora, weighted; data_mix.py owns "use all data"), loss curve tracks BPTT step-for-step, final gap
   -0.029 (local a hair ahead; optimizer-path noise). Confirms the local rule OPTIMIZES correctly, not just computes
-  the right gradient. §0c load-bearing bet fully retired at small scale. (Absolute ppl high = tiny 1-layer core/600
-  steps; the point is local==BPTT.) Data layer for real training = data_mix.py (290B, faculty floors so math/code
-  not drowned by web bulk).
+  the right gradient (single recurrent layer). Data layer for real training = data_mix.py (290B, faculty floors).
+- **#4 MULTI-LAYER (pc_derisk4_multilayer.py) — PARTIAL / OPEN:** PC (cross-layer/depth) + eligibility (time) on a
+  2-layer recurrent core TRAINS real language with NO backprop (loss 8.3->6.9) but LAGS BPTT (6.10) by +0.83; more
+  settling (K=20) did NOT close it. Single-layer local is EXACT (#2/#3); the DEPTH credit via PC is approximate and
+  is the CURRENT OPEN PROBLEM (blocks a deep-narrow local run). Investigate: incremental/precision-weighted PC,
+  annealed settling, equilibrium prop, target prop, or accept a principled gap. See PROGRESS.md.
