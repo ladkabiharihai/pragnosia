@@ -146,6 +146,20 @@ Offline keeps a rollback net and protects serving. Loop:
    safe where online training thrashed. This rollback also nets dreaming's one risk (rehearsing its own errors).
 5. **Free `M`:** evict consolidated entries; unverified ones already decayed.
 
+## 7d. Verification / retrieval (phase-B decisions) — the judge MATURES with the model
+Verification gates consolidation; nothing becomes permanent unless validated. It is retrieval-augmented VERIFICATION
+(RAG pointed at gating LEARNING, not answering), run in the offline sleep phase, gated to rare salient candidates.
+- **Retrieve** evidence from a **trusted-corpus index + web** (source-trust weighting, multi-source corroboration,
+  recency). **Facts:** accept only on multi-source agreement above trust threshold AND no contradiction with a strong
+  prior (belief revision requires strong evidence). **Skills:** validate by **predictive-success test** (apply on
+  held-out cases; keep only if it measurably helps). Conservative: uncertain -> reject.
+- **The judge is DEVELOPMENTAL (self-judgment is a mature faculty).** End-state: the model **judges for itself** what
+  to keep vs forget, like a brain - fully autonomous/self-contained (matches "verify against corpus+internet with its
+  own reasoning"). But NOT from the start: an infant is too weak a judge, so EARLY gating is mechanical multi-source
+  corroboration (+ optional teacher-bootstrap from the on-box Qwen to learn how to weigh evidence). Self-judgment
+  EMERGES and takes over ONCE THE MODEL IS BIG. The verifier grows with the model, like a child developing critical
+  thinking. Teacher is a bootstrap/fallback, never a permanent crutch.
+
 ## 8. Honest tensions to hold
 - Finite state + unbounded context means brain-like SELECTIVE memory (gist + consolidated facts), NOT perfect verbatim
   recall of everything. This is a feature, but be honest about it.
@@ -168,9 +182,17 @@ Offline keeps a rollback net and protects serving. Loop:
   a modest footprint. **Kill ONLY exact verified PIDs, never memory-threshold or broad -f patterns** (bounced prod
   twice that way). Training is the flexible one; the entropy sensor must be subsampled (full 32K-vocab float softmax OOMs).
 
-## 11. Roadmap (design phase c -> a -> b all DONE)
-- **a (DONE, captured in 7b):** fast episodic memory (fast-weights `M` + write-log + decay); propose gate
-  (surprise x recurrence x salience, masking-bootstrapped); infant-growth fix (gated monotonic growth + grow-vocab).
-- **b (DONE):** headline claims + metrics decided (see 1b).
-- **then (design still open):** consolidation ("sleep") loop mechanics; verification/retrieval component (corpus +
-  internet trust weighting + multi-source); measuring our arch's scaling curve; then rebuild code minimally + prototype.
+## 11. Roadmap — DESIGN LOCKED (c, a, b, A, B all done)
+- **c (DONE):** vision captured (this doc).
+- **a (DONE, 7b):** fast-weights hippocampus `M` + write-log + decay; propose gate (surprise x recurrence x salience,
+  masking-bootstrapped); infant-growth fix (gated monotonic growth + grow-vocabulary).
+- **b (DONE, 1b):** north-star claims (constant-memory/compute streaming; verified continual-learning), both core.
+- **A (DONE, 7c):** OFFLINE sleep consolidation - gradient-replay via generative dreaming, grow-on-consolidation-
+  pressure, check-and-commit-with-rollback.
+- **B (DONE, 7d):** verification/retrieval - retrieve (corpus+web, trust-weighted) -> judge; judge MATURES with the
+  model (mechanical/teacher early, self-judge once big); facts corroborate, skills predictive-test.
+- **NEXT (code phase - only after design is locked):** (1) rebuild the minimal core (VChunkRecall + trainer + the new
+  mechanisms); (2) measure our arch's scaling curve (loss+faculties vs params) to settle the ceiling honestly;
+  (3) prototype the smallest end-to-end loop (grow-from-infant + propose->verify->consolidate) and test monotonicity +
+  verified-retention. Implementation-level specs (layer counts, `M` size, growth/vocab schedule, WSD curriculum,
+  fast/slow orchestration) are decided in the build, not here.
