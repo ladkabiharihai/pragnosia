@@ -35,11 +35,16 @@ growth). This is the soul of the name.
 
 ### 0c. Learning mechanism: PURE LOCAL PLASTICITY, no backprop anywhere (decided: B-ii)
 Pragnosia learns entirely by LOCAL plasticity - no backpropagation, no external optimizer, ever (not even to
-meta-learn a rule; not in "evolution", not in life). Concrete framework = **Predictive Coding (PC)**: every layer
-predicts its neighbor, forms a LOCAL prediction error, and updates weights to reduce it (provably does credit
-assignment with local-only computation, no global backward pass), PLUS **three-factor/neuromodulated plasticity** for
-consolidation (the verification signal is the neuromodulator that gates the local write) and **Hebbian fast-weights**
-for `M`/state (already local). The unifying quantity is PREDICTION ERROR / SURPRISE: it is the learning signal (PC),
+meta-learn a rule; not in "evolution", not in life). Two complementary local mechanisms:
+- **Predictive Coding (PC) = SPATIAL credit** (across layers): every layer predicts its neighbor, forms a LOCAL
+  prediction error, updates to reduce it (provably does credit assignment with local-only computation, no global
+  backward pass). DE-RISK #0 confirmed PC matches backprop (97.0 vs 98.7) on a static task.
+- **Eligibility traces (e-prop, Bellec 2020) = TEMPORAL credit** (across time): each synapse keeps a LOCAL trace of
+  recent pre-synaptic activity, so a later error/learning-signal credits earlier events (e.g. the memory WRITE that
+  a future READ used) - temporal credit with NO backprop-through-time. DE-RISK #1 v1 showed PC/per-position local
+  WITHOUT this fails recall (12% = chance): the writes get no credit for future reads. Eligibility traces are the fix.
+Plus **three-factor/neuromodulated plasticity** for consolidation (the verification signal gates the local write) and
+**Hebbian fast-weights** for `M`/state (already local). PC (space) + eligibility traces (time) = full local credit. The unifying quantity is PREDICTION ERROR / SURPRISE: it is the learning signal (PC),
 the salience signal (propose gate), and the model's uncertainty, all one intrinsic thing. PC nets are recurrent
 (settle by minimizing error), fitting our core; this is Friston free-energy, maximally brain-true.
 - HONEST RISK (the load-bearing bet): PC at our scale, with growth + continual learning, is UNPROVEN; it may be slower,
