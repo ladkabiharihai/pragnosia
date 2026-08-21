@@ -261,3 +261,8 @@ Verification gates consolidation; nothing becomes permanent unless validated. It
   attention cannot bind (BPTT 40.8% -> 100% with shift). Bake the shift into the core.
 - CONCLUSION: pure local plasticity (PC spatial + eligibility temporal) trains our recurrent recall core, proven. Next
   de-risks (larger scale, real sequences, then the full brain) build on this.
+- **#2 real-language causal LM (pc_derisk2_seqlm.py):** pure local plasticity on window2_32k (32K vocab, next-token
+  LM), NO backprop / NO autograd (manual VJP) -> local-rule gradient == true gradient, cosine = 1.0000 on ALL params
+  (emb, Wk, Wq, Wv, Wo, bo). Required deriving TEMPORAL credit for the CAUSAL case: each write gets credit from all
+  future reads via a REVERSE-CUMULATIVE learning signal (e-prop). Confirms pure-local == backprop at real-language
+  scale, not just toy recall. §0c bet proven on the actual task/data.
