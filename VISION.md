@@ -131,6 +131,21 @@ this design.)
   words (function-preserving vocab-extension already validated, old ids preserved). Growth axes: vocab + width + depth
   + state, all function-preserving, all gated-monotonic.
 
+## 7c. Consolidation / "sleep" loop (phase-A2 decisions) — OFFLINE
+Consolidation is OFFLINE (a discrete sleep phase), NOT online. Fast path (serving) stays online and unblocked;
+learning happens off the serving path. Considered online (Test-Time-Training style) and rejected it: online would
+put ALL safety on the monotonicity guarantee (no undo) and add serving-time compute (against the efficiency flag).
+Offline keeps a rollback net and protects serving. Loop:
+1. **Trigger:** `M` near capacity, or idle GPU, or enough verified candidates queued.
+2. **Consolidate** validated episodes via **gradient-replay**, where "replay" = **generative DREAMING** (the model
+   generates/rehearses its own existing knowledge - no stored corpus buffer) interleaved with the new episodes.
+3. **Grow on CONSOLIDATION PRESSURE** (the principled trigger): if consolidating forgets old (held-out retention
+   drops) or new knowledge will not fit (its loss stays high), fire gated-monotonic growth to make room, then continue.
+4. **Check-and-commit with ROLLBACK** (the safety online lacked): measure old- and new-retention on held-out probes;
+   commit only if no net forgetting, else grow / lower LR / roll back and retry. Offline checkability is why sleep is
+   safe where online training thrashed. This rollback also nets dreaming's one risk (rehearsing its own errors).
+5. **Free `M`:** evict consolidated entries; unverified ones already decayed.
+
 ## 8. Honest tensions to hold
 - Finite state + unbounded context means brain-like SELECTIVE memory (gist + consolidated facts), NOT perfect verbatim
   recall of everything. This is a feature, but be honest about it.
