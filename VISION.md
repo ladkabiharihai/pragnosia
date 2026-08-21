@@ -33,6 +33,21 @@ is earned through experience and is individual - two Pragnosias with different l
 Requires PERSISTENCE (run one continuous instance, never wipe-and-restart as normal practice) and CONTINUITY (monotonic
 growth). This is the soul of the name.
 
+### 0c. Learning mechanism: PURE LOCAL PLASTICITY, no backprop anywhere (decided: B-ii)
+Pragnosia learns entirely by LOCAL plasticity - no backpropagation, no external optimizer, ever (not even to
+meta-learn a rule; not in "evolution", not in life). Concrete framework = **Predictive Coding (PC)**: every layer
+predicts its neighbor, forms a LOCAL prediction error, and updates weights to reduce it (provably does credit
+assignment with local-only computation, no global backward pass), PLUS **three-factor/neuromodulated plasticity** for
+consolidation (the verification signal is the neuromodulator that gates the local write) and **Hebbian fast-weights**
+for `M`/state (already local). The unifying quantity is PREDICTION ERROR / SURPRISE: it is the learning signal (PC),
+the salience signal (propose gate), and the model's uncertainty, all one intrinsic thing. PC nets are recurrent
+(settle by minimizing error), fitting our core; this is Friston free-energy, maximally brain-true.
+- HONEST RISK (the load-bearing bet): PC at our scale, with growth + continual learning, is UNPROVEN; it may be slower,
+  weaker than backprop, or unstable, and costs more compute per step (settling). The whole project rests on it working.
+- THEREFORE the first code step DE-RISKS PC: prove local PC (no backprop) can train a tiny VChunkRecall to learn,
+  approaching backprop on a small task, BEFORE building the full brain on it.
+- Alternatives if PC stalls: Equilibrium Propagation, Forward-Forward (both local, no backprop). PC is the lead.
+
 ## 1. The goal (the whole point)
 - **Grows itself, from infant, like a child.** Self-growth is central. A fixed model would defy the goal.
 - **Faculties intrinsic to the model**, not scaffolding. Provable at small scale.
@@ -217,8 +232,13 @@ Verification gates consolidation; nothing becomes permanent unless validated. It
   pressure, check-and-commit-with-rollback.
 - **B (DONE, 7d):** verification/retrieval - retrieve (corpus+web, trust-weighted) -> judge; judge MATURES with the
   model (mechanical/teacher early, self-judge once big); facts corroborate, skills predictive-test.
-- **NEXT (code phase - only after design is locked):** (1) rebuild the minimal core (VChunkRecall + trainer + the new
-  mechanisms); (2) measure our arch's scaling curve (loss+faculties vs params) to settle the ceiling honestly;
-  (3) prototype the smallest end-to-end loop (grow-from-infant + propose->verify->consolidate) and test monotonicity +
-  verified-retention. Implementation-level specs (layer counts, `M` size, growth/vocab schedule, WSD curriculum,
-  fast/slow orchestration) are decided in the build, not here.
+- **NEXT (code phase, design now locked):**
+  (0) **DE-RISK PC FIRST** - prove pure local Predictive Coding (no backprop) can train a tiny VChunkRecall to learn,
+      approaching backprop on a small task. This is the load-bearing assumption; nothing else matters if it fails.
+  (1) If PC holds: rebuild the minimal core (VChunkRecall + PC local-plasticity learner + `M` + propose gate +
+      gated-monotonic growth + vocab-growth), all decisions intrinsic (§0a), one persistent individual (§0b).
+  (2) Measure the arch's scaling curve (loss+faculties vs params) to settle the ceiling honestly.
+  (3) Prototype the smallest end-to-end loop (grow-from-infant + propose->verify->consolidate, pure local plasticity)
+      and test monotonicity + verified-retention + no-forgetting.
+  Implementation-level specs (layer counts, `M` size, PC settling steps, growth/vocab schedule, fast/slow
+  orchestration, self-model form) are decided in the build, not here.
