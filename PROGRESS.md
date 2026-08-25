@@ -105,3 +105,17 @@ Implemented PC-ALM (dual variables) for our recurrent core. Results (cosine of P
 - Residual identity growth = error highways (keeps deep credit tractable through each grow).
 - Deep-credit accuracy (->0.99) is an ONGOING refinement track (dual-stopping, mu-PC, precision), not a blocker to
   building at bounded depth now.
+
+## Build step 1d: deep-credit ROOT-CAUSED (option B: grind to 0.99 before building)
+Chased the worst-layer floor to its actual source. Two hypotheses tested, one eliminated, root cause found.
+- **DECOUPLED linearization: NO effect** (identical to 3 decimals at NL=4/6/8). Settled activities barely drift from
+  feedforward, so applying the weight-VJP at ff vs settled caches changes nothing. Hypothesis eliminated (cheap).
+- **The floor is NOT per-LAYER, it is per-PARAMETER-TYPE.** Wk/Wq (key/query) lag at 0.81-0.93 while Wv/Wo are
+  0.96-0.99, at EVERY depth. Wk/Wq gradients are ~1000x SMALLER (1e-6 vs 1e-2) because they flow through the 2nd-order
+  Taylor feature map -> tiny, ill-conditioned path that AMPLIFIES any error in the layer-error estimate.
+- **CONTROL (decisive): our local machinery is EXACT.** Feeding local_vjp the TRUE layer-errors (no PC settling)
+  reproduces backprop at cosine 1.0000 on EVERY layer and EVERY param (Wk,Wq,Wv), all depths. So eligibility+VJP are
+  perfect; the ONLY error source is PC settling's approximation of the layer-errors, magnified by the tiny Wk/Wq path.
+- Mean cosine is already 0.964-0.972 across depths; only the tiny-gradient params drag the worst-case.
+- CONSEQUENCE: the remaining work is a better settled layer-error estimate (precision-weighting to rescale the
+  ill-conditioned Wk/Wq path, mu-PC depth-scaling, dual-stopping rule), NOT a flaw in our local learning rule.
