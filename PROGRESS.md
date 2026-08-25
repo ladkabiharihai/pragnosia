@@ -119,3 +119,17 @@ Chased the worst-layer floor to its actual source. Two hypotheses tested, one el
 - Mean cosine is already 0.964-0.972 across depths; only the tiny-gradient params drag the worst-case.
 - CONSEQUENCE: the remaining work is a better settled layer-error estimate (precision-weighting to rescale the
   ill-conditioned Wk/Wq path, mu-PC depth-scaling, dual-stopping rule), NOT a flaw in our local learning rule.
+- **PRECISION-WEIGHTING: FAILS** (worst-cosine -0.97 vs baseline 0.81). Rescaling per-layer errors breaks the
+  dual/costate relationship (duals must accumulate the UNSCALED violation to converge to the true adjoint).
+  Hypothesis eliminated. (Damped duals also failed earlier, same reason.)
+
+### Option-B status (grind deep-credit to 0.99): honest scoreboard
+Tried and ELIMINATED: more/annealed settling; identity/function-preserving init; iPC; decoupled linearization;
+precision-weighting; damped dual ascent. Established: our eligibility+VJP machinery is EXACT (cosine 1.0000 fed true
+errors, all depths/params); mean cosine 0.964-0.972; only the tiny-gradient Wk/Wq (Taylor-map) path drags the
+worst-case to 0.78-0.93 by amplifying settling error. Remaining untried levers: mu-PC depth-scaling (weights scaled
+(NL)^-1/2, published to 128 layers), a dual-ascent stopping criterion (fixes the T>4L overshoot), and Z-IL-style
+per-layer-timed updates (exact but needs weight transport -> would soften §0c purity).
+HONEST READ: this is genuine open research. The gap is now well-characterized and NOT a bug; the practical operating
+point (T~4L, mean 0.97, worst 0.85-0.93) already trains real language. Recommend a decision: continue grinding (mu-PC
+next) vs build at the current operating point and refine in-flight.
