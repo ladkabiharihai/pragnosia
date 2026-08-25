@@ -66,3 +66,18 @@ settling, Z-IL-style timing.
 
 ## Prod safety
 Prod (Qwen3.8-27B vLLM :8000 + Whisper/Kokoro) shares the H100, must not go down. Kill only exact PIDs.
+
+## Build step 1b: can we make DEEP local credit cheap AND accurate? (user: need BOTH depth+width)
+User is right: width-only = too shallow for knowledge/reasoning; depth-only (naive PC) = expensive + accuracy floor;
+efficiency is non-negotiable; the 0.85 floor must be fixed. So "efficient+accurate DEEP local credit" is THE problem.
+- Function-preserving IDENTITY deep layers do NOT propagate credit cheaper (identity 6L ~= random 6L at low K, both
+  ~0 at bottom). Settling moves the error front ~eta*K layers regardless of weights -> growth-by-identity does not
+  dodge the depth cost.
+- FUNDAMENTAL TENSION: exact deep credit in O(depth) work needs an explicit downward error sweep = mathematically
+  backprop (weight transport). Pure parallel settling is O(depth^2) work and approximate. This is why backprop is
+  efficient and biologically-plausible deep credit is hard.
+- SYNTHESIS forming (grow BOTH, but bounded): grow depth to a MODEST cortex-like range (~6-12 layers, NOT 100), so PC
+  settling cost is a BOUNDED constant (~depth x), affordable; grow WIDTH/state/features/vocab large (PC-cheap, most
+  capacity). Recurrence adds effective depth in time. Still must fix the ~0.85 accuracy floor.
+- Testing iPC (incremental PC: update weights DURING settling) as the leading fix for cost+floor. Research agent
+  running on best deep-local-credit method.
