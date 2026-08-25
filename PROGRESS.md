@@ -37,7 +37,22 @@ Diagnostic (pc_derisk4_diag.py, cosine of PC-grad vs backprop-grad vs settling K
   stacked on a recurrent core the approximation gap is ~0.83 loss and did NOT close with more settling. THIS IS THE
   CURRENT OPEN PROBLEM.
 
-### De-risk phase COMPLETE
+## Build phase, step 1: DEPTH-SCALING of PC-depth credit (core.py) -- KEY FINDING
+
+Tested cosine(local-grad, backprop-grad) as layers grow (deep-narrow was the planned architecture).
+- Pure PC settling DEGRADES with depth: bottom-layer credit at K=3*NL, eta=0.05: 0.80 (2L) -> 0.05 (4L) ->
+  0.002 (6L) -> 0.000 (8L). The error front does not reach the bottom cheaply.
+- It is EXPENSIVE, not vanishing: with enough propagation budget (eta*K, max stable eta~0.3, K~3*NL) the bottom
+  layer reaches ~0.97 (6L, eta=0.3, K=18). But cost = ~3*NL x forward/step (6L~18x, 20L~60x) -> fights §0b2.
+- A persistent weak layer stays ~0.85 (min-over-layers) REGARDLESS of K -> an approximation floor from coupling
+  eligibility(time)+PC(depth) in the same layers. eta>=0.5 is unstable (NaN).
+- CONCLUSION: pure PC is cheap+near-exact SHALLOW (2 layers: 0.994), expensive+approximate DEEP. The learning rule
+  constrains the architecture. NOTE: the neocortex is ~6 layers deep and enormously WIDE; deep-narrow (100+ serial
+  layers) is a backprop/transformer artifact. So PC's shallow preference is arguably MORE brain-true, pointing to a
+  SHALLOW-AND-WIDE core (grow width/state/features, which PC handles well; few layers). ARCHITECTURE DECISION PENDING
+  (user): shallow-wide (recommended) vs expensive-deep-PC vs Z-IL/explicit-error-front (exact+O(depth) but ~backprop).
+
+### De-risk phase (learning-rule validity) COMPLETE
 All five de-risks pass. Pure local plasticity (no backprop, no autograd) trains our recurrent multi-layer core on real
 language: eligibility traces give EXACT temporal credit (cosine 1.0); PC gives a ~0.994-cosine spatial/depth credit
 (approximate by nature). Ready to build the real persistent core. Efficiency levers for the real trainer: warm-started
