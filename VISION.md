@@ -68,6 +68,25 @@ the salience signal (propose gate), and the model's uncertainty, all one intrins
 - THEREFORE the first code step DE-RISKS PC: prove local PC (no backprop) can train a tiny VChunkRecall to learn,
   approaching backprop on a small task, BEFORE building the full brain on it.
 - Alternatives if PC stalls: Equilibrium Propagation, Forward-Forward (both local, no backprop). PC is the lead.
+- DEPTH-CREDIT (proven hard, being solved): naive PC settling degrades with depth (0.85 floor, expensive). Fix =
+  **PC-ALM** (Augmented Lagrangian PC): per-layer DUAL variables accumulate error -> ballistic depth-independent
+  credit. Our impl (pcalm.py) lifts depth-6 credit to ~0.89-0.93 (from 0.85) at bounded cost T~4L, robust across
+  seeds, but has a dual-overshoot needing a stopping rule; not yet 0.99 in the recurrent+eligibility setting (open
+  refinement: dual-stopping, mu-PC depth-scaling, precision-weighting, decoupled linearization). Temporal credit stays
+  EXACT (eligibility). CONSEQUENCE FOR ARCHITECTURE (see 0e).
+
+### 0e. ARCHITECTURE: grow BOTH depth AND width, but depth BOUNDED + recurrence-as-depth (the learning rule shapes it)
+User requirement: need BOTH depth (knowledge/reasoning/abstraction) AND width (features/capacity); efficiency is
+non-negotiable; the accuracy floor must be fixed. Resolution given our local-learning constraint:
+- Grow BOTH axes, but DEPTH to a BOUNDED, cortex-like range (~4-6, up to ~12 layers), NOT transformer-deep (100+).
+  Bounded depth keeps PC-ALM credit adequate (0.9+) and settling cost a bounded constant (T~4L). Deep-narrow-100 is a
+  backprop artifact and breaks both local credit and efficiency.
+- Put MOST capacity in WIDTH / state / features / vocab (PC-cheap, near-exact credit) and in RECURRENCE (exact
+  temporal credit = cheap "effective depth" for sequential/compositional computation; RNN-as-deep-in-time).
+- Grow depth as RESIDUAL identity blocks (ReZero gate alpha=0) = function-preserving AND "error highways" that keep
+  deep credit tractable through each grow.
+- So growth = width + state + features + vocab freely; depth in modest bounded steps; recurrence carries sequential
+  depth. This honors capability (both axes), efficiency (§0b2, bounded settling), and pure-local learning (§0c).
 
 ## 1. The goal (the whole point)
 - **Grows itself, from infant, like a child.** Self-growth is central. A fixed model would defy the goal.
