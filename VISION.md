@@ -286,8 +286,12 @@ Verification gates consolidation; nothing becomes permanent unless validated. It
   mix (all 11 corpora, weighted; data_mix.py owns "use all data"), loss curve tracks BPTT step-for-step, final gap
   -0.029 (local a hair ahead; optimizer-path noise). Confirms the local rule OPTIMIZES correctly, not just computes
   the right gradient (single recurrent layer). Data layer for real training = data_mix.py (290B, faculty floors).
-- **#4 MULTI-LAYER (pc_derisk4_multilayer.py) — PARTIAL / OPEN:** PC (cross-layer/depth) + eligibility (time) on a
-  2-layer recurrent core TRAINS real language with NO backprop (loss 8.3->6.9) but LAGS BPTT (6.10) by +0.83; more
-  settling (K=20) did NOT close it. Single-layer local is EXACT (#2/#3); the DEPTH credit via PC is approximate and
-  is the CURRENT OPEN PROBLEM (blocks a deep-narrow local run). Investigate: incremental/precision-weighted PC,
-  annealed settling, equilibrium prop, target prop, or accept a principled gap. See PROGRESS.md.
+- **#4 MULTI-LAYER (pc_derisk4_multilayer.py, pc_derisk4_diag.py) — RESOLVED (PC-approximate):** PC (depth) +
+  eligibility (time) on a 2-layer recurrent core trains real language with NO backprop. The +0.83 lag was a SETTLING
+  bug (K=8, eta=0.3: under-settled + unstable), NOT structural. Diagnostic: pattern is textbook Z-IL (top layer exact
+  at K=1, error front descends one layer per step); with stable settling (K=12, eta=0.05) ALL layers reach cosine
+  >=0.994 (mean 0.997) to backprop and the training gap halves to +0.41. More settling does NOT improve cosine
+  (plateaus ~0.994, costs more) -> K=12 is the efficiency operating point. So PC converges to a ~0.994-cosine
+  APPROXIMATION of backprop (its inherent nature, same category as #0's 97 vs 98.7), trains real language locally.
+  Exactness never required. DE-RISK PHASE COMPLETE. Efficiency (§0b2) levers for the real trainer: warm-started
+  settling (weights change slowly -> few steps), Z-IL per-layer timing. See PROGRESS.md.
