@@ -1,7 +1,0 @@
-PLATEAU GRIND @ NL=6, 2000 steps. BPTT ref @2000 = 5.5359; layerwise(random DFA,l=1) = 6.1968
-  random DFA lam=1 (current)     heldout=6.2189 (359s)
-  IDENTITY fb lam=1              heldout=5.3615 (357s)
-  IDENTITY fb lam=2              heldout=5.3588 (357s)
-  IDENTITY fb lam=4              heldout=5.3639 (356s)
-  IDENTITY lam=4, local w=0.25   heldout=5.4118 (356s)
-  IDENTITY lam=1, NO local (w=0) heldout=9.3475 (356s)

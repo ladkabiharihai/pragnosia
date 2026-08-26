@@ -3,5 +3,7 @@ data/
 *.pt
 __pycache__/
 *.jsonl
+*.log
+*.json
 brainlogs/
 archive/
