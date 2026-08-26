@@ -73,12 +73,21 @@ class Core(nn.Module):
         return p
 
 class LocalAdam:
-    def __init__(s,prm,lr=3e-3,b1=0.9,b2=0.999,eps=1e-8):
+    """Applies the LOCAL gradients. `adaptive=True` uses a SCALE-FREE relative step (trust ratio, LAMB-style):
+    each parameter moves a fixed FRACTION of its own norm, so the hyperparameter does not need re-tuning when the
+    model grows or scales (VISION 0a: no hand-tuned per-scale constants). `min_norm` lets zero-initialized new
+    capacity (function-preserving growth) start moving instead of being frozen at trust=0."""
+    def __init__(s,prm,lr=3e-3,b1=0.9,b2=0.999,eps=1e-8,adaptive=False,min_norm=1e-3,cap=10.0):
         s.prm=prm; s.lr=lr; s.b1=b1; s.b2=b2; s.eps=eps; s.i=0
+        s.adaptive=adaptive; s.min_norm=min_norm; s.cap=cap
         s.m={k:torch.zeros_like(p) for k,p in prm.items()}; s.v={k:torch.zeros_like(p) for k,p in prm.items()}
     def step(s,g):
         s.i+=1
         with torch.no_grad():
             for k in s.prm:
                 s.m[k]=s.b1*s.m[k]+(1-s.b1)*g[k]; s.v[k]=s.b2*s.v[k]+(1-s.b2)*g[k]**2
-                s.prm[k]-=s.lr*(s.m[k]/(1-s.b1**s.i))/((s.v[k]/(1-s.b2**s.i)).sqrt()+s.eps)
+                u=(s.m[k]/(1-s.b1**s.i))/((s.v[k]/(1-s.b2**s.i)).sqrt()+s.eps)
+                if s.adaptive:
+                    wn=s.prm[k].norm().clamp_min(s.min_norm); un=u.norm().clamp_min(s.eps)
+                    u=u*torch.clamp(wn/un,max=s.cap)   # relative step: move a fixed fraction of ||w||
+                s.prm[k]-=s.lr*u

@@ -337,3 +337,38 @@ It WORKS: trains real language, at real depth, supports function-preserving grow
 transport anywhere. But at the scales tested it is **not free**: it trails backprop by ~0.15 loss and costs more per
 step at scale. The "beats backprop" result holds only at small scale. This is a real tension with 0b2 (efficiency)
 and with capability, and it is a decision for the project owner, not something to paper over.
+
+## Build step 4: ADAPTIVE LR (solved) + GENERATION TEST (new evidence)
+**(a) ADAPTIVE, SCALE-FREE LR -- WORKS.** Replaced the absolute LR with a trust-ratio (LAMB-style) RELATIVE step:
+each parameter moves a fixed fraction of its own norm. `min_norm` lets zero-initialized new capacity (function-
+preserving growth) start moving instead of being frozen at trust=0.
+| rel-step | SMALL (D96/T32) | LARGE (D256/T128) |
+|----------|-----------------|-------------------|
+| 3e-4 | 6.9065 | 6.3117 |
+| **3e-3** | **5.3293** | **4.8676** |
+| 1e-2 | 5.5674 | 5.8240 |
+**The SAME value (3e-3) is optimal at BOTH scales** -> no per-scale LR tuning, and growth is safe (no retuning at
+each grow). This also satisfies VISION 0a (no hand-tuned per-scale constants). Cost: slightly worse than a
+hand-tuned fixed LR at scale (4.7540 vs 4.7077), a fair trade for scale/growth invariance.
+- NOTE another scale-dependence found: the feedback weight lambda should also grow with scale (lam=2 best small,
+  **lam=4 best large: 4.7443**). Making lambda intrinsic/adaptive is the next candidate.
+
+**(b) GENERATION TEST (gen_eval.py, gen_run.py) -- D256/NL6/T128, 6000 steps, head-to-head:**
+| metric | LOCAL rule | BPTT |
+|--------|-----------|------|
+| heldout loss | 4.7317 (ppl 113.5) | **4.4066 (ppl 82.0)** |
+| distinct-1 / distinct-2 | 0.54 / 0.69 | **0.66 / 0.87** |
+| 4-gram repetition | **0.23 (degenerate)** | **0.02 (healthy)** |
+| in-context recall | **10%** | 5% |
+| train wall-time | 267s | **80s (3.3x cheaper)** |
+- Generation makes the gap MORE visible than loss alone: the local model loops ("capital for communionionionion...")
+  while BPTT's samples stay varied. 4-gram repetition 0.23 vs 0.02 is a big quality difference.
+- The ONE place local leads is in-context RECALL (10% vs 5%), our signature faculty -- but n=20, so this is
+  suggestive, not established.
+- LESSON: always evaluate GENERATION, not just loss. Two models 0.33 apart in loss differ far more in output quality.
+
+### STANDING POSITION (updated, honest)
+At scale the pure-local rule is worse on loss (+0.15 to +0.33), noticeably more degenerate in generation, and
+~3.3x more expensive per step. It DOES work (real language, real depth, growth, no backprop anywhere) and it WINS at
+small scale, but the "beats backprop" claim does not survive scale. Adaptive LR removed the tuning problem but not
+the quality gap.
