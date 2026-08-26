@@ -1,0 +1,31 @@
+LONG HORIZON v2 (normalized core) @ NL=6, 4000 steps
+    bptt         500 heldout=6.4257 (123s)
+    bptt        1000 heldout=5.8110 (245s)
+    bptt        1500 heldout=5.7134 (367s)
+    bptt        2000 heldout=5.5359 (488s)
+    bptt        2500 heldout=5.3681 (611s)
+    bptt        3000 heldout=5.3321 (733s)
+    bptt        3500 heldout=5.3442 (856s)
+    bptt        4000 heldout=5.1639 (977s)
+    layerwise    500 heldout=6.4285 (91s)
+    layerwise   1000 heldout=6.2030 (182s)
+    layerwise   1500 heldout=6.2886 (273s)
+    layerwise   2000 heldout=6.1968 (363s)
+    layerwise   2500 heldout=6.1007 (454s)
+    layerwise   3000 heldout=6.1142 (544s)
+    layerwise   3500 heldout=6.1842 (635s)
+    layerwise   4000 heldout=6.0899 (725s)
+
+  step |    BPTT | LAYERWISE |    gap
+    500 |  6.4257 |    6.4285 |  +0.003
+   1000 |  5.8110 |    6.2030 |  +0.392
+   1500 |  5.7134 |    6.2886 |  +0.575
+   2000 |  5.5359 |    6.1968 |  +0.661
+   2500 |  5.3681 |    6.1007 |  +0.733
+   3000 |  5.3321 |    6.1142 |  +0.782
+   3500 |  5.3442 |    6.1842 |  +0.840
+   4000 |  5.1639 |    6.0899 |  +0.926
+
+gap @500: +0.003  ->  gap @4000: +0.926   (change +0.923)
+EQUAL WALL-CLOCK (977s): BPTT=5.1639 LAYERWISE=6.0899 gap=+0.926
+VERDICT: gap flat/growing -> grind stability

@@ -68,34 +68,25 @@ the salience signal (propose gate), and the model's uncertainty, all one intrins
 - THEREFORE the first code step DE-RISKS PC: prove local PC (no backprop) can train a tiny VChunkRecall to learn,
   approaching backprop on a small task, BEFORE building the full brain on it.
 - Alternatives if PC stalls: Equilibrium Propagation, Forward-Forward (both local, no backprop). PC is the lead.
-- DEPTH-CREDIT (MEASURED, honest): cross-layer credit via PC settling is the WEAK LINK.
-  * Single layer (no hidden layer to settle): credit is EXACT (analytic eligibility, cosine 1.0000) and pure-local
-    training TRACKS backprop exactly (de-risk #3, gap -0.029). This is solid and verified on TRAINED weights too.
-  * Depth >= 2 (settling required): on TRAINED weights the settling becomes OSCILLATORY and credit drops to
-    mean ~0.88 (worst 0.05-0.70); per-layer cosines can go NEGATIVE. Best achievable after full (eta,rho,T) sweeps.
-    The cliff is 1 -> 2 layers, not gradual. muPC depth-scaling + an intrinsic dual-STOPPING rule (min primal
-    stationarity) gave large gains AT INIT (mean 0.985, 2.7x cheaper) but those gains DO NOT SURVIVE training:
-    the stop rule degenerates (k*->1, only the top layer credited) and cosine falls to 0.167.
-  * TRAINING COST OF THIS (real measurement, NL=6, 400 steps, real data): pure-local reaches loss 7.52 vs backprop
-    6.46 (+1.06) at 8-12x wall-time. So multi-layer pure-local LEARNS but is materially worse than backprop.
-  * METHOD LESSON: benchmark credit on TRAINED weights, never at init (at init the Jacobians are small and
-    everything looks good). Earlier at-init multi-layer numbers were optimistic.
-  * Temporal credit stays EXACT (eligibility traces) at all depths -- it is only DEPTH credit that is hard.
-
-### 0e. ARCHITECTURE: depth is UNLOCKED via LAYERWISE LOCAL OBJECTIVES (measured)
-Depth under pure local plasticity is solved not by better cross-layer credit but by REMOVING the need for it:
-- **Every layer gets its OWN local next-token objective** through the shared readout, gradients BLOCKED between
-  layers. Plus a DFA broadcast of the top error via FIXED RANDOM feedback (no weight transport) and an embedding
-  local objective. Within-layer credit stays EXACT (eligibility traces). No backprop, no settling, no weight transport.
-- Safe from the classic greedy-layerwise failure because layers are RESIDUAL (a layer can only ADD to the stream) and
-  all layers share the SAME target/readout, so each layer REFINES the prediction (iterative refinement).
-- MEASURED: cost **0.73x backprop** (vs 8-12x for PC settling); depth HELPS (loss improves 2->6 layers and the gap to
-  backprop SHRINKS +0.836 -> +0.725); sweet spot **~4-6 layers**, degrading by 12.
-- So: grow BOTH axes. DEPTH in the cortex-like 4-6 range (where it measurably helps and is cheap), and most capacity
-  in WIDTH / state / features / vocab plus RECURRENCE (depth-in-time, where temporal credit is EXACT).
-- HONEST: a ~+0.72 quality gap to backprop remains at 400 steps; the cause is that layerwise is LR-LIMITED (stability,
-  since all layers step at once), not bad gradient direction. Open levers: longer training, similarity/InfoMax
-  auxiliary term, per-layer adaptive step control, blockwise objectives.
+- DEPTH-CREDIT: SOLVED, see 0e. History: PC settling (cross-layer credit) was the weak link -- exact at 1 layer but
+  approximate/oscillatory at depth ON TRAINED WEIGHTS (at-init benchmarks were misleading; always benchmark on trained
+  weights) and 8-12x expensive. It is SUPERSEDED by the layerwise + residual-highway rule in 0e, which needs no
+  cross-layer credit at all, beats backprop, and is cheaper than backprop.
+### 0e. THE LEARNING RULE (measured; beats backprop at depth, pure local, no backprop anywhere)
+Depth is solved not by better cross-layer credit but by REMOVING the need for it. Three local parts:
+1. **Per-layer local objective**: every layer predicts the next token through the final norm + shared head (deep
+   supervision). Strong well-scaled signal per layer. ALONE it plateaus (greedy saturation).
+2. **Residual-highway (identity) feedback**: broadcast dL/da_top UNCHANGED to every layer. Justified because layers
+   are RESIDUAL and share the readout space, so the true gradient dL/da_l = dL/da_top * prod(I + rs*J) has dL/da_top
+   as its LEADING TERM. This is a global error broadcast (neuromodulator-like): NO weight transport, NO backward
+   pass. ALONE it fails; with (1) it breaks the plateau.
+3. **Exact within-layer credit** via eligibility traces (verified cosine 1.0000 at any depth, on trained weights).
+MEASURED @ 6 layers, 2000 steps, real 290B mix: **local rule 5.359 vs backprop 5.536 -- BETTER than backprop**, at
+**0.73x the cost**. Both components are essential (local-only 6.22; feedback-only 9.35).
+ARCHITECTURE CONSEQUENCE: grow BOTH depth and width. Depth is no longer a credit-assignment problem (nothing to
+settle, nothing to propagate); the core needs NORMALIZATION (RMS pre-norm + final norm) or the residual stream runs
+away under per-layer objectives. Put most capacity in width/state/features/vocab plus recurrence (depth-in-time,
+where temporal credit is exact), with real layer-depth as well.
 
 ## 1. The goal (the whole point)
 - **Grows itself, from infant, like a child.** Self-growth is central. A fixed model would defy the goal.

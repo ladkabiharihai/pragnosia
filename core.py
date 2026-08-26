@@ -16,6 +16,10 @@ class Config:
 def taylor(x,cfg):
     B=x.shape[0]; qd=(x.unsqueeze(2)*x.unsqueeze(1))[:,cfg.iu[0],cfg.iu[1]]
     return torch.cat([torch.ones(B,1,device=x.device),x,qd],1)
+def rmsnorm(x,eps=1e-6):                                      # non-parametric RMS norm (bounds the residual stream)
+    n=(x.pow(2).mean(-1,keepdim=True)+eps).sqrt(); return x/n, n
+def rmsnorm_vjp(x,n,dy):                                      # exact LOCAL vjp of rmsnorm
+    D_=x.shape[-1]; return dy/n - x*((dy*x).sum(-1,keepdim=True)/(D_*n.pow(3)))
 def tvjp(x,g,cfg):
     dx=g[:,1:1+cfg.DIN].clone(); gq=g[:,1+cfg.DIN:]
     dx.index_add_(1,cfg.iu[0],gq*x[:,cfg.iu[1]]); dx.index_add_(1,cfg.iu[1],gq*x[:,cfg.iu[0]]); return dx
@@ -26,18 +30,19 @@ class Layer(nn.Module):
         s.Wk=nn.Linear(cfg.D,cfg.DIN,bias=False); s.Wq=nn.Linear(cfg.D,cfg.DIN,bias=False)
         s.Wv=nn.Linear(cfg.D,cfg.DV,bias=False); s.Wo=nn.Linear(cfg.DV,cfg.D)
     def forward(s,a):
-        cfg=s.cfg; B,Tt,_=a.shape; S=torch.zeros(B,cfg.FE,cfg.DV,device=DEV); z=torch.zeros(B,cfg.FE,device=DEV); outs=[]; cache=[]
+        cfg=s.cfg; B,Tt,_=a.shape; H,nrm=rmsnorm(a)            # PRE-NORM: projections see a bounded signal
+        S=torch.zeros(B,cfg.FE,cfg.DV,device=DEV); z=torch.zeros(B,cfg.FE,device=DEV); outs=[]; cache=[]
         for t in range(Tt):
-            src=a[:,t-1] if t>0 else torch.zeros_like(a[:,0]); xk=s.Wk(src); kf=taylor(xk,cfg); v=s.Wv(a[:,t])
+            src=H[:,t-1] if t>0 else torch.zeros_like(H[:,0]); xk=s.Wk(src); kf=taylor(xk,cfg); v=s.Wv(H[:,t])
             S=S+kf.unsqueeze(2)*v.unsqueeze(1); z=z+kf
-            xq=s.Wq(a[:,t]); qf=taylor(xq,cfg); num=torch.einsum('bf,bfd->bd',qf,S); den=(qf*z).sum(-1,keepdim=True)+1e-5
+            xq=s.Wq(H[:,t]); qf=taylor(xq,cfg); num=torch.einsum('bf,bfd->bd',qf,S); den=(qf*z).sum(-1,keepdim=True)+1e-5
             o=s.Wo(num/den); outs.append(a[:,t]+s.rs*o); cache.append((src,xk,kf,v,xq,qf,num,den,S.clone()))
-        return torch.stack(outs,1), cache
+        return torch.stack(outs,1), (cache,H,nrm)
     def local_vjp(s,a,cache,dout):                            # dout=dL/da_out -> (param grads, dL/da_in). Pure local, no autograd.
-        cfg=s.cfg; B,Tt,_=a.shape
+        cfg=s.cfg; B,Tt,_=a.shape; cache,H,nrm=cache
         W={'Wk':s.Wk.weight.detach(),'Wq':s.Wq.weight.detach(),'Wv':s.Wv.weight.detach(),'Wo':s.Wo.weight.detach()}
         dWk=torch.zeros_like(W['Wk']);dWq=torch.zeros_like(W['Wq']);dWv=torch.zeros_like(W['Wv']);dWo=torch.zeros_like(W['Wo']);dbo=torch.zeros_like(s.Wo.bias)
-        din=dout.clone(); e_num=[];g_den=[]
+        dH=torch.zeros_like(a); e_num=[];g_den=[]
         for t in range(Tt):
             (src,xk,kf,v,xq,qf,num,den,S)=cache[t]; r=num/den; ert=dout[:,t]*s.rs
             dWo+=ert.T@r; dbo+=ert.sum(0); err=ert@W['Wo']; e_num.append(err/den); g_den.append(-(err*num).sum(-1,keepdim=True)/den**2)
@@ -47,10 +52,11 @@ class Layer(nn.Module):
         for t in reversed(range(Tt)):
             (src,xk,kf,v,xq,qf,num,den,S)=cache[t]
             P=P+torch.einsum('bf,bd->bfd',qf,e_num[t]); Q=Q+g_den[t]*qf
-            dv=torch.einsum('bf,bfd->bd',kf,P); dWv+=dv.T@a[:,t]; din[:,t]+=dv@W['Wv']
+            dv=torch.einsum('bf,bfd->bd',kf,P); dWv+=dv.T@H[:,t]; dH[:,t]+=dv@W['Wv']
             dkf=torch.einsum('bfd,bd->bf',P,v)+Q; dxk=tvjp(xk,dkf,cfg); dWk+=dxk.T@src
-            if t>0: din[:,t-1]+=dxk@W['Wk']
-            dqf=torch.einsum('bfd,bd->bf',S,e_num[t])+g_den[t]*zt[t]; dxq=tvjp(xq,dqf,cfg); dWq+=dxq.T@a[:,t]; din[:,t]+=dxq@W['Wq']
+            if t>0: dH[:,t-1]+=dxk@W['Wk']
+            dqf=torch.einsum('bfd,bd->bf',S,e_num[t])+g_den[t]*zt[t]; dxq=tvjp(xq,dqf,cfg); dWq+=dxq.T@H[:,t]; dH[:,t]+=dxq@W['Wq']
+        din=dout+rmsnorm_vjp(a,nrm,dH)            # residual path + normed path (exact, local)
         return {'Wk':dWk,'Wq':dWq,'Wv':dWv,'Wo':dWo,'bo':dbo}, din
 
 class Core(nn.Module):
@@ -60,7 +66,7 @@ class Core(nn.Module):
     def forward(s,X):
         a=s.emb(X)
         for L in s.layers: a,_=L(a)
-        return s.head(a)
+        h,_=rmsnorm(a); return s.head(h)                       # FINAL norm bounds the readout
     def param_dict(s):
         p={'emb':s.emb.weight,'hW':s.head.weight,'hb':s.head.bias}
         for li,L in enumerate(s.layers):
