@@ -311,3 +311,29 @@ changes mean(x^2)): solved by rescaling stream-writers by c=sqrt((D+add)/D) and 
 - FINDING: the grown arm was BETTER at step 4000 (4.9877) than at 6000 (5.0478) -- the depth-grow at 4800 caused a dip
   it had not recovered from by the end. **Grow events need recovery time** (and the optimizer state is reset at each
   grow). Confirms the "minimum steps between grows" rule; do not grow late in a run.
+
+## Build step 3: SCALE TEST -- user's hypothesis CONFIRMED (local rule loses its advantage at scale)
+User predicted from the gap trend (-0.500 -> -0.330 -> -0.221 -> -0.127, roughly halving per doubling) that backprop
+would catch up and surpass. Tested at D=256, NL=6, T=128, 20000 steps (~82M tokens).
+- FIRST RESULT WAS WRONG AND I CAUGHT IT: the scale run said "local ahead by -0.76 at every checkpoint", but BPTT was
+  using lr=1e-2 (tuned at the SMALL scale). **BPTT's optimal LR shifts with scale (1e-2 -> 1e-3).** Under-tuned BPTT
+  scored 5.71; properly tuned it scores **4.5590**. Always re-tune BOTH arms at each scale.
+- FAIR COMPARISON AT SCALE (both arms LR-swept, 4000 steps, D256/T128):
+  | arm | best loss | best LR |
+  |-----|-----------|---------|
+  | BPTT | **4.5590** | 1e-3 |
+  | LOCAL rule | 4.7077 | 1e-3 |
+  **gap = +0.149 -> the local rule TRAILS backprop at scale** (it BEAT backprop by -0.127 at D96/T32).
+- So the advantage REVERSES with scale, exactly as the user predicted. The small-scale win was likely the
+  deep-supervision regularization effect, which fades as the model gets bigger.
+- EFFICIENCY ALSO REVERSES: at D96/T32 local cost 0.73x backprop; at D512/NL12 it costs 6.5x (1.8x with k_local=1)
+  because every per-layer objective needs a full 32K-vocab projection. At scale the local rule is BOTH worse AND
+  more expensive than backprop.
+- Stochastic local objectives (k_local=2) DO preserve quality (tracked the full version: 4.5586 vs 4.5666 at step
+  12000) at ~2.9x less cost -- that fix is validated and worth keeping.
+
+### HONEST STANDING POSITION on VISION 0c (pure local plasticity, no backprop ever)
+It WORKS: trains real language, at real depth, supports function-preserving growth, no backprop/settling/weight
+transport anywhere. But at the scales tested it is **not free**: it trails backprop by ~0.15 loss and costs more per
+step at scale. The "beats backprop" result holds only at small scale. This is a real tension with 0b2 (efficiency)
+and with capability, and it is a decision for the project owner, not something to paper over.
