@@ -159,3 +159,43 @@ RESULT (3 seeds, cosine of pure-local grad vs backprop over all layers x {Wk,Wq,
 - HONEST: worst-case is ~0.88-0.95 (still the tiny-gradient Wk/Wq Taylor path), not 0.99. Mean 0.985. But deep credit
   is no longer depth-limited, no longer overshoots, and is cheaper than before. This is a real, novel result:
   muPC + ALM-duals + intrinsic min-stationarity stopping + eligibility traces on a recurrent LM.
+
+## Build step 1f: TRAINING COMPARISON -- the at-init cosine benchmark was MISLEADING (important correction)
+Ran the real test (train_compare.py): same muPC architecture, same init, same data stream (real 290B mix),
+NL=6, D=96, T=32, B=32, 400 steps, Adam lr=3e-3. Held-out loss:
+
+| arm | final loss | ppl | gap vs BPTT | wall-cost |
+|-----|-----------|-----|-------------|-----------|
+| BPTT (backprop reference) | **6.4597** | 639 | -- | 1.0x |
+| pure-local muPC+STOP      | 7.5237 | 1851 | **+1.064** | 8.2x |
+| pure-local naive-PC       | 7.4393 | 1702 | +0.980 | 11.6x |
+
+**So at depth 6 pure-local trains SUBSTANTIALLY worse than backprop (+1.0 loss) at 8-12x the cost**, despite the
+at-init gradient cosine being 0.985. Diagnosis (decisive):
+- **The gradient cosine COLLAPSES once the model is trained.** Measured along a BPTT trajectory (NL=6):
+  step 0: worst 0.967 / mean 0.988 / k*=10  ->  step 50+: mean **0.167** with k*=1.
+  mean 0.167 = exactly 1/6 = ONLY THE TOP LAYER of 6 gets credit. The dual-STOP rule stops at k=1 on trained weights.
+- **It is not just the stop rule -- the SETTLING itself becomes oscillatory on trained weights.** With stop disabled,
+  per-layer cosines go NEGATIVE (e.g. T=12: per-layer [0.41,0.12,0.03,-0.44,0.32,-0.55], mean -0.02). Best achievable
+  on trained weights after a full (eta,rho,T) sweep: **mean 0.887 / worst 0.599 at T=8L** (vs 0.985/0.95 at init),
+  and the response to eta is NON-MONOTONIC = genuine oscillation, not mis-tuning.
+- LESSON: **measure credit quality on TRAINED weights, never at init.** At init the model is benign (small effective
+  Jacobians); after training the Jacobians grow and PC settling destabilizes. All earlier multi-layer cosine numbers
+  (#4, 1c, 1e) are at-init and therefore optimistic. The SINGLE-LAYER results (#1,#2,#3) are ANALYTIC (no settling)
+  and remain exactly valid.
+
+## DECISIVE DEPTH RESULT (on TRAINED weights) -- where pure-local credit is reliable
+| NL | best mean cosine | worst | note |
+|----|------------------|-------|------|
+| 1  | **1.000** | **1.000** | EXACT -- no hidden layer to settle; credit is the analytic readout error |
+| 2  | 0.882 | 0.599 | cliff: the moment ANY hidden layer needs settling |
+| 3  | 0.884 | 0.696 | |
+| 4  | 0.861 | 0.049 | |
+| 6  | 0.887 | 0.599 | |
+- **The cliff is 1 -> 2 layers, not gradual with depth.** Pure-local is EXACT at 1 layer and ~0.88 at any depth >= 2.
+- ARCHITECTURE CONSEQUENCE (honest): under a strict no-backprop constraint, the RELIABLE configuration is
+  **1 layer deep, very WIDE, heavily RECURRENT** (recurrence = effective depth in time, where our temporal credit is
+  EXACT). Multi-layer works but pays a real quality cost (+1.0 loss at depth 6 in a 400-step run).
+- NEXT RESEARCH DIRECTION (untried, promising): avoid cross-layer credit ENTIRELY via LAYERWISE/GREEDY LOCAL
+  OBJECTIVES (Forward-Forward style: each layer has its own local target, no settling, no depth credit needed) --
+  that would scale to any depth with exact local learning. Also: normalized/trust-region settling, equilibrium prop.
