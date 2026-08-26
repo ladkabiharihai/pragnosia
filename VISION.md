@@ -68,25 +68,34 @@ the salience signal (propose gate), and the model's uncertainty, all one intrins
 - THEREFORE the first code step DE-RISKS PC: prove local PC (no backprop) can train a tiny VChunkRecall to learn,
   approaching backprop on a small task, BEFORE building the full brain on it.
 - Alternatives if PC stalls: Equilibrium Propagation, Forward-Forward (both local, no backprop). PC is the lead.
-- DEPTH-CREDIT (proven hard, being solved): naive PC settling degrades with depth (0.85 floor, expensive). Fix =
-  **PC-ALM** (Augmented Lagrangian PC): per-layer DUAL variables accumulate error -> ballistic depth-independent
-  credit. Our impl (pcalm.py) lifts depth-6 credit to ~0.89-0.93 (from 0.85) at bounded cost T~4L, robust across
-  seeds, but has a dual-overshoot needing a stopping rule; not yet 0.99 in the recurrent+eligibility setting (open
-  refinement: dual-stopping, mu-PC depth-scaling, precision-weighting, decoupled linearization). Temporal credit stays
-  EXACT (eligibility). CONSEQUENCE FOR ARCHITECTURE (see 0e).
+- DEPTH-CREDIT (MEASURED, honest): cross-layer credit via PC settling is the WEAK LINK.
+  * Single layer (no hidden layer to settle): credit is EXACT (analytic eligibility, cosine 1.0000) and pure-local
+    training TRACKS backprop exactly (de-risk #3, gap -0.029). This is solid and verified on TRAINED weights too.
+  * Depth >= 2 (settling required): on TRAINED weights the settling becomes OSCILLATORY and credit drops to
+    mean ~0.88 (worst 0.05-0.70); per-layer cosines can go NEGATIVE. Best achievable after full (eta,rho,T) sweeps.
+    The cliff is 1 -> 2 layers, not gradual. muPC depth-scaling + an intrinsic dual-STOPPING rule (min primal
+    stationarity) gave large gains AT INIT (mean 0.985, 2.7x cheaper) but those gains DO NOT SURVIVE training:
+    the stop rule degenerates (k*->1, only the top layer credited) and cosine falls to 0.167.
+  * TRAINING COST OF THIS (real measurement, NL=6, 400 steps, real data): pure-local reaches loss 7.52 vs backprop
+    6.46 (+1.06) at 8-12x wall-time. So multi-layer pure-local LEARNS but is materially worse than backprop.
+  * METHOD LESSON: benchmark credit on TRAINED weights, never at init (at init the Jacobians are small and
+    everything looks good). Earlier at-init multi-layer numbers were optimistic.
+  * Temporal credit stays EXACT (eligibility traces) at all depths -- it is only DEPTH credit that is hard.
 
-### 0e. ARCHITECTURE: grow BOTH depth AND width, but depth BOUNDED + recurrence-as-depth (the learning rule shapes it)
-User requirement: need BOTH depth (knowledge/reasoning/abstraction) AND width (features/capacity); efficiency is
-non-negotiable; the accuracy floor must be fixed. Resolution given our local-learning constraint:
-- Grow BOTH axes, but DEPTH to a BOUNDED, cortex-like range (~4-6, up to ~12 layers), NOT transformer-deep (100+).
-  Bounded depth keeps PC-ALM credit adequate (0.9+) and settling cost a bounded constant (T~4L). Deep-narrow-100 is a
-  backprop artifact and breaks both local credit and efficiency.
-- Put MOST capacity in WIDTH / state / features / vocab (PC-cheap, near-exact credit) and in RECURRENCE (exact
-  temporal credit = cheap "effective depth" for sequential/compositional computation; RNN-as-deep-in-time).
-- Grow depth as RESIDUAL identity blocks (ReZero gate alpha=0) = function-preserving AND "error highways" that keep
-  deep credit tractable through each grow.
-- So growth = width + state + features + vocab freely; depth in modest bounded steps; recurrence carries sequential
-  depth. This honors capability (both axes), efficiency (§0b2, bounded settling), and pure-local learning (§0c).
+### 0e. ARCHITECTURE (revised by measurement): shallow-and-wide-and-RECURRENT is what pure-local actually supports
+User requirement is BOTH depth (knowledge/abstraction) AND width (features), with efficiency non-negotiable. What the
+measurements actually allow under strict no-backprop:
+- **1 layer: EXACT pure-local credit** (verified on trained weights, cosine 1.000). This is the only regime where
+  pure local plasticity provably equals backprop.
+- **>= 2 layers: ~0.88 credit**, costing +1.0 loss vs backprop at depth 6 (measured) and 8-12x compute.
+- So the reliable core is **shallow (1, maybe 2-3 layers), very WIDE (D/state/features/vocab -- credit there is exact
+  and cheap), and heavily RECURRENT** -- recurrence gives "effective depth in time" where our TEMPORAL credit is
+  EXACT. Depth-in-time is free accuracy; depth-in-layers is paid for in credit quality.
+- Growth therefore prioritises WIDTH + STATE + FEATURES + VOCAB + RECURRENCE; layer-depth is added sparingly and only
+  if the quality cost is judged worth it (residual identity blocks / error highways still apply).
+- OPEN DIRECTION to unlock true depth: LAYERWISE / GREEDY LOCAL OBJECTIVES (Forward-Forward style -- each layer gets
+  its own local target so NO cross-layer credit is needed at all). That would scale to any depth with exact local
+  learning and is the most promising route to "grow deep AND stay pure-local". Untested.
 
 ## 1. The goal (the whole point)
 - **Grows itself, from infant, like a child.** Self-growth is central. A fixed model would defy the goal.
