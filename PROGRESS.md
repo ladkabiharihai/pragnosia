@@ -133,3 +133,29 @@ per-layer-timed updates (exact but needs weight transport -> would soften §0c p
 HONEST READ: this is genuine open research. The gap is now well-characterized and NOT a bug; the practical operating
 point (T~4L, mean 0.97, worst 0.85-0.93) already trains real language. Recommend a decision: continue grinding (mu-PC
 next) vs build at the current operating point and refine in-flight.
+
+## Build step 1e: BOTH LEVERS PASSED -- deep local credit SOLVED (muPC + dual-STOP), cheaper AND deeper
+Two levers implemented in pcalm3.py (core.py gained `res_scale` for Depth-muP; scaled VJP verified EXACT, cosine
+1.000000 when fed true errors at res_scale=1.0 and 0.408).
+- **(A) muPC depth-scaling**: residual branch scaled by 1/sqrt(NL) (Depth-muP).
+- **(B) DUAL-STOPPING rule**: track the PRIMAL STATIONARITY residual S = sum_l ||dE/da_l||^2 (INTRINSIC -- no backprop
+  info) and use the (a,lambda) snapshot at its MINIMUM. At the ALM solution the duals equal the adjoint and S->0, so
+  min-S is the principled stopping point. Fixes the T-overshoot completely (results identical at T=4L and 8L).
+- Neither lever alone suffices (dual-STOP alone = 0.17; muPC alone = 0.904). TOGETHER they solve it.
+
+RESULT (3 seeds, cosine of pure-local grad vs backprop over all layers x {Wk,Wq,Wv,Wo}):
+| NL | baseline worst/mean (steps) | muPC+STOP worst/mean (steps) |
+|----|------------------------------|-------------------------------|
+| 2  | 0.988 / 0.994 (8)  | 0.951 / 0.988 (3)  |
+| 4  | 0.843 / 0.975 (16) | 0.945 / 0.986 (6)  |
+| 6  | 0.807 / 0.968 (24) | 0.941 / 0.985 (9)  |
+| 8  | -0.080 / 0.930 (32)| 0.907 / 0.983 (12) |
+| 12 | 0.525 / 0.937 (48) | 0.878 / 0.984 (18) |
+- **Mean cosine is now essentially DEPTH-INDEPENDENT (0.983-0.988 at NL=2..12)** -- the "ballistic" credit PC-ALM
+  promises. Baseline degrades (mean 0.994->0.930, worst collapses to -0.08 at NL=8).
+- **Cost DROPS to k* ~ 1.5*NL settling steps** (vs 4*NL): ~2.7x cheaper AND more accurate. Big §0b2 win.
+- Hyperparam refinement @NL=6: plateau ~0.95 worst / 0.985 mean. Efficiency sweet spot **eta_a=0.8, rho=0.5 ->
+  worst 0.948, mean 0.985, k*=10**. Instability when eta_a*rho >= ~1.0 (avoid).
+- HONEST: worst-case is ~0.88-0.95 (still the tiny-gradient Wk/Wq Taylor path), not 0.99. Mean 0.985. But deep credit
+  is no longer depth-limited, no longer overshoots, and is cheaper than before. This is a real, novel result:
+  muPC + ALM-duals + intrinsic min-stationarity stopping + eligibility traces on a recurrent LM.

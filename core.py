@@ -9,8 +9,8 @@ import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 DEV="cuda" if torch.cuda.is_available() else "cpu"
 
 class Config:
-    def __init__(s, D=96, DIN=8, DV=96, NL=4, T=32, vocab=32768):
-        s.D=D; s.DIN=DIN; s.DV=DV; s.NL=NL; s.T=T; s.vocab=vocab
+    def __init__(s, D=96, DIN=8, DV=96, NL=4, T=32, vocab=32768, res_scale=1.0):
+        s.D=D; s.DIN=DIN; s.DV=DV; s.NL=NL; s.T=T; s.vocab=vocab; s.res_scale=res_scale
         s.iu=torch.triu_indices(DIN,DIN,device=DEV); s.FE=1+DIN+s.iu.shape[1]
 
 def taylor(x,cfg):
@@ -22,7 +22,7 @@ def tvjp(x,g,cfg):
 
 class Layer(nn.Module):
     def __init__(s,cfg):
-        super().__init__(); s.cfg=cfg
+        super().__init__(); s.cfg=cfg; s.rs=getattr(cfg,'res_scale',1.0)
         s.Wk=nn.Linear(cfg.D,cfg.DIN,bias=False); s.Wq=nn.Linear(cfg.D,cfg.DIN,bias=False)
         s.Wv=nn.Linear(cfg.D,cfg.DV,bias=False); s.Wo=nn.Linear(cfg.DV,cfg.D)
     def forward(s,a):
@@ -31,7 +31,7 @@ class Layer(nn.Module):
             src=a[:,t-1] if t>0 else torch.zeros_like(a[:,0]); xk=s.Wk(src); kf=taylor(xk,cfg); v=s.Wv(a[:,t])
             S=S+kf.unsqueeze(2)*v.unsqueeze(1); z=z+kf
             xq=s.Wq(a[:,t]); qf=taylor(xq,cfg); num=torch.einsum('bf,bfd->bd',qf,S); den=(qf*z).sum(-1,keepdim=True)+1e-5
-            o=s.Wo(num/den); outs.append(a[:,t]+o); cache.append((src,xk,kf,v,xq,qf,num,den,S.clone()))
+            o=s.Wo(num/den); outs.append(a[:,t]+s.rs*o); cache.append((src,xk,kf,v,xq,qf,num,den,S.clone()))
         return torch.stack(outs,1), cache
     def local_vjp(s,a,cache,dout):                            # dout=dL/da_out -> (param grads, dL/da_in). Pure local, no autograd.
         cfg=s.cfg; B,Tt,_=a.shape
@@ -39,7 +39,7 @@ class Layer(nn.Module):
         dWk=torch.zeros_like(W['Wk']);dWq=torch.zeros_like(W['Wq']);dWv=torch.zeros_like(W['Wv']);dWo=torch.zeros_like(W['Wo']);dbo=torch.zeros_like(s.Wo.bias)
         din=dout.clone(); e_num=[];g_den=[]
         for t in range(Tt):
-            (src,xk,kf,v,xq,qf,num,den,S)=cache[t]; r=num/den; ert=dout[:,t]
+            (src,xk,kf,v,xq,qf,num,den,S)=cache[t]; r=num/den; ert=dout[:,t]*s.rs
             dWo+=ert.T@r; dbo+=ert.sum(0); err=ert@W['Wo']; e_num.append(err/den); g_den.append(-(err*num).sum(-1,keepdim=True)/den**2)
         zt=[];zr=torch.zeros(B,cfg.FE,device=DEV)
         for t in range(Tt): zr=zr+cache[t][2]; zt.append(zr.clone())
