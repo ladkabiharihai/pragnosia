@@ -199,3 +199,42 @@ at-init gradient cosine being 0.985. Diagnosis (decisive):
 - NEXT RESEARCH DIRECTION (untried, promising): avoid cross-layer credit ENTIRELY via LAYERWISE/GREEDY LOCAL
   OBJECTIVES (Forward-Forward style: each layer has its own local target, no settling, no depth credit needed) --
   that would scale to any depth with exact local learning. Also: normalized/trust-region settling, equilibrium prop.
+
+## Build step 1g: LAYERWISE LOCAL OBJECTIVES -- depth UNLOCKED under pure local plasticity (lw_lib.py)
+User rejected a shallow-only core ("we need to figure it out"), so we attacked depth properly. Approach: give EVERY
+layer its OWN local next-token objective through the shared readout and BLOCK gradients between layers, so there is
+**no cross-layer credit to assign at all** -- the exact mechanism (PC settling) that failed at depth is REMOVED.
+Within-layer credit stays EXACT (eligibility traces). Why this avoids the classic greedy-layerwise failure: layers are
+RESIDUAL (a layer can only ADD to the stream, never destroy it) and every layer shares the SAME target and readout, so
+each layer REFINES the prediction (iterative refinement / logit-lens) instead of solving a myopic private task.
+Final rule = per-layer local objective + DFA broadcast of the top error via FIXED RANDOM feedback (no weight
+transport) + an embedding local objective. NO backprop, NO settling, NO weight transport.
+
+Ablation @ NL=6, 400 steps, real 290B mix (lower is better):
+| variant | loss | note |
+|---------|------|------|
+| PC-settling (muPC+STOP) | 7.52 | 8.2x cost -- the old approach |
+| layerwise, uniform weights | 6.596 | 0.7x cost |
+| + DFA broadcast (lambda=1) | 6.528 | lambda>=2 diverges |
+| + embedding local objective | **6.465** | embedding is the largest param block; layer-0 din alone starved it |
+| depth-weighted / final-heavy weights | 6.66 / 6.75 | WORSE -- uniform is best |
+| final-layer-only objective | 7.16 | confirms per-layer objectives do real work |
+
+DEPTH SCALING (each arm at its OWN best LR: BPTT 1e-2, layerwise 3e-3), 400 steps:
+| NL | BPTT | LAYERWISE-local | gap | cost |
+|----|------|-----------------|-----|------|
+| 2  | 5.745 | 6.581 | +0.836 | 0.71x |
+| 4  | 5.734 | 6.509 | +0.774 | 0.75x |
+| 6  | 5.742 | **6.467** | **+0.725** | 0.74x |
+| 12 | 5.721 | 6.682 | +0.961 | 0.73x |
+- **DEPTH HELPS the local learner**: layerwise improves 6.581 -> 6.467 from 2 to 6 layers and the gap SHRINKS
+  (+0.836 -> +0.725), while BPTT is flat. Sweet spot ~4-6 layers; at 12 it degrades (+0.961).
+- **Cost is 0.73x BACKPROP** (cheaper than backprop itself, and ~12x cheaper than PC settling). Huge 0b2 win.
+- **Depth is no longer a credit-assignment problem**: nothing to settle, nothing to propagate, scales to any depth.
+- REMAINING GAP vs backprop ~ +0.72 at 400 steps. Cause identified: **layerwise is LR-LIMITED** (best at 3e-3,
+  diverges >=5e-3) while backprop happily uses 1e-2 -- all layers step simultaneously without knowing about each
+  other. This is a STABILITY problem, not a gradient-direction problem.
+- Untried levers for the gap: longer training (400 steps is tiny -- does the gap close?), similarity/InfoMax auxiliary
+  term (Nokland & Eidnes), proper per-layer adaptive step control, blockwise objectives.
+- (A global-norm gradient-clipping attempt diverged -- buggy interaction with Adam's scale invariance; discarded, not
+  a finding.)

@@ -82,20 +82,20 @@ the salience signal (propose gate), and the model's uncertainty, all one intrins
     everything looks good). Earlier at-init multi-layer numbers were optimistic.
   * Temporal credit stays EXACT (eligibility traces) at all depths -- it is only DEPTH credit that is hard.
 
-### 0e. ARCHITECTURE (revised by measurement): shallow-and-wide-and-RECURRENT is what pure-local actually supports
-User requirement is BOTH depth (knowledge/abstraction) AND width (features), with efficiency non-negotiable. What the
-measurements actually allow under strict no-backprop:
-- **1 layer: EXACT pure-local credit** (verified on trained weights, cosine 1.000). This is the only regime where
-  pure local plasticity provably equals backprop.
-- **>= 2 layers: ~0.88 credit**, costing +1.0 loss vs backprop at depth 6 (measured) and 8-12x compute.
-- So the reliable core is **shallow (1, maybe 2-3 layers), very WIDE (D/state/features/vocab -- credit there is exact
-  and cheap), and heavily RECURRENT** -- recurrence gives "effective depth in time" where our TEMPORAL credit is
-  EXACT. Depth-in-time is free accuracy; depth-in-layers is paid for in credit quality.
-- Growth therefore prioritises WIDTH + STATE + FEATURES + VOCAB + RECURRENCE; layer-depth is added sparingly and only
-  if the quality cost is judged worth it (residual identity blocks / error highways still apply).
-- OPEN DIRECTION to unlock true depth: LAYERWISE / GREEDY LOCAL OBJECTIVES (Forward-Forward style -- each layer gets
-  its own local target so NO cross-layer credit is needed at all). That would scale to any depth with exact local
-  learning and is the most promising route to "grow deep AND stay pure-local". Untested.
+### 0e. ARCHITECTURE: depth is UNLOCKED via LAYERWISE LOCAL OBJECTIVES (measured)
+Depth under pure local plasticity is solved not by better cross-layer credit but by REMOVING the need for it:
+- **Every layer gets its OWN local next-token objective** through the shared readout, gradients BLOCKED between
+  layers. Plus a DFA broadcast of the top error via FIXED RANDOM feedback (no weight transport) and an embedding
+  local objective. Within-layer credit stays EXACT (eligibility traces). No backprop, no settling, no weight transport.
+- Safe from the classic greedy-layerwise failure because layers are RESIDUAL (a layer can only ADD to the stream) and
+  all layers share the SAME target/readout, so each layer REFINES the prediction (iterative refinement).
+- MEASURED: cost **0.73x backprop** (vs 8-12x for PC settling); depth HELPS (loss improves 2->6 layers and the gap to
+  backprop SHRINKS +0.836 -> +0.725); sweet spot **~4-6 layers**, degrading by 12.
+- So: grow BOTH axes. DEPTH in the cortex-like 4-6 range (where it measurably helps and is cheap), and most capacity
+  in WIDTH / state / features / vocab plus RECURRENCE (depth-in-time, where temporal credit is EXACT).
+- HONEST: a ~+0.72 quality gap to backprop remains at 400 steps; the cause is that layerwise is LR-LIMITED (stability,
+  since all layers step at once), not bad gradient direction. Open levers: longer training, similarity/InfoMax
+  auxiliary term, per-layer adaptive step control, blockwise objectives.
 
 ## 1. The goal (the whole point)
 - **Grows itself, from infant, like a child.** Self-growth is central. A fixed model would defy the goal.
