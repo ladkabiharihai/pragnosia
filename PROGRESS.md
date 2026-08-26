@@ -289,3 +289,25 @@ normalized core) vs BPTT, NL=6, 4000 steps, real 290B mix, each at its own best 
 
 ### STATUS: VISION 0c (pure local plasticity) is fully validated, and depth is unlocked.
 Ready to build the real persistent core: bounded-but-real depth + wide + recurrent, grown from infant, with this rule.
+
+## Build step 2: FAST CORE + GROWTH (user: "make it really fast ... test it with scale and growth")
+**(a) Vectorized core (core.py rewritten).** The per-timestep Python loop is gone: the causal recurrence
+num_t = sum_{s<=t} (qf_t . kf_s) v_s is computed in PARALLEL as a masked quadratic form, and the local VJP likewise.
+Verified EXACT vs autograd (cosine 1.000000, norm-ratio 1.000000). **8x faster** at the old config (0.18 -> 0.022
+s/step) and far less memory (no per-step state materialization).
+**(b) Efficiency at scale + fix.** A per-layer local objective costs a FULL 32K-vocab projection, so cost grew to
+6.5x backprop at D512/NL12. Fix: **stochastic local objectives** -- sample k of NL layers per step and rescale by
+NL/k (expected update unchanged). Cost 6.49x -> 3.04x (k=4) -> 2.22x (k=2) -> 1.80x (k=1).
+**(c) GROWTH (growth.py), all axes FUNCTION-PRESERVING (verified max|dOut|):** depth +2 = 0.00e+00; state/DV +64 =
+1.67e-06; width/D +64 = 1.79e-06; vocab -> 33000 = 0.00e+00. Width growth is subtle under RMS-norm (adding zero dims
+changes mean(x^2)): solved by rescaling stream-writers by c=sqrt((D+add)/D) and stream-readers by 1/c.
+**(d) GROWTH + LOCAL RULE (grow_test.py), T=64, 6000 steps:**
+| arm | final loss | compute |
+|-----|-----------|---------|
+| fixed at target (D192, NL6) | 4.9811 | 1.00x |
+| infant (D96,NL2) GROWN to target | 5.0478 | **0.72x (28% saved)** |
+- Growth reaches ~the same quality for **28% less compute** ("cheaper-to-target", as the vision predicted), with NO
+  thrash or collapse -- unlike the old MoE/dense-grow attempts. Function-preserving + local rule is a stable combo.
+- FINDING: the grown arm was BETTER at step 4000 (4.9877) than at 6000 (5.0478) -- the depth-grow at 4800 caused a dip
+  it had not recovered from by the end. **Grow events need recovery time** (and the optimizer state is reset at each
+  grow). Confirms the "minimum steps between grows" rule; do not grow late in a run.
