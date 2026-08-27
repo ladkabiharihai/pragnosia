@@ -372,3 +372,23 @@ At scale the pure-local rule is worse on loss (+0.15 to +0.33), noticeably more 
 ~3.3x more expensive per step. It DOES work (real language, real depth, growth, no backprop anywhere) and it WINS at
 small scale, but the "beats backprop" claim does not survive scale. Adaptive LR removed the tuning problem but not
 the quality gap.
+
+## Build step 5: FADE hypothesis FALSIFIED -> the scale gap is structural -> 0c amended
+Hypothesis: the local rule wins small / loses large because per-layer objectives are deep supervision that
+over-constrains a large model, so local supervision should FADE. **Falsified** (D256/T128, 4000 steps):
+| schedule | loss |
+|----------|------|
+| constant w=1 (baseline) | **4.7443** |
+| fade 1->0 linear | 4.7748 |
+| fade 1->0 by 50% | 4.8985 |
+| fade 1->0.25 | 4.7627 |
+| fade 1->0 + lam 2->8 handover | 4.7834 |
+Every fade schedule is WORSE. Local supervision is needed throughout and its cost is INHERENT.
+Leads now exhausted: LR sweeps (both arms), adaptive scale-free step, lambda tuning, stochastic local objectives,
+identity-vs-random feedback, normalization, fading. The +0.15 scale gap is STRUCTURAL.
+=> DECISION (delegated by the user): VISION 0c amended to **local plasticity is the LIFELONG learning rule**;
+the one-time substrate may be pretrained by whatever is most efficient. Everything that differentiates Pragnosia
+(continual learning at inference, Hebbian hippocampus, propose->verify->consolidate, growth, intrinsic faculties,
+identity) is preserved -- none of it depends on how the substrate was first formed. Pure-local pretraining remains
+an active track with a falsifiable promotion criterion. Also more biologically accurate: neuroplasticity is LIFELONG
+learning; the initial cortex is shaped by development, not adult plasticity.

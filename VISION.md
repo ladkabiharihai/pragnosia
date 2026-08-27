@@ -49,29 +49,35 @@ structure, are CANDIDATE schedules to A/B empirically against flat/linear when w
 measurably beats the alternatives (prove-by-measuring; earned by data, not numerology). Parked as a first-class
 experiment for the growth phase, not forgotten.
 
-### 0c. Learning mechanism: PURE LOCAL PLASTICITY, no backprop anywhere (decided: B-ii)
-Pragnosia learns entirely by LOCAL plasticity - no backpropagation, no external optimizer, ever (not even to
-meta-learn a rule; not in "evolution", not in life). Two complementary local mechanisms:
-- **Predictive Coding (PC) = SPATIAL credit** (across layers): every layer predicts its neighbor, forms a LOCAL
-  prediction error, updates to reduce it (provably does credit assignment with local-only computation, no global
-  backward pass). DE-RISK #0 confirmed PC matches backprop (97.0 vs 98.7) on a static task.
-- **Eligibility traces (e-prop, Bellec 2020) = TEMPORAL credit** (across time): each synapse keeps a LOCAL trace of
-  recent pre-synaptic activity, so a later error/learning-signal credits earlier events (e.g. the memory WRITE that
-  a future READ used) - temporal credit with NO backprop-through-time. DE-RISK #1 v1 showed PC/per-position local
-  WITHOUT this fails recall (12% = chance): the writes get no credit for future reads. Eligibility traces are the fix.
-Plus **three-factor/neuromodulated plasticity** for consolidation (the verification signal gates the local write) and
-**Hebbian fast-weights** for `M`/state (already local). PC (space) + eligibility traces (time) = full local credit. The unifying quantity is PREDICTION ERROR / SURPRISE: it is the learning signal (PC),
-the salience signal (propose gate), and the model's uncertainty, all one intrinsic thing. PC nets are recurrent
-(settle by minimizing error), fitting our core; this is Friston free-energy, maximally brain-true.
-- HONEST RISK (the load-bearing bet): PC at our scale, with growth + continual learning, is UNPROVEN; it may be slower,
-  weaker than backprop, or unstable, and costs more compute per step (settling). The whole project rests on it working.
-- THEREFORE the first code step DE-RISKS PC: prove local PC (no backprop) can train a tiny VChunkRecall to learn,
-  approaching backprop on a small task, BEFORE building the full brain on it.
-- Alternatives if PC stalls: Equilibrium Propagation, Forward-Forward (both local, no backprop). PC is the lead.
-- DEPTH-CREDIT: SOLVED, see 0e. History: PC settling (cross-layer credit) was the weak link -- exact at 1 layer but
-  approximate/oscillatory at depth ON TRAINED WEIGHTS (at-init benchmarks were misleading; always benchmark on trained
-  weights) and 8-12x expensive. It is SUPERSEDED by the layerwise + residual-highway rule in 0e, which needs no
-  cross-layer credit at all, beats backprop, and is cheaper than backprop.
+### 0c. Learning mechanism: LOCAL PLASTICITY IS THE LIFELONG LEARNING RULE
+**(AMENDED from "no backprop anywhere, ever" -- forced by measurement, recorded honestly.)**
+Pragnosia LIVES by local plasticity. Everything the model does after its substrate exists -- continual learning,
+memory consolidation, growth, adaptation at inference -- is pure LOCAL plasticity: no backprop, no weight transport,
+no global backward pass. That is non-negotiable, and it is where local learning has NO competitor (you cannot
+backprop through a live stream; the hippocampal fast-weight store is Hebbian by construction).
+The INITIAL SUBSTRATE (one-time pretraining) may be formed by whatever is most efficient, including backprop.
+WHY THE AMENDMENT (evidence, not preference):
+- Pure-local BEATS backprop at small scale (D96/T32: -0.127) but LOSES at scale (D256/T128, both arms LR-swept:
+  4.7077 vs 4.5590, gap +0.149), generates far more degenerately (4-gram repetition 0.23 vs 0.02), and costs 3.3x
+  more per step. That is the exact opposite of the project's goal (best capability per resource).
+- Everything reasonable was tried to close it: LR sweeps of both arms, an adaptive scale-free step, lambda tuning,
+  stochastic local objectives, identity-vs-random feedback, normalization, and FADING the local supervision
+  (falsified: all fade schedules were WORSE, 4.76-4.90 vs 4.744, so the deep-supervision cost is inherent).
+- Holding "no backprop in pretraining" would knowingly ship a worse, more expensive model. The principle was a MEANS
+  to a brain-like end; keeping it there would sacrifice the END for the means.
+- It is also MORE biologically accurate: neuroplasticity is LIFELONG learning. The initial cortex is shaped by
+  development (genome, activity-dependent maturation, critical periods), which is not adult synaptic plasticity.
+WHAT IS PRESERVED (the whole differentiating claim): local continual learning at inference, the Hebbian fast-weight
+hippocampus, propose->verify->consolidate, three-factor/neuromodulated consolidation, function-preserving growth,
+intrinsic faculties, persistent identity. None of these depend on how the substrate was first formed.
+PROMOTION CRITERION (falsifiable, keeps the pure path alive): pure-local pretraining is an ACTIVE research track. If
+it matches backprop at the target scale on loss AND generation AND cost, it is promoted back to pretraining.
+MECHANISMS (validated, used for lifelong learning and available for pretraining):
+- Eligibility traces = EXACT temporal credit (cosine 1.0000 vs autograd, any depth, on trained weights).
+- Per-layer local objectives + residual-highway (identity) feedback = the depth solution (0e).
+- Three-factor / neuromodulated plasticity for consolidation; Hebbian fast weights for `M`.
+- Adaptive SCALE-FREE step (trust ratio): one value optimal at every scale -> no per-scale tuning, growth-safe (0a).
+
 ### 0e. THE LEARNING RULE (measured; beats backprop at depth, pure local, no backprop anywhere)
 Depth is solved not by better cross-layer credit but by REMOVING the need for it. Three local parts:
 1. **Per-layer local objective**: every layer predicts the next token through the final norm + shared head (deep
@@ -87,6 +93,31 @@ ARCHITECTURE CONSEQUENCE: grow BOTH depth and width. Depth is no longer a credit
 settle, nothing to propagate); the core needs NORMALIZATION (RMS pre-norm + final norm) or the residual stream runs
 away under per-layer objectives. Put most capacity in width/state/features/vocab plus recurrence (depth-in-time,
 where temporal credit is exact), with real layer-depth as well.
+
+### 0f. BIOLOGY THAT DIRECTLY SHAPES THE DESIGN (not analogy -- these are mechanisms we build)
+- **Neuroplasticity = the whole learning framework.** Pragnosia's learning rule IS a computational theory of
+  plasticity (eligibility traces, predictive processing, Hebbian fast weights, growth). Study plasticity,
+  predictive processing, hippocampus-cortex consolidation, neuromodulation and sleep/DMN research over transformer
+  papers -- they map onto this architecture far more directly.
+- **Dopamine / prediction-error loops = the propose gate.** Biology: prediction error -> dopamine -> plasticity.
+  Pragnosia: prediction error -> surprise -> proposal -> (verify) -> consolidation. The verification signal is the
+  NEUROMODULATOR that gates the local write (three-factor plasticity). Already the design; keep it explicit.
+- **Attention residue = MEMORY POLLUTION (a named failure mode to test).** A noisy episode written into `M` can
+  contaminate later retrieval. This is precisely why salience x recurrence gating, verification, decay and
+  consolidation exist. ADD A TEST: inject noise/false episodes and measure retrieval degradation of known facts.
+- **Default Mode Network = the sleep phase, enriched.** Offline consolidation should not only replay/dream: it
+  should generate COUNTERFACTUALS, test hypotheses, and strengthen what proves useful. That is what the DMN does.
+- **Flow (challenge ~ skill) = INTRINSIC CURRICULUM (new mechanism, high value).** Learn most from data whose
+  prediction error is MODERATE -- not trivial (nothing to learn), not hopeless (no signal). The model selects its own
+  training material by its own prediction error: curiosity / active / self-paced learning. This is intrinsic by
+  construction (0a) and is an efficiency win (spend compute only where it teaches). TEST IT.
+- **Hedonic treadmill = grow when fully adapted**, not on a schedule. Confirms grow-on-saturation as the trigger.
+- **OPEN PIECE -- a value/goal system.** Pragnosia currently optimizes prediction. A mature version needs "what is
+  worth doing": trading off knowledge gain, accuracy, efficiency, identity preservation. Undesigned; note it.
+- **Escaping the default game.** The mainstream path is more data/GPUs/parameters/bigger transformer. Pragnosia
+  deliberately competes elsewhere: continual learning, persistent identity, growth, local plasticity, unbounded
+  context, efficiency. Research priority follows asymmetric bets: prefer experiments that can resolve a major
+  uncertainty cheaply (the de-risk sequence in PROGRESS.md is the model for this).
 
 ## 1. The goal (the whole point)
 - **Grows itself, from infant, like a child.** Self-growth is central. A fixed model would defy the goal.
