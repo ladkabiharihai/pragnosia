@@ -443,3 +443,20 @@ Swept the decay applied to the carried state between chunks (3000 steps each, D2
   measured, not asserted. This is the project's most defensible differentiator.
 - HONEST SCOPE: this is a COST claim (architecture-level, valid). It does NOT claim the model USES 131k tokens well --
   this model was trained on 512-token documents. Long-context ACCURACY needs a model trained at length; separate test.
+
+## VISION ACCEPTANCE TEST 2 -- "continual learning at inference": **HALF PASSES** (fast path yes, persistence no)
+v1 was invalid: `absorb()` padded facts to 128 tokens with token 0, so the memory captured PAD, not the fact
+(retention -0.77/+0.82, interference +1.41). Fixed (no padding) and added a NEUTRAL-text control of similar length.
+| test | result |
+|------|--------|
+| **2a RETENTION** | **PASS: mean +1.467 nats vs control** (7492 +0.57, luminase +2.59, Kelmoor Spire +1.24) |
+| **2c INTERFERENCE** | **PASS: +0.025** vs the neutral-state control (negligible) |
+| **2b PERSISTENCE** | **FAIL: gain +0.569 -> +0.038 after ONE unrelated chunk, ~0 thereafter** |
+- The model **genuinely learns novel facts at inference** by a local Hebbian state write (no backprop, no gradient):
+  entities it has never seen ("Doctor Marlow"/"luminase", "Vashmere"/"Kelmoor Spire") get 1.2-2.6 nats more likely.
+- It does so **without damaging** general language ability.
+- But the fast store DECAYS (0.2/chunk, chosen for LM quality) so the fact is gone within a chunk. That is the
+  hippocampus behaving correctly -- and exactly why the vision requires CONSOLIDATION into slow weights for anything
+  that should persist. The missing piece is the sleep/consolidation loop, not the memory.
+- NOTE the real trade: the decay that makes language modelling good (0.2) is far too aggressive for persistence.
+  Fast memory is short-term BY DESIGN; permanence must come from consolidation.
