@@ -16,6 +16,8 @@ from data_mix import DataMix
 DEV=C.DEV
 DOC=32768; CH=2048; NCH=DOC//CH; B=int(os.environ.get("B","8")); DECAY=0.05  # measured optimum: 511 ktok/s
 LR=float(os.environ.get("LR","6e-4")); STEPS=int(os.environ.get("STEPS","100000000"))   # effectively indefinite: run until told to stop (user)
+WARM=int(os.environ.get("WARM","300"))            # re-warm after each grow: new capacity is inert and must be eased in
+LR_MIN_MULT=float(os.environ.get("LR_MIN_MULT","0.1"))   # decay to 10% of peak by the end of a stage's token budget
 D0,NL0=384,4                                            # infant
 TARGET_D,TARGET_NL=1024,16                              # ~235M at the end
 RECALL_FRAC=0.15; VRAM_MIN=8.0                          # leave headroom for prod
@@ -61,7 +63,15 @@ def main():
     P=lambda: sum(p.numel() for p in m.parameters())
     print(f"PRAGNOSIA: infant D{cfg.D}x{cfg.NL} ({P()/1e6:.0f}M) -> target D{TARGET_D}x{TARGET_NL}; docs {DOC} chunk {CH} B{B}",flush=True)
     bar=pbar(range(step,STEPS),"pragnosia",total=STEPS-step)
-    ema=None; t0=time.time()
+    ema=None; t0=time.time(); steps_at_size=0
+    def set_lr(step_in_stage,frac_of_budget):
+        """warmup after each grow, then cosine-decay against progress toward this stage's 22 tok/param budget."""
+        if step_in_stage<WARM: lr=LR*(step_in_stage+1)/WARM
+        else:
+            f=min(1.0,max(0.0,frac_of_budget))
+            lr=LR*(LR_MIN_MULT+(1-LR_MIN_MULT)*0.5*(1+math.cos(math.pi*f)))
+        for g in opt.param_groups: g['lr']=lr
+        return lr
     for it in bar:
         if RD is not None and np.random.rand()<RECALL_FRAC:          # masked recall (no carry: short QA docs)
             # MASKED RECALL, now THROUGH MEMORY: half the batches put the fact in the carried state (so retrieval
@@ -95,19 +105,20 @@ def main():
             ent=G.SaturationSensor.entropy(last)
         ema=loss.item() if ema is None else 0.995*ema+0.005*loss.item()
         free=torch.cuda.mem_get_info()[0]/2**30
-        tokens_at_size+=B*(CH if ent is None else DOC)
+        tokens_at_size+=B*(CH if ent is None else DOC); steps_at_size+=1
+        cur_lr=set_lr(steps_at_size,tokens_at_size/(TOK_PER_PARAM*P()))
         # a grow needs BOTH: the model's own saturation signal AND enough tokens spent at this size (22/param).
         earned = tokens_at_size >= TOK_PER_PARAM*P()
         if ent is not None and k<len(PLAN) and free>VRAM_MIN and earned and sensor.observe(ent,it):
             kind,amt=PLAN[k]; P_before=P()
             (G.grow_width if kind=='w' else G.grow_depth)(m,amt)
             earned_tpp=tokens_at_size/max(1,P_before)            # capture BEFORE resetting (my first edit printed 0)
-            opt=torch.optim.Adam(m.parameters(),lr=LR); k+=1; tokens_at_size=0
+            opt=torch.optim.Adam(m.parameters(),lr=LR); k+=1; tokens_at_size=0; steps_at_size=0
             fwd=torch.compile(m) if USE_COMPILE else m           # shapes changed -> recompile once per grow
             bar.write(f"    >>> SELF-GREW #{k} at step {it}: D={m.cfg.D}x{m.cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} -> {P()/1e6:.0f}M (earned {earned_tpp:.0f} tok/param at the old size, free {free:.0f}G)")
         if (it+1)%100==0:
             tps=B*DOC*(it-step+1)/(time.time()-t0)
-            bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L {P()/1e6:.0f}M {tokens_at_size/P():.0f}tok/param {tps/1e3:.0f}ktok/s free={free:.0f}G")
+            bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L {P()/1e6:.0f}M {tokens_at_size/P():.0f}tok/param lr={cur_lr:.1e} {tps/1e3:.0f}ktok/s free={free:.0f}G")
         if (it+1)%500==0:
             torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':it+1,'k':k},CKPT)
     torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':STEPS,'k':k},CKPT)
