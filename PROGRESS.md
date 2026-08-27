@@ -834,3 +834,28 @@ automatically OVERTRAINS past Chinchilla, which is exactly what makes small mode
 tok/param, MobileLLM 8,000, vs Chinchilla 20). Not a miscalculation to fix; a stricter gate that pushes us toward
 the regime the literature says wins. Caveat: later stages dominate the budget (235M alone needs 5.2B tokens).
 ### STEP CAP REMOVED: the run now trains indefinitely until explicitly stopped.
+
+## RECALL DEBUG: the architecture is FINE -- my probe was broken, and the real cause is different
+Chased "recall 0%" to its source. Three findings, one of them a correction of my own test.
+**(a) The masked-recall objective is NOT being learned** (exp/recall_debug.py, step 10000):
+  loss on CONTEXT tokens 5.585 vs loss on the SUPERVISED ANSWER span 5.798 -- the answer is HARDER than context.
+  Top-1 on the first answer token 8%, top-10 12%. Retrieval is absent, not merely mis-decoded.
+**(b) MY COPY-TEST WAS BROKEN, and so was the conclusion I drew from it.** A "copy a token from 5 back" probe read
+0%, and a dedicated copy-task model read 1-2%, which I reported as a structural architecture failure. Both drew keys
+and values from the FULL 256-token vocabulary, so the very same tokens also appeared as random filler and the model
+could not know which occurrence was the key. With disjoint key/value sets (the de-risk #1 setting):
+| task | accuracy | chance |
+|------|----------|--------|
+| 8 keys / 8 values | **100.0%** | 12.5% |
+| 32 keys / 32 values | **97.5%** | 3.1% |
+| 100 keys / 100 values | **92.5%** | 1.0% |
+| 8/8 at 256-token context | **100.0%** | 12.5% |
+**The architecture does associative retrieval essentially perfectly.** The regression I thought I had found does not
+exist; de-risk #1's 100% MQAR still stands.
+**(c) SO WHY IS REAL RECALL 0%?** Not architecture, and not (only) undertraining. The remaining explanation is the
+DIFFICULTY GAP: the synthetic task has a clean, unambiguous key that appears exactly twice. Real SQuAD-style recall
+needs the model to (i) parse a natural-language question, (ii) locate the relevant span among 230 tokens of ordinary
+prose where every token is "filler", and (iii) copy it. Step (i)-(ii) are language understanding, which a 49M model
+at ~2.7B tokens does not have yet. The retrieval MACHINERY is ready and waiting for the language ability to arrive.
+LESSON (again): when a probe says something structural is broken, test the probe before believing it. I reported an
+architecture failure that was an artifact of my own test design.

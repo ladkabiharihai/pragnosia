@@ -63,7 +63,7 @@ def main():
     P=lambda: sum(p.numel() for p in m.parameters())
     print(f"PRAGNOSIA: infant D{cfg.D}x{cfg.NL} ({P()/1e6:.0f}M) -> target D{TARGET_D}x{TARGET_NL}; docs {DOC} chunk {CH} B{B}",flush=True)
     bar=pbar(range(step,STEPS),"pragnosia",total=STEPS-step)
-    ema=None; t0=time.time(); steps_at_size=0
+    ema=None; t0=time.time(); steps_at_size=0; last_grow_step=0
     def set_lr(step_in_stage,frac_of_budget):
         """warmup after each grow, then cosine-decay against progress toward this stage's 22 tok/param budget."""
         if step_in_stage<WARM: lr=LR*(step_in_stage+1)/WARM
@@ -87,11 +87,11 @@ def main():
                 st_r=[(a.detach(),b.detach()) for a,b in st_r]
                 with torch.autocast("cuda",dtype=torch.bfloat16):
                     lg=fwd(X,states=st_r)                                       # answer supervised WITH memory live
-                    loss=F.cross_entropy(lg.reshape(-1,cfg.vocab).float(),Y.reshape(-1),ignore_index=-100)
+                    loss=F.cross_entropy(lg.reshape(-1,cfg.vocab),Y.reshape(-1),ignore_index=-100)
             else:
                 with torch.autocast("cuda",dtype=torch.bfloat16):
                     lg=fwd(X,states=zero_state(m,B))
-                    loss=F.cross_entropy(lg.reshape(-1,cfg.vocab).float(),Y.reshape(-1),ignore_index=-100)
+                    loss=F.cross_entropy(lg.reshape(-1,cfg.vocab),Y.reshape(-1),ignore_index=-100)
             loss.backward(); opt.step(); ent=None
         else:                                                        # long document with memory carried across chunks
             Xd=torch.tensor(dm.batch(B),device=DEV); st=zero_state(m,B); opt.zero_grad(); last=None
@@ -99,7 +99,8 @@ def main():
                 xi=Xd[:,i*CH:(i+1)*CH]; yi=Xd[:,i*CH+1:(i+1)*CH+1]
                 with torch.autocast("cuda",dtype=torch.bfloat16):        # 2.82x faster, verified same quality
                     lg,st=fwd(xi,states=st,return_states=True)
-                    l=F.cross_entropy(lg.reshape(-1,cfg.vocab).float(),yi.reshape(-1))/NCH
+                    # no .float(): cross_entropy upcasts internally anyway, and the copy costs 1 GiB at this shape
+                    l=F.cross_entropy(lg.reshape(-1,cfg.vocab),yi.reshape(-1))/NCH
                 st=m.decay_states(st,DECAY); l.backward(); last=lg.detach().float()
             opt.step(); loss=F.cross_entropy(last.reshape(-1,cfg.vocab),Xd[:,(NCH-1)*CH+1:NCH*CH+1].reshape(-1))
             ent=G.SaturationSensor.entropy(last)
@@ -113,13 +114,17 @@ def main():
             kind,amt=PLAN[k]; P_before=P()
             (G.grow_width if kind=='w' else G.grow_depth)(m,amt)
             earned_tpp=tokens_at_size/max(1,P_before)            # capture BEFORE resetting (my first edit printed 0)
-            opt=torch.optim.Adam(m.parameters(),lr=LR); k+=1; tokens_at_size=0; steps_at_size=0
+            opt=torch.optim.Adam(m.parameters(),lr=LR); k+=1; tokens_at_size=0; steps_at_size=0; last_grow_step=it
             fwd=torch.compile(m) if USE_COMPILE else m           # shapes changed -> recompile once per grow
             bar.write(f"    >>> SELF-GREW #{k} at step {it}: D={m.cfg.D}x{m.cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} -> {P()/1e6:.0f}M (earned {earned_tpp:.0f} tok/param at the old size, free {free:.0f}G)")
         if (it+1)%100==0:
             tps=B*DOC*(it-step+1)/(time.time()-t0)
             bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L {P()/1e6:.0f}M {tokens_at_size/P():.0f}tok/param lr={cur_lr:.1e} {tps/1e3:.0f}ktok/s free={free:.0f}G")
         if (it+1)%500==0:
-            torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':it+1,'k':k},CKPT)
+            ck={'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':it+1,'k':k}
+            torch.save(ck,CKPT)
+            # keep the LAST save before each grow and the TWO after it, so growth can be probed after the fact
+            if last_grow_step and (it+1)-last_grow_step<=1000: torch.save(ck,f"{CKPT[:-3]}_probe{it+1}.pt")
+            if k<len(PLAN): torch.save(ck,f"{CKPT[:-3]}_pregrow.pt")
     torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':STEPS,'k':k},CKPT)
 if __name__=="__main__": main()
