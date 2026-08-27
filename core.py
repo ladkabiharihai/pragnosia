@@ -79,6 +79,8 @@ class Layer(nn.Module):
         dHs=dxk@Wk; dH=dH+torch.cat([dHs[:,1:],torch.zeros_like(dHs[:,:1])],1)   # un-shift
         return {'Wk':dWk,'Wq':dWq,'Wv':dWv,'Wo':dWo,'bo':dbo,'m1':dm1,'bm1':dbm1,'m2':dm2,'bm2':dbm2}, dout+rmsnorm_vjp(a,nrm,dH)
 
+class Layer_step:
+    pass
 class Core(nn.Module):
     def __init__(s,cfg):
         super().__init__(); s.cfg=cfg; s.emb=nn.Embedding(cfg.vocab,cfg.D)
@@ -93,6 +95,36 @@ class Core(nn.Module):
         return (lg,ns) if return_states else lg
     def decay_states(s,states,d):
         return None if states is None else [(M*d,z*d) for (M,z) in states]
+    @torch.no_grad()
+    def step(s,tok,states,prev=None):
+        """INCREMENTAL DECODE: O(1) per token. `states`=[(M,z)] carried memory, `prev`=[per-layer previous normed
+        activation] needed for the shifted key. Returns (logits, new_states, new_prev).
+        Re-running the whole window per token (the transformer habit) cost 12.5 ms/token at ctx 2048; this is ~O(1)."""
+        cfg=s.cfg; a=s.emb(tok)                                    # tok: [B,1]
+        ns=[]; npv=[]
+        for i,L in enumerate(s.layers):
+            M,z=states[i]
+            H,nrm=rmsnorm(a)                                       # [B,1,D]
+            src=prev[i] if prev is not None else torch.zeros_like(H[:,0])
+            kf=taylor(src@L.Wk.weight.T,cfg)                       # key from the PREVIOUS token (the shift)
+            v=(H[:,0])@L.Wv.weight.T
+            M=M+kf.unsqueeze(2)*v.unsqueeze(1); z=z+kf              # write into the state
+            qf=taylor((H[:,0])@L.Wq.weight.T,cfg)
+            num=torch.einsum('bf,bfd->bd',qf,M); den=(qf*z).sum(-1,keepdim=True)+1e-5
+            o=(num/den)@L.Wo.weight.T+L.Wo.bias
+            a1=a+L.rs*o.unsqueeze(1)
+            H2,_=rmsnorm(a1)
+            a=a1+L.rs*(F.gelu(H2@L.m1.weight.T+L.m1.bias)@L.m2.weight.T+L.m2.bias)
+            ns.append((M,z)); npv.append(H[:,0])
+        h,_=rmsnorm(a); return s.head(h)[:,0], ns, npv
+    @torch.no_grad()
+    def prefill(s,X,states=None):
+        """process a prompt/context in one parallel pass, returning the state and prev needed by step()."""
+        a=s.emb(X); ns=[]; npv=[]
+        for i,L in enumerate(s.layers):
+            st=None if states is None else states[i]
+            a,c=L(a,st); ns.append(c[-1]); npv.append(c[0][:,-1])   # c[0]=H (normed input), last position
+        return ns,npv
     def param_dict(s):
         p={'emb':s.emb.weight,'hW':s.head.weight,'hb':s.head.bias}
         for li,L in enumerate(s.layers):

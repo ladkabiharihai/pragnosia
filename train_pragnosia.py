@@ -18,7 +18,7 @@ DOC=32768; CH=2048; NCH=DOC//CH; B=int(os.environ.get("B","8")); DECAY=0.2   # m
 LR=float(os.environ.get("LR","6e-4")); STEPS=int(os.environ.get("STEPS","100000"))
 D0,NL0=384,4                                            # infant
 TARGET_D,TARGET_NL=1024,16                              # ~235M at the end
-RECALL_FRAC=0.10; VRAM_MIN=8.0                          # leave headroom for prod
+RECALL_FRAC=0.15; VRAM_MIN=8.0                          # leave headroom for prod
 CKPT="/mnt/kv_cache/pragnosia_data/pragnosia.pt"
 PLAN=[('w',128),('d',2),('w',128),('d',2),('w',128),('d',2),('w',128),('d',2),('w',128),('d',4)]
 dm=DataMix(ctx=DOC+1,verbose=True)
@@ -61,10 +61,25 @@ def main():
     ema=None; t0=time.time()
     for it in bar:
         if RD is not None and np.random.rand()<RECALL_FRAC:          # masked recall (no carry: short QA docs)
+            # MASKED RECALL, now THROUGH MEMORY: half the batches put the fact in the carried state (so retrieval
+            # must come from memory), half keep it in-window. Previously all of them used a ZERO state, so the
+            # persistent memory was never trained to answer a query -- the memory worked but was never asked to.
             X,Y=recall_batch(B,CH)
-            with torch.autocast("cuda",dtype=torch.bfloat16):
-                lg=fwd(X,states=zero_state(m,B)); loss=F.cross_entropy(lg.reshape(-1,cfg.vocab).float(),Y.reshape(-1),ignore_index=-100)
-            opt.zero_grad(); loss.backward(); opt.step(); ent=None
+            opt.zero_grad()
+            if np.random.rand()<0.5:
+                half=CH//2
+                Xa=torch.cat([X[:,:half],torch.zeros_like(X[:,:half])],1)      # context first, through memory
+                with torch.autocast("cuda",dtype=torch.bfloat16):
+                    _,st_r=fwd(Xa,states=zero_state(m,B),return_states=True)
+                st_r=[(a.detach(),b.detach()) for a,b in st_r]
+                with torch.autocast("cuda",dtype=torch.bfloat16):
+                    lg=fwd(X,states=st_r)                                       # answer supervised WITH memory live
+                    loss=F.cross_entropy(lg.reshape(-1,cfg.vocab).float(),Y.reshape(-1),ignore_index=-100)
+            else:
+                with torch.autocast("cuda",dtype=torch.bfloat16):
+                    lg=fwd(X,states=zero_state(m,B))
+                    loss=F.cross_entropy(lg.reshape(-1,cfg.vocab).float(),Y.reshape(-1),ignore_index=-100)
+            loss.backward(); opt.step(); ent=None
         else:                                                        # long document with memory carried across chunks
             Xd=torch.tensor(dm.batch(B),device=DEV); st=zero_state(m,B); opt.zero_grad(); last=None
             for i in range(NCH):

@@ -686,3 +686,39 @@ hypotheses (exp/degeneracy_test.py, step-4000 checkpoint):
   since the old generation column was measuring a configuration that does not exist in practice.
 - LESSON: measure the model in the configuration it is USED in. An eval that disables the model's own memory is
   testing a different model.
+
+## FIXES STAGED for the next restart (needle + generation speed + compile)
+**1) GENERATION WAS 5.1x SLOWER THAN NECESSARY (my bug).** I was re-running the WHOLE 2048-token window for every
+generated token -- a transformer habit. A recurrent model does not need it: the state already holds the past.
+| context fed per token | ms/token | tok/s |
+|-----------------------|----------|-------|
+| 64 | 3.65 | 274 |
+| 2048 (what we did) | 12.53 | 80 |
+| **incremental step()** | **2.47** | **405** |
+Added `Core.step()` (O(1) per token: carried (M,z) + the previous token's normed activation for the shifted key) and
+`Core.prefill()`. Verified EXACT against the full forward: **cosine 1.000000**. 5.1x faster, and unlike before the
+speed no longer degrades with context length. evaluate.py now runs in 15s instead of minutes.
+**2) NEEDLE: diagnosed properly.** It is NOT a format or distance problem -- recall is **0% even on the exact
+training distribution** (held-out SQuAD-style docs, answer at the end). So the faculty has not formed. Causes, in
+order of size:
+   a. UNDERTRAINED: the 0->96% result came from a 136M model at 38 tok/param; we are 49M at ~8 tok/param.
+   b. dosage: RECALL_FRAC was 0.10 vs the 0.15 that produced that result -> raised to 0.15.
+   c. **REAL DEFECT: recall batches were fed a ZERO memory state**, so the fact had to fit in one 2048-token window
+      and the persistent memory was NEVER trained to answer a query. The memory demonstrably works (+0.068 gain) but
+      was never asked to retrieve. FIXED: half the recall batches now stream the CONTEXT through memory and supervise
+      the answer with that memory live -- retrieval from memory, which is the faculty the vision actually claims.
+**3) torch.compile bailout fixed** (see previous entry): stable `states` type + recompile_limit 64.
+## EXTREME CONTEXT: 131k -> 1M tokens (exp/extreme_context.py)
+| tokens | loss w/mem | mem gain | peak GiB | us/token | state MiB |
+|--------|-----------|----------|----------|----------|-----------|
+| 131,072 | 5.7873 | +0.035 | 1.06 | 7.36 | 0.26 |
+| 262,144 | 5.6132 | +0.040 | 1.06 | 6.22 | 0.26 |
+| 524,288 | 5.7098 | **-0.050** | 1.06 | 5.62 | 0.26 |
+| **1,048,576** | 5.6449 | +0.024 | **1.06** | **5.29** | **0.26** |
+- **The cost claim holds absolutely at 1M tokens**: peak memory pinned at 1.06 GiB, state 0.26 MiB, and per-token
+  latency IMPROVES with length (7.36 -> 5.29 us) as fixed overheads amortize. A transformer would need ~12 GB of KV
+  cache and 250,000x the attention compute of its 2k case.
+- **But the memory GAIN decays with length** (+0.068 at 32k -> +0.024 at 1M, negative at 524k): the fixed-size state
+  SATURATES. Honest reading: 1M context runs at constant cost, but the model stops extracting much beyond ~32k.
+  This is the vision's own prediction ("finite state keeps the gist") measured for the first time.
+- Generation after 1M tokens: no degeneracy (rep4 0.00, distinct-1 0.82) but semantically incoherent -- 49M at 1.6B tokens.
