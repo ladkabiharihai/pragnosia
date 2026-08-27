@@ -859,3 +859,26 @@ prose where every token is "filler", and (iii) copy it. Step (i)-(ii) are langua
 at ~2.7B tokens does not have yet. The retrieval MACHINERY is ready and waiting for the language ability to arrive.
 LESSON (again): when a probe says something structural is broken, test the probe before believing it. I reported an
 architecture failure that was an artifact of my own test design.
+
+## DEEP CHECK on the "greedy loops" alarm: NOT a defect -- normal for this training level (6 angles)
+Greedy decoding produced pure loops (' is is is is...'), which looked alarming. Checked from six independent angles:
+| # | angle | result | flag? |
+|---|-------|--------|-------|
+| 1 | teacher-forced on real text | loss 4.731 (ppl 113), **21.8% exact next-token** | no -- it DOES model text |
+| 2 | output distribution | entropy 4.90 nats (uniform 10.40), **mean top-1 prob 0.218** | explains it: argmax is near-arbitrary |
+| 3 | repeat bias | argmax = current token only **2.9%** | no pathological copy bias |
+| 4 | corpus language | **100% Latin script** | no -- my "window2 is multilingual" worry was wrong |
+| 5 | progress (fixed eval) | 5.2745 -> 5.1156 -> **5.0420**, monotonic | no -- still improving |
+| 6 | **transformer control** | a 55M transformer at ppl 200 loops IDENTICALLY | **decisive: normal behaviour** |
+The transformer control settles it: ' the 10000000000...' and ', the following the following...' -- the same failure
+mode, with MORE parameters and WORSE loss than ours. Greedy looping is what any small undertrained model does when
+its top-1 probability is only ~0.22; the argmax is nearly a coin flip between high-frequency tokens.
+CORRECTIONS to what I reported earlier:
+- I said "window2 is multilingual, diluting the model" after seeing an Urdu document. Measured: **100% Latin script**
+  across 60 samples. That document was an unrepresentative draw, and I generalised from n=1.
+- I said the greedy collapse meant "the model cannot form a coherent sentence" and implied something was wrong. The
+  control shows it is the expected state at ~3B tokens, not evidence of a defect.
+- STILL VALID from that exchange: my eval only sampled at temp 1.0 with memory primed, and reported
+  4gram-rep 0.00 / distinct-1 0.86 as "healthy" when greedy was looping. High diversity can just mean word salad --
+  the eval should report BOTH decoding modes. That is a real gap in the metric, if not in the model.
+VERDICT: no flags. Training continues overnight.
