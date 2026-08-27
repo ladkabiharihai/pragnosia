@@ -78,7 +78,7 @@ MECHANISMS (validated, used for lifelong learning and available for pretraining)
 - Three-factor / neuromodulated plasticity for consolidation; Hebbian fast weights for `M`.
 - Adaptive SCALE-FREE step (trust ratio): one value optimal at every scale -> no per-scale tuning, growth-safe (0a).
 
-### 0e. THE LEARNING RULE (measured; beats backprop at depth, pure local, no backprop anywhere)
+### 0e. THE LOCAL LEARNING RULE (how local plasticity handles DEPTH; wins at small scale, trails at scale -- see 0c)
 Depth is solved not by better cross-layer credit but by REMOVING the need for it. Three local parts:
 1. **Per-layer local objective**: every layer predicts the next token through the final norm + shared head (deep
    supervision). Strong well-scaled signal per layer. ALONE it plateaus (greedy saturation).

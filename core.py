@@ -31,18 +31,27 @@ class Layer(nn.Module):
         super().__init__(); s.cfg=cfg; s.rs=getattr(cfg,'res_scale',1.0)
         s.Wk=nn.Linear(cfg.D,cfg.DIN,bias=False); s.Wq=nn.Linear(cfg.D,cfg.DIN,bias=False)
         s.Wv=nn.Linear(cfg.D,cfg.DV,bias=False); s.Wo=nn.Linear(cfg.DV,cfg.D)
-    def forward(s,a):
+    def forward(s,a,state=None):
+        """`state`=(M,zM): the PERSISTENT fast-weight memory carried from previous chunks. Reading it costs nothing
+        extra and is what gives UNBOUNDED context at CONSTANT memory; carrying it during training is what teaches the
+        model to use its own memory. The returned new state is detached (no cross-chunk backprop)."""
         cfg=s.cfg; B,T,_=a.shape; H,nrm=rmsnorm(a); Hs=_shift(H)
         xk=Hs@s.Wk.weight.T; kf=taylor(xk,cfg)                 # writes (shifted keys)
         xq=H@s.Wq.weight.T;  qf=taylor(xq,cfg)                 # reads
         v=H@s.Wv.weight.T
         A=torch.einsum('btf,bsf->bts',qf,kf)                   # retrieval weights beta_{t,s} = qf_t . kf_s
         A=A.tril()                                             # causal: read at t sees writes s<=t
-        den=A.sum(-1,keepdim=True)+1e-5; num=torch.einsum('bts,bsd->btd',A,v)
+        den=A.sum(-1,keepdim=True); num=torch.einsum('bts,bsd->btd',A,v)
+        if state is not None:                                  # + read the persistent store
+            M,zM=state
+            num=num+torch.einsum('btf,bfd->btd',qf,M); den=den+torch.einsum('btf,bf->bt',qf,zM).unsqueeze(-1)
+        den=den+1e-5
         r=num/den; o=r@s.Wo.weight.T+s.Wo.bias
-        return a+s.rs*o, (H,nrm,Hs,xk,kf,xq,qf,v,A,num,den,r)
+        newM=torch.einsum('btf,btd->bfd',kf,v).detach(); newz=kf.sum(1).detach()
+        if state is not None: newM=state[0]+newM; newz=state[1]+newz
+        return a+s.rs*o, (H,nrm,Hs,xk,kf,xq,qf,v,A,num,den,r,(newM,newz))
     def local_vjp(s,a,cache,dout):
-        cfg=s.cfg; H,nrm,Hs,xk,kf,xq,qf,v,A,num,den,r=cache
+        cfg=s.cfg; H,nrm,Hs,xk,kf,xq,qf,v,A,num,den,r,_st=cache
         Wk,Wq,Wv,Wo=(s.Wk.weight,s.Wq.weight,s.Wv.weight,s.Wo.weight)
         dO=dout*s.rs
         dWo=torch.einsum('btd,bte->de',dO,r); dbo=dO.sum((0,1)); dr=dO@Wo
@@ -61,10 +70,15 @@ class Core(nn.Module):
         super().__init__(); s.cfg=cfg; s.emb=nn.Embedding(cfg.vocab,cfg.D)
         s.layers=nn.ModuleList([Layer(cfg) for _ in range(cfg.NL)]); s.head=nn.Linear(cfg.D,cfg.vocab)
         nn.init.normal_(s.emb.weight,0,0.02)
-    def forward(s,X):
-        a=s.emb(X)
-        for L in s.layers: a,_=L(a)
-        h,_=rmsnorm(a); return s.head(h)
+    def forward(s,X,states=None,return_states=False):
+        """states: list of per-layer (M,zM) carried from the previous chunk (persistent memory / long context)."""
+        a=s.emb(X); ns=[]
+        for i,L in enumerate(s.layers):
+            a,c=L(a,None if states is None else states[i]); ns.append(c[-1])
+        h,_=rmsnorm(a); lg=s.head(h)
+        return (lg,ns) if return_states else lg
+    def decay_states(s,states,d):
+        return None if states is None else [(M*d,z*d) for (M,z) in states]
     def param_dict(s):
         p={'emb':s.emb.weight,'hW':s.head.weight,'hb':s.head.bias}
         for li,L in enumerate(s.layers):

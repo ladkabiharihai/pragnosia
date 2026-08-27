@@ -392,3 +392,26 @@ the one-time substrate may be pretrained by whatever is most efficient. Everythi
 identity) is preserved -- none of it depends on how the substrate was first formed. Pure-local pretraining remains
 an active track with a falsifiable promotion criterion. Also more biologically accurate: neuroplasticity is LIFELONG
 learning; the initial cortex is shaped by development, not adult plasticity.
+
+## Build step 6: PERSISTENT MEMORY + UNBOUNDED CONTEXT (the vision's differentiating capability)
+**(a) Hippocampus bolted on = does NOTHING (honest negative).** Wrote facts into a persistent fast-weight store `M`
+via a gated Hebbian write (no backprop) on a model trained WITHOUT memory: retention delta = -0.045 / -0.108
+(slightly negative), interference -0.003, pollution +0.008. Diagnosis: **a model that never learned to use a memory
+cannot read one** -- its query projections were never trained to retrieve from `M`, so writes are just noise.
+**(b) FIX = train with the memory in the loop** (core.py: `forward(states=...)`, per-layer (M,zM) carried ACROSS
+chunks, detached between chunks -> no cross-chunk backprop, so memory stays CONSTANT however long the document is).
+State shape is (B,FE,DV) per layer -- **independent of context length**: the constant-memory claim is now structural.
+Regression-checked: local_vjp still EXACT (cosine 1.000000) after the change.
+**(c) DECISIVE TEST (longctx.py, 4 chunks x T=128 = 512-token documents, 3000 steps):** per-chunk loss WITH carried
+state vs state zeroed:
+| trained | chunk1 | chunk2 | chunk3 | mean gain |
+|---------|--------|--------|--------|-----------|
+| **WITH carry** | **+0.220** | **+0.213** | **+0.225** | **+0.2196** |
+| without carry | -0.013 | -0.146 | -0.222 | -0.127 |
+- **Memory HELPS by ~0.22 nats on every chunk after the first when the model is trained with it, and HURTS when it
+  is not.** The model has learned to write retrievable traces and query them. This is the prerequisite for
+  continual learning at inference, and it validates the (a) diagnosis exactly.
+- CAVEAT (honest): the carry-trained model's ABSOLUTE loss is worse (5.59-5.83 vs 4.55-4.78 for the no-carry arm).
+  Likely cause: with decay=1.0 the state accumulates unboundedly across chunks, so by later chunks the denominator is
+  dominated by old writes and the retrieval is diluted. NEXT: add a decay/forgetting factor on the carried state
+  (biologically right anyway -- memory must forget) and re-measure both absolute loss and memory gain.
