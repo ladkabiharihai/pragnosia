@@ -15,7 +15,7 @@ import core as C, growth as G
 from data_mix import DataMix
 DEV=C.DEV
 DOC=32768; CH=2048; NCH=DOC//CH; B=int(os.environ.get("B","8")); DECAY=0.05  # measured optimum: 511 ktok/s
-LR=float(os.environ.get("LR","6e-4")); STEPS=int(os.environ.get("STEPS","100000"))
+LR=float(os.environ.get("LR","6e-4")); STEPS=int(os.environ.get("STEPS","100000000"))   # effectively indefinite: run until told to stop (user)
 D0,NL0=384,4                                            # infant
 TARGET_D,TARGET_NL=1024,16                              # ~235M at the end
 RECALL_FRAC=0.15; VRAM_MIN=8.0                          # leave headroom for prod

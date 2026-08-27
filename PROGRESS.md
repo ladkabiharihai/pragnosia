@@ -801,3 +801,36 @@ mix confounds. HONEST CORRECTION: window2's own 4-gram repetition measures 0.094
 (that was sampling variance on a small sample) -- so window2 is not dramatically cleaner than the mix; the mix's
 problem was specifically the math corpora at 0.20-0.26.
 GATES NOW ACTIVE: intrinsic saturation (smoothed, window 400) + min_gap 2500 + **22 tok/param floor** + VRAM guard.
+
+## 22 TOK/PARAM GATE: VERIFIED WORKING (re-proves acceptance claim #4, which had been retracted)
+```
+gate opened at step 2610 (22 tok/param at 31M)
+growth fired at step 3557  -> waited 947 steps PAST permission
+earned 25 tok/param (gate required 22)
+```
+BOTH conditions do real work: the token floor sets the earliest legal moment, the model's own saturation signal
+chooses the actual moment. Run 1 (no token gate) had 2 grows by step 5530; run 2 has 1 -- the gate genuinely slows
+growth so each size earns its capacity.
+BEFORE vs AFTER the grow:
+| metric | before (3500, 31M) | after (5500, 44M) |
+|--------|--------------------|-------------------|
+| held-out loss | 5.2745 (ppl 195) | **5.1156 (ppl 167)** |
+| memory gain | +0.0212 | +0.0156 |
+| recall | 0% | 0% |
+| 4gram-rep / distinct-1 | 0.00 / 0.89 | 0.00 / 0.89  (mix reference: 0.01 / 0.84) |
+Loss improved THROUGH the grow with no collapse (function-preserving held). Repetition now MATCHES real text and
+distinct-1 slightly EXCEEDS it. Memory gain dipped, as expected: growth adds inert dimensions that must be learned
+into use (in run 1 it recovered and climbed to +0.055).
+### WHY PPL ROSE JUST BEFORE THE GROW (user's question) -- the rise IS the trigger
+Measured: ppl 142 (3220) -> 142 (3367) -> **149 (3502)** -> GROW at 3557 -> 145 -> 133 -> **125 (4266)**.
+The sensor fires when the model's own entropy STOPS FALLING, so a plateau/slight rise is exactly the saturation
+signal. Cause and effect run the right way: the model detected it had stopped improving at 31M, grew, then resumed
+improving. Secondary contributor: a FIXED learning rate with no decay means a saturated stage bounces around its
+loss floor rather than settling, and that bounce is what the slope test detects.
+### TOK/PARAM COUNTER RESETS AT EACH GROW -- deliberate, and kept (user's call)
+Strict Chinchilla would carry the counter forward (a grown model already "owns" its earlier tokens). We reset, so
+each stage earns 22 fresh. CUMULATIVELY the final size therefore sees far more than 22 tok/param -- i.e. the gate
+automatically OVERTRAINS past Chinchilla, which is exactly what makes small models good (SmolLM2-135M used 14,800
+tok/param, MobileLLM 8,000, vs Chinchilla 20). Not a miscalculation to fix; a stricter gate that pushes us toward
+the regime the literature says wins. Caveat: later stages dominate the budget (235M alone needs 5.2B tokens).
+### STEP CAP REMOVED: the run now trains indefinitely until explicitly stopped.
