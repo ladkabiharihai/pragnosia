@@ -569,3 +569,33 @@ misses are conservative HOLDs on a true fact whose phrasing is absent from the c
 | 2 | verified continual learning at inference | **PASS** (retention + consolidation + anti-poisoning) |
 | 3 | efficiency vs a real transformer | **PASS** (1.4-1.6x faster, 6-8x lighter at 32k; they OOM past 400M) |
 | 4 | one genuinely INTRINSIC decision (growth fires on the model's own signal) | **NEXT** |
+
+## VISION ACCEPTANCE TEST 5 -- ONE GENUINELY INTRINSIC DECISION: **PASSES** (the growth schedule is deleted)
+VISION 0a demands the model decide WHEN to grow, not a schedule I write. Built `growth.SaturationSensor`:
+signal = the model's OWN predictive entropy (label-free -- needs no targets, it is its uncertainty about its own
+outputs); criterion is NOISE-RELATIVE rather than a magic threshold -- fit the entropy's slope over a window and
+compare it to that slope's own standard error. When entropy stops falling faster than its own noise, the model has
+extracted what it can at this capacity and ASKS to grow.
+| arm | final loss | compute | grows fired at |
+|-----|-----------|---------|----------------|
+| fixed at target (D192/6L) | 4.5554 | 76s | -- |
+| scheduled (hand-written steps) | 4.6445 | 58s | 1200, 2400, 3600, 4800 |
+| **INTRINSIC (model's own signal)** | **4.5499** | 72s | **622, 1240, 1740, 2242** |
+- **The intrinsic trigger BEATS the hand-written schedule (-0.095) and even edges the fixed model (-0.006).**
+- The model chose to grow MUCH EARLIER than I scheduled -- it detected saturation at small size faster than I
+  guessed. My schedule was simply too conservative. This is exactly why the decision should not be mine.
+- The hand-written growth schedule can now be DELETED. One real piece of scaffolding removed (0a).
+
+### ACCEPTANCE SCOREBOARD -- all four claims now pass
+| # | claim | status |
+|---|-------|--------|
+| 1 | constant-memory / constant-compute unbounded context | **PASS** (flat to 131k tokens) |
+| 2 | verified continual learning at inference | **PASS** (retention + consolidation + anti-poisoning) |
+| 3 | efficiency vs a real transformer | **PASS** (1.4-1.6x faster, 6-8x lighter at 32k; they OOM past 400M) |
+| 4 | one genuinely INTRINSIC decision | **PASS** (growth fires on the model's own saturation signal) |
+REMAINING SCAFFOLDING (0a is not finished): salience/propose gating, the verification judge (mechanical, not learned),
+consolidation timing, and the constants lambda / decay / chunk are still chosen by hand.
+### LOGGING
+`util.setup_log(name)` tees every run to `logs/<name>.log`; `util.pbar` prints a tqdm bar in a terminal but CLEAN
+periodic lines when writing to a file (a tqdm bar's carriage returns make a log unreadable -- fixed after seeing it).
+Monitor any run with: `tail -f logs/<name>.log`
