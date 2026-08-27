@@ -9,6 +9,8 @@ Substrate pretraining uses backprop per amended VISION 0c; the model's LIFE (mem
 import sys,os,time,math; sys.path.insert(0,"/opt/code/membrae")
 from util import setup_log,pbar; setup_log("train_pragnosia")
 import numpy as np, torch, torch.nn.functional as F
+import torch._dynamo as _dynamo
+_dynamo.config.recompile_limit=64          # 10 planned growth events legitimately change shapes; default 8 is too low
 import core as C, growth as G
 from data_mix import DataMix
 DEV=C.DEV
@@ -33,6 +35,11 @@ def recall_batch(bs,L):
         X[b,:n]=RD[s:s+n]; a=max(1,int(ans-s))
         for t in range(a-1,n-1): Y[b,t]=int(RD[s+t+1])
     return torch.from_numpy(X).to(DEV),torch.from_numpy(Y).to(DEV)
+def zero_state(m,bs):
+    """explicit zero memory state: keeps the `states` argument a LIST on every call so torch.compile does not
+    recompile (and eventually bail to eager) just because the type alternated None/list."""
+    cfg=m.cfg
+    return [(torch.zeros(bs,cfg.FE,cfg.DV,device=DEV),torch.zeros(bs,cfg.FE,device=DEV)) for _ in range(cfg.NL)]
 def main():
     step=0
     cfg=C.Config(D=D0,DIN=8,DV=D0,NL=NL0,T=CH,res_scale=TARGET_NL**-0.5)
@@ -56,10 +63,10 @@ def main():
         if RD is not None and np.random.rand()<RECALL_FRAC:          # masked recall (no carry: short QA docs)
             X,Y=recall_batch(B,CH)
             with torch.autocast("cuda",dtype=torch.bfloat16):
-                lg=fwd(X); loss=F.cross_entropy(lg.reshape(-1,cfg.vocab).float(),Y.reshape(-1),ignore_index=-100)
+                lg=fwd(X,states=zero_state(m,B)); loss=F.cross_entropy(lg.reshape(-1,cfg.vocab).float(),Y.reshape(-1),ignore_index=-100)
             opt.zero_grad(); loss.backward(); opt.step(); ent=None
         else:                                                        # long document with memory carried across chunks
-            Xd=torch.tensor(dm.batch(B),device=DEV); st=None; opt.zero_grad(); last=None
+            Xd=torch.tensor(dm.batch(B),device=DEV); st=zero_state(m,B); opt.zero_grad(); last=None
             for i in range(NCH):
                 xi=Xd[:,i*CH:(i+1)*CH]; yi=Xd[:,i*CH+1:(i+1)*CH+1]
                 with torch.autocast("cuda",dtype=torch.bfloat16):        # 2.82x faster, verified same quality
@@ -79,7 +86,7 @@ def main():
         if (it+1)%100==0:
             tps=B*DOC*(it-step+1)/(time.time()-t0)
             bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} {P()/1e6:.0f}M {tps/1e3:.0f}ktok/s free={free:.0f}G")
-        if (it+1)%2000==0:
+        if (it+1)%500==0:
             torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':it+1,'k':k},CKPT)
     torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':STEPS,'k':k},CKPT)
 if __name__=="__main__": main()
