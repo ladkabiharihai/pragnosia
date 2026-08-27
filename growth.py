@@ -17,7 +17,8 @@ def grow_depth(m,n=1):
     cfg=m.cfg
     for _ in range(n):
         L=C.Layer(cfg).to(DEV)
-        with torch.no_grad(): L.Wo.weight.zero_(); L.Wo.bias.zero_()
+        with torch.no_grad():                                   # BOTH residual branches must start at zero for identity
+            L.Wo.weight.zero_(); L.Wo.bias.zero_(); L.m2.weight.zero_(); L.m2.bias.zero_()
         m.layers.append(L)
     cfg.NL=len(m.layers); return cfg.NL
 
@@ -50,6 +51,13 @@ def grow_width(m,add):
             no.weight[:D]=L.Wo.weight*c; no.weight[D:]=0.0
             no.bias[:D]=L.Wo.bias*c; no.bias[D:]=0.0
             L.Wo=no
+            hid=L.m1.weight.shape[0]                                            # MLP: m1 READS the stream, m2 WRITES it
+            n1=nn.Linear(nD,hid).to(DEV)
+            n1.weight[:,:D]=L.m1.weight/c; n1.weight[:,D:]=_new_lin(add,hid,DEV); n1.bias.copy_(L.m1.bias)
+            n2=nn.Linear(hid,nD).to(DEV)
+            n2.weight[:D]=L.m2.weight*c; n2.weight[D:]=0.0
+            n2.bias[:D]=L.m2.bias*c; n2.bias[D:]=0.0
+            L.m1,L.m2=n1,n2
         nh=nn.Linear(nD,cfg.vocab).to(DEV)                                     # READS the normed stream -> /c
         nh.weight[:,:D]=m.head.weight/c; nh.weight[:,D:]=0.0; nh.bias.copy_(m.head.bias)
         m.head=nh

@@ -599,3 +599,19 @@ consolidation timing, and the constants lambda / decay / chunk are still chosen 
 `util.setup_log(name)` tees every run to `logs/<name>.log`; `util.pbar` prints a tqdm bar in a terminal but CLEAN
 periodic lines when writing to a file (a tqdm bar's carriage returns make a log unreadable -- fixed after seeing it).
 Monitor any run with: `tail -f logs/<name>.log`
+
+## ARCHITECTURE FIX: the layers had NO MLP -- worth 1.17 nats (found before committing to a long run)
+Our Layer was attention-only (~2*D^2); a transformer layer is ~12*D^2 because of its feedforward block, and MLPs
+carry most of a model's knowledge. Tested at a MATCHED total budget (~92M params, 4000 steps, same data):
+| architecture | non-embedding params | loss |
+|--------------|---------------------|------|
+| attention-only D1024 x 12L | 25.4M | 5.6087 |
+| **with MLP D640 x 12L** | **49.4M** | **4.4391** |
+**The MLP is worth 1.17 nats.** Two effects compound: the MLP itself, AND the smaller D frees embedding budget for
+real capacity (49.4M vs 25.4M non-embedding at the same total). Related observation that explains a lot of this
+session's weak generations: our D=256 test models were **95% embedding** -- layers were only 0.8M of 17.6M params,
+so there was almost no "brain" there at all. Small D with a 32K vocab is embedding-dominated; use larger D and MLPs.
+- MLP added to core.Layer with an EXACT local VJP (verified cosine 1.000000, norm-ratio 1.000000), so the pure-local
+  learning rule still applies unchanged.
+- growth.py updated: width-growth now rescales m1/m2 correctly under RMS-norm, and depth-growth zeroes BOTH residual
+  branches (Wo AND m2) or a new layer would not be the identity. All four axes re-verified function-preserving.
