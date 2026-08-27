@@ -47,7 +47,7 @@ def main():
     # so the gain comes from doing LESS work). `m` stays the raw module for growth/params; `fwd` is the compiled call.
     USE_COMPILE=os.environ.get("COMPILE","1")=="1"
     fwd=torch.compile(m) if USE_COMPILE else m
-    sensor=G.SaturationSensor(window=150,t_stat=1.0,min_gap=800)
+    sensor=G.SaturationSensor(window=400,t_stat=1.0,min_gap=2500)   # fixed: smoothed signal, real spacing (was firing on noise at min_gap)
     P=lambda: sum(p.numel() for p in m.parameters())
     print(f"PRAGNOSIA: infant D{cfg.D}x{cfg.NL} ({P()/1e6:.0f}M) -> target D{TARGET_D}x{TARGET_NL}; docs {DOC} chunk {CH} B{B}",flush=True)
     bar=pbar(range(step,STEPS),"pragnosia",total=STEPS-step)

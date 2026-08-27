@@ -109,8 +109,12 @@ class SaturationSensor:
     about its own outputs). Criterion is NOISE-RELATIVE, not a magic threshold: fit the slope of that entropy over a
     window and compare it to the slope's own standard error. If the entropy is no longer falling faster than its own
     noise, the model has extracted what it can at this capacity -- it is saturated, and it asks to grow."""
-    def __init__(s,window=200,t_stat=1.0,min_gap=400,floor_tokens=0):
+    def __init__(s,window=400,t_stat=1.0,min_gap=2000,floor_tokens=0,ema=0.02):
+        # window/ema matter: with a short window on the RAW signal the test shows the sensor fires on NOISE
+        # (an improving-but-noisy trace looks saturated), which turns "intrinsic growth" into a hidden schedule.
+        # Smoothing the signal and lengthening the window makes it discriminate correctly.
         s.w=window; s.t=t_stat; s.min_gap=min_gap; s.hist=[]; s.last=0; s.floor=floor_tokens
+        s.ema_a=ema; s.ema=None
     @staticmethod
     @torch.no_grad()
     def entropy(logits,sample=4096):
@@ -120,7 +124,8 @@ class SaturationSensor:
         p=f[idx].float().softmax(-1)
         return float(-(p*(p+1e-9).log()).sum(-1).mean())
     def observe(s,ent,step,tokens_seen=0):
-        s.hist.append(ent)
+        s.ema=ent if s.ema is None else (1-s.ema_a)*s.ema+s.ema_a*ent      # smooth first: raw entropy is too noisy
+        s.hist.append(s.ema)
         if len(s.hist)>s.w: s.hist.pop(0)
         if len(s.hist)<s.w or step-s.last<s.min_gap or tokens_seen<s.floor: return False
         y=np.asarray(s.hist,dtype=np.float64); x=np.arange(len(y),dtype=np.float64)

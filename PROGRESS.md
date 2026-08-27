@@ -592,7 +592,7 @@ extracted what it can at this capacity and ASKS to grow.
 | 1 | constant-memory / constant-compute unbounded context | **PASS** (flat to 131k tokens) |
 | 2 | verified continual learning at inference | **PASS** (retention + consolidation + anti-poisoning) |
 | 3 | efficiency vs a real transformer | **PASS** (1.4-1.6x faster, 6-8x lighter at 32k; they OOM past 400M) |
-| 4 | one genuinely INTRINSIC decision | **PASS** (growth fires on the model's own saturation signal) |
+| 4 | one genuinely INTRINSIC decision | **RETRACTED** (sensor fired on noise at min_gap; re-test pending with the fixed sensor) |
 REMAINING SCAFFOLDING (0a is not finished): salience/propose gating, the verification judge (mechanical, not learned),
 consolidation timing, and the constants lambda / decay / chunk are still chosen by hand.
 ### LOGGING
@@ -648,3 +648,22 @@ just never arrives. Fixed: D, DV and the MLP hidden dim now scale together, all 
 function-preserving. Checkpoints now record DV so a grown model can always be reconstructed.
 LESSON: whenever a dimension is derived from D at construction time, growth must scale it too. Verify by RELOADING a
 grown checkpoint, not just by checking dOut -- the load is what caught this.
+
+## SENSOR BUG: the "intrinsic" growth trigger was firing on NOISE -- i.e. it was a hidden schedule
+Growth timings in the live run were 818, 1618, 2453, 3258, 4058 -- gaps of 800/835/805/800 against min_gap=800. It
+fired the instant it was allowed, every time. Diagnostic (exp/sensor_test.py) with three synthetic entropy traces:
+| trace | current sensor (window=150, raw) | fixed (window=400, EMA 0.02) |
+|-------|----------------------------------|------------------------------|
+| A still improving -> must NOT fire | no fire (correct) | no fire (correct) |
+| B plateaued -> MUST fire | fires (correct) | fires (correct) |
+| **C improving but NOISY -> must NOT fire** | **FIRES (wrong)** | **no fire (correct)** |
+Real entropy is case C, so the trigger was effectively "grow every min_gap steps": a SCHEDULE wearing an intrinsic
+costume. Consequence in the run: 5 grows in 4000 steps, no time to consolidate, and generation DEGRADED
+(4-gram repetition 0.34 -> 0.54, distinct-1 0.40 -> 0.24 between step 2000 and 4000) even as loss crept down.
+**THIS INVALIDATES THE ACCEPTANCE-5 CONCLUSION.** That test's growth gaps were 618/500/502 against min_gap=500 -- the
+same artifact. The intrinsic arm "beat the schedule" only because it grew SOONER, not because it detected saturation.
+Acceptance 5 must be re-run with the fixed sensor before the claim stands.
+FIX: smooth the entropy internally (EMA 0.02) before the slope test, default window 400, min_gap 2000. Re-verified:
+fires only on the true plateau, ignores the noisy-but-improving trace.
+LESSON: when a "learned/intrinsic" trigger fires at exactly its rate limit, it is not deciding anything. Test any
+such sensor against synthetic traces where you KNOW the right answer.
