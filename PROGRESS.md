@@ -479,3 +479,34 @@ live in the weights:
 - HONEST: this is episode memorization (the fact text is replayed), which is what fact-learning IS; the guard is the
   general-ability check plus rollback. What is still MISSING is VERIFICATION -- nothing yet stops a FALSE fact from
   being consolidated the same way. That is the anti-poisoning half of flag 2 and the next build.
+
+## VISION ACCEPTANCE TEST 3 -- EFFICIENCY vs a REAL transformer baseline (never measured before)
+Baseline: same D=256 / 6 layers / 32K vocab, pre-norm MHA using torch's FUSED scaled_dot_product_attention (flash
+kernels) -- a strong baseline, not a naive one. Ours trains documents in 128-token CHUNKS with carried state; the
+transformer must attend over the whole document. Batch 8. (Both arms measured under identical load.)
+| doc len | OURS peak MiB | TF peak MiB | memory ratio | OURS ktok/s | TF ktok/s | speed |
+|---------|---------------|-------------|--------------|-------------|-----------|-------|
+| 128 | 914 | 1088 | 1.19x | 88.4 | 92.0 | 0.96x |
+| 512 | 1187 | 2534 | 2.13x | 76.1 | 134.4 | 0.57x |
+| 2048 | 1187 | 8321 | 7.01x | 83.4 | 118.6 | 0.70x |
+| **8192** | **1188** | **31472** | **26.5x** | 82.5 | 62.3 | **1.32x** |
+**Q1 TRAINING MEMORY: ~0.9-1.2 GiB for a 17.6M model at batch 8, and FLAT in document length** (1187.3 MiB at 512
+tokens -> 1187.8 MiB at 8192). The transformer's grows 12x over the same range and would OOM where we stay flat.
+**Q3 TRAINING EFFICIENCY vs existing-LLM style: it depends on context length, and the crossover is ~4-8k tokens.**
+- Below ~2k tokens the transformer is FASTER (we run at 0.57-0.70x) -- flash attention is extremely well optimized
+  and our Taylor feature map carries real overhead. We are NOT faster at short context; that is the honest picture.
+- At 8192 tokens we are **26.5x lighter AND 1.32x faster**, and the gap widens with length (their cost is quadratic,
+  ours is constant per token).
+- ACTIONABLE: our efficiency advantage is specifically LONG-DOCUMENT training. Training on 128-token chunks (what we
+  have been doing) is our WORST case. Train on long documents to actually collect the win.
+**Q2 GROWTH SCALING (doc len 2048): graceful, sublinear in memory**
+| config | params | peak MiB | s/step |
+|--------|--------|----------|--------|
+| D128 x 4L | 8.6M | 1323 | 0.135 |
+| D256 x 6L | 17.6M | 1456 | 0.197 |
+| D384 x 8L | 27.6M | 1618 | 0.260 |
+| D512 x 12L | 40.0M | 1840 | 0.388 |
+- 4.6x more parameters costs only **1.39x memory** and 2.9x time. Memory is dominated by the fixed 32K-vocab
+  embedding/head + optimizer state, not by the sequence, so growth scales gently. Growth is affordable.
+- CAVEAT: the transformer baseline has MORE params (23.6M vs 17.6M) because MHA uses four DxD projections while our
+  key/query projections are small (DIN=8); this slightly favours us on memory. Small scale (17.6M) throughout.
