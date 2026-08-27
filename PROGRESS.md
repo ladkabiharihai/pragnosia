@@ -882,3 +882,18 @@ CORRECTIONS to what I reported earlier:
   4gram-rep 0.00 / distinct-1 0.86 as "healthy" when greedy was looping. High diversity can just mean word salad --
   the eval should report BOTH decoding modes. That is a real gap in the metric, if not in the model.
 VERDICT: no flags. Training continues overnight.
+
+## PUBLIC EXPLAINER (explainer.html)
+An animated plain-language page explaining the whole project for a non-technical reader, published as an artifact:
+https://claude.ai/code/artifact/b0543373-6828-4d10-be77-e153dd414e63
+Six live animations (canvas + CSS), each one explaining a real mechanism rather than decorating:
+1. HERO: a seed of neurons that pulses and slowly expands = the growing brain.
+2. TOKENS: a sentence is chopped into pieces and the next one is guessed, right/wrong marked = the training objective.
+3. FLOW: particles stream through six layer-rooms into a memory box = data flow through the model.
+4. MEMORY: notes appear in a Scratchpad and FADE, while one checked fact is copied to a permanent Diary = fast
+   fast-weight memory + verified consolidation.
+5. GROWTH: the confusion curve drops, goes FLAT (highlighted "brain is full"), then drops again after growing =
+   the intrinsic saturation trigger.
+6. ROAD: today -> 235M (1 day) -> 1T words (2 months) -> a self.
+Every number on the page is a real measurement, and the honest scorecard includes both failures (cannot answer
+questions yet; cannot write a sentence yet) with the reason for each.

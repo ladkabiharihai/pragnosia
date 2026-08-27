@@ -1,0 +1,687 @@
+<title>Pragnosia</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=Nunito+Sans:wght@400;600;800&family=IBM+Plex+Mono:wght@400;600&display=swap">
+
+<style>
+:root{
+  --ink:#0C1226; --deep:#080D1C; --surface:#151C33; --surface2:#1D2643;
+  --line:#2A3455; --text:#EAEEF8; --muted:#93A0C2;
+  --glow:#FFB454; --glow-dim:#B87A2E; --flow:#54D6CB; --flow-dim:#2E8B84;
+  --seed:#FF7B9C; --ok:#7BD88F;
+  --ground:#0C1226; --card:#151C33;
+}
+:root:not([data-theme="dark"]){
+  --ink:#0C1226; --deep:#EEF1F8; --surface:#FFFFFF; --surface2:#F5F7FC;
+  --line:#D8DFF0; --text:#141B33; --muted:#5A6688;
+  --glow:#C97A16; --glow-dim:#E3A860; --flow:#1D8B84; --flow-dim:#6DC3BC;
+  --seed:#D6416C; --ok:#2F8F4E;
+  --ground:#F7F9FD; --card:#FFFFFF;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ink:#0C1226; --deep:#080D1C; --surface:#151C33; --surface2:#1D2643;
+    --line:#2A3455; --text:#EAEEF8; --muted:#93A0C2;
+    --glow:#FFB454; --glow-dim:#B87A2E; --flow:#54D6CB; --flow-dim:#2E8B84;
+    --seed:#FF7B9C; --ok:#7BD88F;
+    --ground:#0C1226; --card:#151C33;
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#0C1226; --deep:#080D1C; --surface:#151C33; --surface2:#1D2643;
+  --line:#2A3455; --text:#EAEEF8; --muted:#93A0C2;
+  --glow:#FFB454; --glow-dim:#B87A2E; --flow:#54D6CB; --flow-dim:#2E8B84;
+  --seed:#FF7B9C; --ok:#7BD88F;
+  --ground:#0C1226; --card:#151C33;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--text);
+  font-family:"Nunito Sans",system-ui,-apple-system,sans-serif;
+  font-size:17px; line-height:1.65; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:960px;margin:0 auto;padding:0 24px}
+h1,h2,h3{font-family:Fraunces,Georgia,serif;text-wrap:balance;margin:0}
+h1{font-size:clamp(44px,8vw,86px);font-weight:800;line-height:1.02;letter-spacing:-.02em}
+h2{font-size:clamp(28px,4.4vw,42px);font-weight:700;line-height:1.12;letter-spacing:-.01em}
+h3{font-size:20px;font-weight:600}
+p{margin:0 0 1em}
+.lead{font-size:clamp(18px,2.4vw,22px);line-height:1.6;color:var(--muted);max-width:62ch}
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--glow);margin-bottom:14px;display:block
+}
+.mono{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+section{padding:76px 0;border-top:1px solid var(--line)}
+section:first-of-type{border-top:none}
+.narrow{max-width:64ch}
+
+/* ---------- HERO ---------- */
+.hero{position:relative;min-height:92vh;display:flex;align-items:center;
+  padding:60px 0;border:none;overflow:hidden}
+#seedCanvas{position:absolute;inset:0;width:100%;height:100%;z-index:0}
+.hero .wrap{position:relative;z-index:1}
+.hero h1{margin-bottom:18px}
+.hero h1 .accent{
+  background:linear-gradient(96deg,var(--glow),var(--seed));
+  -webkit-background-clip:text;background-clip:text;color:transparent
+}
+.scroll-hint{
+  margin-top:44px;font-family:"IBM Plex Mono",monospace;font-size:12px;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+  display:flex;align-items:center;gap:10px
+}
+.scroll-hint span.arrow{display:inline-block;animation:bob 1.9s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(6px)}}
+
+/* ---------- CARDS ---------- */
+.card{
+  background:var(--card);border:1px solid var(--line);border-radius:18px;
+  padding:26px 28px
+}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px}
+
+/* ---------- STAGE (animation frames) ---------- */
+.stage{
+  background:linear-gradient(170deg,var(--surface),var(--surface2));
+  border:1px solid var(--line);border-radius:20px;
+  padding:22px;margin:26px 0;overflow:hidden;position:relative
+}
+.stage-label{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:14px
+}
+canvas{display:block;width:100%;border-radius:12px}
+
+/* ---------- TOKEN STRIP ---------- */
+.tokenrow{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px}
+.tok{
+  font-family:"IBM Plex Mono",monospace;font-size:13px;padding:5px 9px;
+  border-radius:7px;background:var(--surface2);border:1px solid var(--line);
+  opacity:0;transform:translateY(8px);transition:all .35s cubic-bezier(.2,.8,.3,1)
+}
+.tok.on{opacity:1;transform:none}
+.tok.hi{background:var(--glow);color:#20160A;border-color:var(--glow);font-weight:600}
+
+/* ---------- MEMORY DEMO ---------- */
+.memgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:620px){.memgrid{grid-template-columns:1fr}}
+.memcol{background:var(--surface2);border:1px solid var(--line);border-radius:14px;padding:16px;min-height:190px}
+.memcol h4{margin:0 0 4px;font-family:Fraunces,serif;font-size:17px;font-weight:600}
+.memcol .sub{font-size:13px;color:var(--muted);margin-bottom:12px}
+.note{
+  font-family:"IBM Plex Mono",monospace;font-size:12px;padding:7px 10px;border-radius:8px;
+  margin-bottom:7px;background:var(--surface);border:1px solid var(--line);
+  transition:opacity .8s linear,transform .5s ease
+}
+.note.fading{opacity:.18}
+.note.saved{border-color:var(--ok);color:var(--ok)}
+
+/* ---------- GROWTH LADDER ---------- */
+.ladder{display:flex;flex-direction:column;gap:10px;margin-top:6px}
+.rung{
+  display:grid;grid-template-columns:96px 1fr 78px;gap:14px;align-items:center;
+  padding:11px 14px;border-radius:12px;background:var(--surface2);
+  border:1px solid var(--line);opacity:.42;transition:all .5s ease
+}
+.rung.done{opacity:1;border-color:var(--glow-dim)}
+.rung.now{opacity:1;border-color:var(--glow);box-shadow:0 0 0 1px var(--glow),0 6px 24px -8px var(--glow)}
+.rung .size{font-family:"IBM Plex Mono",monospace;font-size:14px;font-weight:600}
+.bar{height:9px;border-radius:6px;background:var(--line);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:6px;
+  background:linear-gradient(90deg,var(--flow),var(--glow));width:0;transition:width 1.2s cubic-bezier(.2,.8,.3,1)}
+.rung .tag{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);text-align:right}
+
+/* ---------- STATS ---------- */
+.stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px}
+.stat .n{font-family:"IBM Plex Mono",monospace;font-size:30px;font-weight:600;color:var(--glow);
+  font-variant-numeric:tabular-nums;line-height:1.1}
+.stat .l{font-size:13px;color:var(--muted);margin-top:5px}
+
+/* ---------- SCORECARD ---------- */
+.score{display:flex;gap:12px;align-items:flex-start;padding:15px 0;border-bottom:1px solid var(--line)}
+.score:last-child{border-bottom:none}
+.pip{width:11px;height:11px;border-radius:50%;flex:none;margin-top:7px}
+.pip.yes{background:var(--ok);box-shadow:0 0 12px var(--ok)}
+.pip.no{background:var(--seed)}
+.pip.wait{background:var(--muted)}
+.score b{font-weight:700}
+.score .d{color:var(--muted);font-size:15px}
+
+/* ---------- REVEAL ---------- */
+.rv{opacity:0;transform:translateY(22px);transition:opacity .7s ease,transform .7s cubic-bezier(.2,.8,.3,1)}
+.rv.in{opacity:1;transform:none}
+
+footer{padding:52px 0 70px;border-top:1px solid var(--line);color:var(--muted);font-size:14px}
+@media(prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms!important;transition-duration:.01ms!important}
+  .rv{opacity:1;transform:none}
+}
+</style>
+
+<!-- ============ HERO ============ -->
+<div class="hero">
+  <canvas id="seedCanvas"></canvas>
+  <div class="wrap">
+    <span class="eyebrow">A brain that grows up</span>
+    <h1>We are raising a <span class="accent">small brain</span>, not building a big one.</h1>
+    <p class="lead">Most AI is built at full size and then frozen forever. Pragnosia starts tiny &mdash; smaller than
+      the space a photo takes on your phone &mdash; and <strong>grows itself</strong> only when it has truly
+      run out of room to learn. It remembers. It keeps growing. It never stops.</p>
+    <div class="scroll-hint"><span class="arrow">&#8595;</span> Scroll to watch it work</div>
+  </div>
+</div>
+
+<!-- ============ THE BIG IDEA ============ -->
+<section>
+ <div class="wrap">
+  <span class="eyebrow rv">The big idea</span>
+  <h2 class="rv">Think of a child, not a machine</h2>
+  <p class="lead rv" style="margin-top:14px">A child's brain is not delivered finished. It starts small, and it
+    grows new connections exactly when the child needs them. Pragnosia works the same way.</p>
+
+  <div class="grid2" style="margin-top:30px">
+    <div class="card rv">
+      <h3 style="color:var(--muted)">How AI is usually made</h3>
+      <p style="margin-top:10px">Decide a huge size. Train once on the whole internet. Freeze it.
+        It can never learn anything new again &mdash; every conversation starts from zero.</p>
+      <p class="mono" style="font-size:13px;color:var(--muted);margin:0">size: fixed &nbsp;·&nbsp; memory: none &nbsp;·&nbsp; learning: stopped</p>
+    </div>
+    <div class="card rv" style="border-color:var(--glow-dim)">
+      <h3 style="color:var(--glow)">How Pragnosia is grown</h3>
+      <p style="margin-top:10px">Start tiny. Read. When it stops improving &mdash; and only if it has earned it &mdash;
+        it adds a little more brain. Then keeps reading. Forever.</p>
+      <p class="mono" style="font-size:13px;color:var(--glow-dim);margin:0">size: growing &nbsp;·&nbsp; memory: yes &nbsp;·&nbsp; learning: never stops</p>
+    </div>
+  </div>
+ </div>
+</section>
+
+<!-- ============ HOW IT READS ============ -->
+<section>
+ <div class="wrap">
+  <span class="eyebrow rv">Step 1 &mdash; Reading</span>
+  <h2 class="rv">Words become puzzle pieces</h2>
+  <p class="lead rv" style="margin-top:14px">The brain can't read letters. First every sentence is chopped into
+    small pieces called <strong>tokens</strong> &mdash; a bit like syllables. Then it plays one endless game:
+    <em>guess the next piece.</em></p>
+
+  <div class="stage rv">
+    <div class="stage-label">Watch a sentence get chopped up and guessed</div>
+    <div class="tokenrow" id="tokrow"></div>
+    <div style="margin-top:16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <span class="mono" style="font-size:13px;color:var(--muted)">next piece guess:</span>
+      <span class="mono" id="guessOut" style="font-size:15px;color:var(--glow);font-weight:600">&mdash;</span>
+      <span class="mono" id="guessMark" style="font-size:13px"></span>
+    </div>
+  </div>
+  <p class="narrow rv">Every wrong guess nudges the brain a tiny bit. Do that a few billion times and it starts to
+    understand how language works. That is <em>all</em> training is.</p>
+ </div>
+</section>
+
+<!-- ============ DATA FLOW ============ -->
+<section>
+ <div class="wrap">
+  <span class="eyebrow rv">Step 2 &mdash; The flow</span>
+  <h2 class="rv">How information moves through the brain</h2>
+  <p class="lead rv" style="margin-top:14px">Text pours in on the left. It passes through layers &mdash; like rooms,
+    each one understanding a little more. Along the way, anything worth keeping is dropped into memory.</p>
+
+  <div class="stage rv">
+    <div class="stage-label">Live: text flowing through six layers into memory</div>
+    <canvas id="flowCanvas" height="260"></canvas>
+  </div>
+ </div>
+</section>
+
+<!-- ============ MEMORY ============ -->
+<section>
+ <div class="wrap">
+  <span class="eyebrow rv">Step 3 &mdash; Remembering</span>
+  <h2 class="rv">A scratchpad that fades, and a diary that lasts</h2>
+  <p class="lead rv" style="margin-top:14px">You don't remember every word you heard today &mdash; but you remember
+    what mattered. Pragnosia has the same two kinds of memory.</p>
+
+  <div class="stage rv">
+    <div class="stage-label">Watch notes fade &mdash; and the important one get saved forever</div>
+    <div class="memgrid">
+      <div class="memcol">
+        <h4 style="color:var(--flow)">Scratchpad</h4>
+        <div class="sub">Holds what it just read. Fades fast, so new things have room.</div>
+        <div id="shortMem"></div>
+      </div>
+      <div class="memcol">
+        <h4 style="color:var(--ok)">Diary</h4>
+        <div class="sub">Checked facts get written into the brain itself. These stay.</div>
+        <div id="longMem"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid3 rv" style="margin-top:18px">
+    <div class="card"><h3 style="font-size:16px">Why forget?</h3>
+      <p style="font-size:15px;margin:8px 0 0;color:var(--muted)">A memory that keeps everything can find nothing.
+        We measured it: remembering <em>everything</em> made the brain worse.</p></div>
+    <div class="card"><h3 style="font-size:16px">What gets saved?</h3>
+      <p style="font-size:15px;margin:8px 0 0;color:var(--muted)">Only surprising things that also turn out to be
+        <em>true</em> when checked against trusted books.</p></div>
+    <div class="card"><h3 style="font-size:16px">Can you trick it?</h3>
+      <p style="font-size:15px;margin:8px 0 0;color:var(--muted)">We tried. False facts were blocked every time &mdash;
+        they never reach the diary.</p></div>
+  </div>
+ </div>
+</section>
+
+<!-- ============ GROWING ============ -->
+<section>
+ <div class="wrap">
+  <span class="eyebrow rv">Step 4 &mdash; Growing</span>
+  <h2 class="rv">It decides for itself when to grow</h2>
+  <p class="lead rv" style="margin-top:14px">Nobody tells Pragnosia when to get bigger. It watches its own confusion.
+    When confusion stops dropping, its brain is full &mdash; time to grow.</p>
+
+  <div class="stage rv">
+    <div class="stage-label">The confusion curve &mdash; flat means "I'm full"</div>
+    <canvas id="growCanvas" height="220"></canvas>
+  </div>
+
+  <div class="card rv" style="border-color:var(--glow-dim);margin-top:8px">
+    <h3>But it has to earn it first</h3>
+    <p style="margin-top:9px">A child doesn't get a bigger bike for asking. Before Pragnosia may grow, it must
+      have read <strong>22 words for every part of its brain</strong>. Only then does its own "I'm full" signal count.</p>
+    <p class="mono" style="font-size:13px;color:var(--muted);margin:0">
+      real example &mdash; gate opened at step 2,610 &nbsp;·&nbsp; the brain waited until step 3,557 &nbsp;·&nbsp; grew having read 25 per part
+    </p>
+  </div>
+ </div>
+</section>
+
+<!-- ============ WHERE WE ARE ============ -->
+<section>
+ <div class="wrap">
+  <span class="eyebrow rv">Where we are right now</span>
+  <h2 class="rv">Two growth spurts down</h2>
+
+  <div class="grid3 rv" style="margin-top:24px">
+    <div class="stat"><div class="n" data-count="49">0</div><div class="l">million parts (started at 31)</div></div>
+    <div class="stat"><div class="n" data-count="2">0</div><div class="l">times it chose to grow</div></div>
+    <div class="stat"><div class="n" data-count="84">0</div><div class="l">confusion score (was 195)</div></div>
+  </div>
+
+  <div class="stage rv">
+    <div class="stage-label">The growth ladder &mdash; from seed to full size</div>
+    <div class="ladder" id="ladder"></div>
+  </div>
+
+  <p class="narrow rv">Every rung is a real growth spurt the brain chose by itself. It is climbing this ladder
+    right now, on one computer, while you read this.</p>
+ </div>
+</section>
+
+<!-- ============ HONEST SCORECARD ============ -->
+<section>
+ <div class="wrap">
+  <span class="eyebrow rv">The honest scorecard</span>
+  <h2 class="rv">What works, and what doesn't yet</h2>
+  <p class="lead rv" style="margin-top:14px">Everything below is measured, not hoped for. Including the parts
+    that are still broken.</p>
+
+  <div class="card rv" style="margin-top:22px">
+    <div class="score"><div class="pip yes"></div><div>
+      <b>Endless reading, at no extra cost.</b>
+      <div class="d">We fed it a million words. Memory used stayed flat &mdash; and each word actually got
+        <em>faster</em>. A normal AI would need 12&nbsp;GB of scratch space for that. Ours used 0.26&nbsp;MB.</div></div></div>
+
+    <div class="score"><div class="pip yes"></div><div>
+      <b>It learns new facts while running.</b>
+      <div class="d">Tell it something new, and it holds it &mdash; then writes the checked ones permanently
+        into itself. No other model does this.</div></div></div>
+
+    <div class="score"><div class="pip yes"></div><div>
+      <b>It cannot be tricked into believing lies.</b>
+      <div class="d">True facts got saved. False ones were blocked, every time.</div></div></div>
+
+    <div class="score"><div class="pip yes"></div><div>
+      <b>It grows itself, and earns each growth.</b>
+      <div class="d">Two growth spurts so far, both chosen by the brain, both after paying the reading price.</div></div></div>
+
+    <div class="score"><div class="pip no"></div><div>
+      <b>It cannot answer questions yet.</b>
+      <div class="d">Ask it "what is the code?" after telling it &mdash; it fails. The <em>machinery</em> for
+        remembering works perfectly in tests (92&ndash;100%). What's missing is language: at this size it can't
+        yet understand the question being asked.</div></div></div>
+
+    <div class="score"><div class="pip no"></div><div>
+      <b>It cannot write a sentence yet.</b>
+      <div class="d">It writes word salad. We checked whether that's a flaw &mdash; a normal AI at this
+        training level does exactly the same thing. It's just very young.</div></div></div>
+  </div>
+ </div>
+</section>
+
+<!-- ============ WHAT'S NEXT ============ -->
+<section>
+ <div class="wrap">
+  <span class="eyebrow rv">What happens next</span>
+  <h2 class="rv">Keep reading, keep growing</h2>
+
+  <div class="stage rv">
+    <div class="stage-label">The road ahead</div>
+    <canvas id="roadCanvas" height="180"></canvas>
+  </div>
+
+  <div class="grid2 rv" style="margin-top:8px">
+    <div class="card">
+      <h3>Soon &mdash; about a day</h3>
+      <p style="margin:9px 0 0">Climb the rest of the ladder to <strong>235 million parts</strong>.
+        That takes 26 billion words &mdash; only a sixth of the library we have.</p>
+    </div>
+    <div class="card">
+      <h3>Then &mdash; about two months</h3>
+      <p style="margin:9px 0 0">Read <strong>a trillion words</strong> at full size. That is the point where
+        small brains stop being toys and start being genuinely useful.</p>
+    </div>
+  </div>
+
+  <div class="card rv" style="margin-top:18px;border-color:var(--flow-dim)">
+    <h3 style="color:var(--flow)">And the part that makes it different</h3>
+    <p style="margin:9px 0 0">Give it a self &mdash; one continuous brain that is never wiped and restarted.
+      It keeps its memories, keeps growing, and slowly becomes an individual with its own history.
+      That is the whole point of the name.</p>
+  </div>
+ </div>
+</section>
+
+<footer>
+ <div class="wrap">
+  <p style="margin:0"><strong style="color:var(--text)">Pragnosia</strong> &mdash; a research project by Ashish Kumar.
+    Every number on this page came from a real measurement on a real machine, including the failures.</p>
+ </div>
+</footer>
+
+<script>
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+/* ---------- reveal on scroll ---------- */
+const io = new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)e.target.classList.add("in")}),{threshold:.12});
+document.querySelectorAll(".rv").forEach((el,i)=>{el.style.transitionDelay=(i%4*70)+"ms";io.observe(el)});
+
+/* ---------- HERO: a seed of neurons that grows ---------- */
+(()=>{
+  const c=document.getElementById("seedCanvas"), x=c.getContext("2d");
+  let W,H,t=0,nodes=[];
+  function size(){const r=c.getBoundingClientRect();W=c.width=r.width*devicePixelRatio;H=c.height=r.height*devicePixelRatio;x.scale(1,1)}
+  size(); addEventListener("resize",size);
+  function build(n){
+    nodes=[];
+    for(let i=0;i<n;i++){
+      const a=Math.random()*Math.PI*2, r=Math.pow(Math.random(),.55);
+      nodes.push({a,r,sp:.0006+Math.random()*.0014,ph:Math.random()*6.28,sz:.7+Math.random()*1.7});
+    }
+  }
+  build(120);
+  function frame(){
+    t+=reduce?0:1;
+    x.clearRect(0,0,W,H);
+    const cx=W*.72, cy=H*.5, R=Math.min(W,H)*.42;
+    // growth pulse: the seed breathes and slowly expands
+    const grow=.55+.45*Math.min(1,t/900);
+    for(let i=0;i<nodes.length;i++){
+      const n=nodes[i], a=n.a+t*n.sp, rr=n.r*R*grow;
+      const px=cx+Math.cos(a)*rr, py=cy+Math.sin(a)*rr*.82;
+      const pulse=.5+.5*Math.sin(t*.02+n.ph);
+      // connections to nearby nodes
+      for(let j=i+1;j<i+4&&j<nodes.length;j++){
+        const m=nodes[j], b=m.a+t*m.sp, rr2=m.r*R*grow;
+        const qx=cx+Math.cos(b)*rr2, qy=cy+Math.sin(b)*rr2*.82;
+        const d=Math.hypot(px-qx,py-qy);
+        if(d<R*.28){
+          x.strokeStyle=css("--flow"); x.globalAlpha=.13*(1-d/(R*.28));
+          x.lineWidth=1; x.beginPath(); x.moveTo(px,py); x.lineTo(qx,qy); x.stroke();
+        }
+      }
+      x.globalAlpha=.35+.55*pulse;
+      x.fillStyle = n.r<.3 ? css("--glow") : css("--flow");
+      x.beginPath(); x.arc(px,py,n.sz*(1+pulse*.5),0,6.29); x.fill();
+    }
+    // warm core
+    x.globalAlpha=.28;
+    const g=x.createRadialGradient(cx,cy,0,cx,cy,R*.6);
+    g.addColorStop(0,css("--glow")); g.addColorStop(1,"transparent");
+    x.fillStyle=g; x.beginPath(); x.arc(cx,cy,R*.6,0,6.29); x.fill();
+    x.globalAlpha=1;
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+
+/* ---------- TOKENS: chop a sentence, guess the next piece ---------- */
+(()=>{
+  const row=document.getElementById("tokrow"), out=document.getElementById("guessOut"), mark=document.getElementById("guessMark");
+  const toks=["The","▁sun","▁gives","▁us","▁light","▁and","▁warm","th","▁every","▁day","."];
+  const guesses=["▁sky","▁gives","▁the","▁us","▁heat","▁and","▁warm","th","▁every","▁day","."];
+  let i=0;
+  function reset(){row.innerHTML="";i=0}
+  function step(){
+    if(i>=toks.length){setTimeout(()=>{reset();step()},2200);return}
+    const el=document.createElement("span");
+    el.className="tok"; el.textContent=toks[i].replace("▁","·");
+    row.appendChild(el); requestAnimationFrame(()=>el.classList.add("on"));
+    if(i>0){
+      const good = guesses[i]===toks[i];
+      out.textContent=guesses[i].replace("▁","·");
+      mark.textContent = good?"✓ right — no change needed":"✗ wrong — adjust a little";
+      mark.style.color = good?css("--ok"):css("--seed");
+      if(good) el.classList.add("hi");
+    }
+    i++;
+    setTimeout(step, reduce?900:620);
+  }
+  step();
+})();
+
+/* ---------- FLOW: text through layers into memory ---------- */
+(()=>{
+  const c=document.getElementById("flowCanvas"), x=c.getContext("2d");
+  let W,H,parts=[],t=0;
+  function size(){const r=c.getBoundingClientRect();W=c.width=r.width;H=c.height=260}
+  size(); addEventListener("resize",size);
+  const NL=6;
+  function spawn(){
+    parts.push({p:0,y:.25+Math.random()*.5,sp:.0022+Math.random()*.0024,
+                hue:Math.random()<.22, sz:1.6+Math.random()*2.2, wob:Math.random()*6.28});
+  }
+  function frame(){
+    t++; if(!reduce && t%7===0 && parts.length<150) spawn();
+    x.clearRect(0,0,W,H);
+    const padL=64, padR=104, span=W-padL-padR, lw=span/NL;
+
+    // layer rooms
+    for(let i=0;i<NL;i++){
+      const lx=padL+i*lw+6;
+      x.fillStyle=css("--surface2"); x.globalAlpha=.75;
+      roundRect(x,lx,44,lw-12,H-88,10); x.fill();
+      x.globalAlpha=1; x.strokeStyle=css("--line"); x.lineWidth=1; x.stroke();
+      x.fillStyle=css("--muted"); x.font="11px 'IBM Plex Mono',monospace"; x.textAlign="center";
+      x.fillText("layer "+(i+1), lx+(lw-12)/2, H-28);
+    }
+    // labels
+    x.fillStyle=css("--flow"); x.font="12px 'IBM Plex Mono',monospace"; x.textAlign="left";
+    x.fillText("text in", 4, 30);
+    x.fillStyle=css("--glow"); x.textAlign="right"; x.fillText("memory", W-6, 30);
+
+    // memory box
+    x.fillStyle=css("--surface2"); x.globalAlpha=.9;
+    roundRect(x,W-padR+16,44,padR-26,H-88,10); x.fill(); x.globalAlpha=1;
+    x.strokeStyle=css("--glow-dim"); x.stroke();
+
+    // particles
+    parts=parts.filter(p=>{
+      p.p+=reduce?0:p.sp;
+      if(p.p>1.18) return false;
+      const px=padL+p.p*(span+40), py=H*p.y+Math.sin(t*.03+p.wob)*7;
+      x.globalAlpha=p.p>1?Math.max(0,1-(p.p-1)*6):.85;
+      x.fillStyle=p.hue?css("--glow"):css("--flow");
+      x.beginPath(); x.arc(px,py,p.sz,0,6.29); x.fill();
+      // trail
+      x.globalAlpha*=.28; x.strokeStyle=p.hue?css("--glow"):css("--flow"); x.lineWidth=p.sz*.8;
+      x.beginPath(); x.moveTo(px-14,py); x.lineTo(px,py); x.stroke();
+      return true;
+    });
+    x.globalAlpha=1;
+    requestAnimationFrame(frame);
+  }
+  function roundRect(ctx,x0,y0,w,h,r){ctx.beginPath();ctx.moveTo(x0+r,y0);
+    ctx.arcTo(x0+w,y0,x0+w,y0+h,r);ctx.arcTo(x0+w,y0+h,x0,y0+h,r);
+    ctx.arcTo(x0,y0+h,x0,y0,r);ctx.arcTo(x0,y0,x0+w,y0,r);ctx.closePath()}
+  frame();
+})();
+
+/* ---------- MEMORY: notes fade, one gets saved ---------- */
+(()=>{
+  const s=document.getElementById("shortMem"), l=document.getElementById("longMem");
+  const stream=["the weather was mild","a page about bridges","the code is 7492","list of train times","an advert for shoes"];
+  const KEEP=2;
+  let i=0;
+  function cycle(){
+    if(i>=stream.length){
+      setTimeout(()=>{s.innerHTML="";l.innerHTML="";i=0;cycle()},3400); return;
+    }
+    const n=document.createElement("div");
+    n.className="note"; n.textContent=stream[i];
+    s.appendChild(n);
+    const isKeep = i===KEEP;
+    if(isKeep){
+      n.style.borderColor=css("--ok"); n.style.color=css("--ok");
+      setTimeout(()=>{
+        const d=document.createElement("div");
+        d.className="note saved"; d.textContent=stream[KEEP]+"  ✓ checked";
+        l.appendChild(d);
+      }, 1500);
+    }
+    setTimeout(()=>{ if(!isKeep) n.classList.add("fading"); }, 1700);
+    setTimeout(()=>{ if(!isKeep && n.parentNode) n.remove(); }, 3000);
+    i++;
+    setTimeout(cycle, reduce?1400:1150);
+  }
+  cycle();
+})();
+
+/* ---------- GROWTH: confusion curve flattens, then grows ---------- */
+(()=>{
+  const c=document.getElementById("growCanvas"), x=c.getContext("2d");
+  let W,H,t=0;
+  function size(){const r=c.getBoundingClientRect();W=c.width=r.width;H=c.height=220}
+  size(); addEventListener("resize",size);
+  const pts=[];
+  for(let i=0;i<260;i++){
+    let v;
+    if(i<90) v=1-Math.pow(i/90,.62)*.55;                       // dropping fast
+    else if(i<150) v=.45+Math.sin(i*.35)*.012;                 // FLAT = full
+    else v=.45-Math.pow((i-150)/110,.7)*.30;                   // after growth, drops again
+    pts.push(v);
+  }
+  function frame(){
+    t+=reduce?260:1.05;
+    const n=Math.min(pts.length,Math.floor(t)%(pts.length+90));
+    x.clearRect(0,0,W,H);
+    const padL=44,padR=16,padT=18,padB=34, gw=W-padL-padR, gh=H-padT-padB;
+    // grid
+    x.strokeStyle=css("--line"); x.lineWidth=1; x.globalAlpha=.6;
+    for(let g=0;g<=3;g++){const y=padT+gh*g/3;x.beginPath();x.moveTo(padL,y);x.lineTo(W-padR,y);x.stroke()}
+    x.globalAlpha=1;
+    x.fillStyle=css("--muted"); x.font="11px 'IBM Plex Mono',monospace";
+    x.textAlign="right"; x.fillText("confused",padL-8,padT+8); x.fillText("clear",padL-8,padT+gh);
+    x.textAlign="center"; x.fillText("time reading →",padL+gw/2,H-10);
+
+    // flat zone marker
+    if(n>96){
+      x.fillStyle=css("--glow"); x.globalAlpha=.1;
+      x.fillRect(padL+gw*90/260,padT,gw*60/260,gh); x.globalAlpha=1;
+    }
+    // curve
+    x.strokeStyle=css("--flow"); x.lineWidth=2.4; x.beginPath();
+    for(let i=0;i<n;i++){
+      const px=padL+gw*i/260, py=padT+gh*(1-pts[i])*.94+2;
+      i?x.lineTo(px,py):x.moveTo(px,py);
+    }
+    x.stroke();
+    // head dot
+    if(n>1){
+      const px=padL+gw*(n-1)/260, py=padT+gh*(1-pts[n-1])*.94+2;
+      x.fillStyle=css("--glow"); x.beginPath(); x.arc(px,py,4.5,0,6.29); x.fill();
+      x.globalAlpha=.25; x.beginPath(); x.arc(px,py,11,0,6.29); x.fill(); x.globalAlpha=1;
+    }
+    // labels
+    if(n>118){x.fillStyle=css("--glow");x.font="600 12px 'IBM Plex Mono',monospace";x.textAlign="center";
+      x.fillText("flat = brain is full",padL+gw*120/260,padT+22)}
+    if(n>168){x.fillStyle=css("--ok");x.textAlign="left";
+      x.fillText("↑ grew — learning again",padL+gw*152/260,padT+gh*.42)}
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+
+/* ---------- LADDER ---------- */
+(()=>{
+  const stages=[
+    ["31M","seed",100,"done"],["44M","grew #1",100,"done"],["49M","grew #2",78,"now"],
+    ["67M","next",0,""],["98M","",0,""],["155M","",0,""],["235M","full size",0,""]
+  ];
+  const el=document.getElementById("ladder");
+  stages.forEach(([size,tag,pct,state])=>{
+    const d=document.createElement("div");
+    d.className="rung"+(state?" "+state:"");
+    d.innerHTML=`<span class="size">${size}</span><div class="bar"><i></i></div><span class="tag">${tag}</span>`;
+    el.appendChild(d);
+    setTimeout(()=>{d.querySelector("i").style.width=pct+"%"},240);
+  });
+})();
+
+/* ---------- COUNTERS ---------- */
+(()=>{
+  const io2=new IntersectionObserver(es=>es.forEach(e=>{
+    if(!e.isIntersecting||e.target.dataset.done)return;
+    e.target.dataset.done=1;
+    const to=+e.target.dataset.count; let v=0;
+    const step=()=>{v+=Math.max(1,to/28); if(v>=to){e.target.textContent=to;return}
+      e.target.textContent=Math.floor(v); requestAnimationFrame(step)};
+    step();
+  }),{threshold:.5});
+  document.querySelectorAll("[data-count]").forEach(n=>io2.observe(n));
+})();
+
+/* ---------- ROAD AHEAD ---------- */
+(()=>{
+  const c=document.getElementById("roadCanvas"), x=c.getContext("2d");
+  let W,H,t=0;
+  function size(){const r=c.getBoundingClientRect();W=c.width=r.width;H=c.height=180}
+  size(); addEventListener("resize",size);
+  const marks=[[0.06,"today","49M"],[0.36,"1 day","235M"],[0.72,"2 months","1 trillion words"],[0.97,"then","a self"]];
+  function frame(){
+    t+=reduce?0:1;
+    x.clearRect(0,0,W,H);
+    const y=H*.52;
+    x.strokeStyle=css("--line"); x.lineWidth=3;
+    x.beginPath(); x.moveTo(30,y); x.lineTo(W-30,y); x.stroke();
+    // travelled portion pulses forward
+    const prog=.06+((t*.0012)%.02);
+    x.strokeStyle=css("--glow"); x.lineWidth=3;
+    x.beginPath(); x.moveTo(30,y); x.lineTo(30+(W-60)*prog,y); x.stroke();
+    marks.forEach(([p,when,what],i)=>{
+      const px=30+(W-60)*p, done=p<=.07;
+      const pulse=.5+.5*Math.sin(t*.045+i*1.4);
+      x.fillStyle=done?css("--glow"):css("--surface2");
+      x.strokeStyle=done?css("--glow"):css("--line"); x.lineWidth=2;
+      x.beginPath(); x.arc(px,y,done?7+pulse*2:6,0,6.29); x.fill(); x.stroke();
+      x.textAlign="center"; x.font="600 12px 'IBM Plex Mono',monospace";
+      x.fillStyle=done?css("--glow"):css("--text"); x.fillText(what,px,y-22);
+      x.font="11px 'IBM Plex Mono',monospace"; x.fillStyle=css("--muted"); x.fillText(when,px,y+28);
+    });
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+</script>
