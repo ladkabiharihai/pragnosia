@@ -35,10 +35,13 @@ def main():
     P=sum(p.numel() for p in m.parameters())
     print(f"\n=== PRAGNOSIA @ step {step} | D={cfg.D}x{cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} | {P/1e6:.0f}M params | {k} grows ===",flush=True)
     dm=DataMix(ctx=32769,verbose=False)
-    # 1+2+3: loss per chunk, with vs without carried memory
-    NCH=16; wi=np.zeros(NCH); wo=np.zeros(NCH); nb=4
-    for _ in range(nb):
-        X=torch.tensor(dm.batch(2),device=DEV); st=None
+    # FIXED eval set (seeded): the same documents every time, so numbers are COMPARABLE across checkpoints.
+    # Random batches made the same checkpoint score 4.32 and 4.95 -- useless for tracking progress.
+    np.random.seed(1234); torch.manual_seed(1234)
+    NCH=16; nb=12; EVAL=[torch.tensor(dm.batch(4),device=DEV) for _ in range(nb)]
+    wi=np.zeros(NCH); wo=np.zeros(NCH)
+    for X in EVAL:
+        st=None
         for i in range(NCH):
             xi=X[:,i*CH:(i+1)*CH]; yi=X[:,i*CH+1:(i+1)*CH+1]
             with torch.autocast("cuda",dtype=torch.bfloat16):
@@ -47,12 +50,12 @@ def main():
                 wo[i]+=F.cross_entropy(m(xi).reshape(-1,cfg.vocab).float(),yi.reshape(-1)).item()
             st=m.decay_states(st,DECAY)
     wi/=nb; wo/=nb
-    print(f"  1) held-out loss (first chunk, no memory) = {wo[0]:.4f}   ppl={np.exp(wo[0]):.1f}",flush=True)
+    print(f"  1) held-out loss (first chunk, no memory) = {wo[0]:.4f}   ppl={np.exp(wo[0]):.1f}   [fixed {nb}x4 eval docs]",flush=True)
     print(f"  2) MEMORY GAIN (mean over chunks 1..15)   = {np.mean(wo[1:]-wi[1:]):+.4f}   (positive = memory helps)",flush=True)
     print(f"  3) LONG CONTEXT loss by position: "+" ".join(f"{wi[i]:.2f}" for i in (0,1,3,7,15))+"   (chunks 0,1,3,7,15 = up to 32k tokens)",flush=True)
     # 4: in-context recall vs distance
     print("  4) IN-CONTEXT RECALL vs distance:",flush=True)
-    filler=" The daily log recorded routine activity across the site."
+    filler=" The daily log recorded routine activity across the site."; rec={}
     for dist in (1,10,40):
         hit=0; n=20
         for i in range(n):
@@ -60,7 +63,7 @@ def main():
             txt=f"The access code is {code}."+filler*dist+" Question: What is the access code? Answer:"
             ids=TOK.encode(txt).ids[-CH:]
             if code in TOK.decode(gen(m,ids,6)): hit+=1
-        print(f"       ~{dist*12:5d} tokens back: {100*hit/n:3.0f}%",flush=True)
+        rec[dist]=100*hit/n; print(f"       ~{dist*12:5d} tokens back: {100*hit/n:3.0f}%",flush=True)
     # 5: generation
     print("  5) GENERATION:",flush=True)
     ds=[]
@@ -68,5 +71,14 @@ def main():
         t=gen(m,TOK.encode(p).ids,40,temp=0.8)
         d1=len(set(t))/max(1,len(t)); g4=ngr(t,4); r4=1-len(set(g4))/max(1,len(g4)); ds.append((d1,r4))
         print(f"       [{p[:28]!r}] -> {TOK.decode(t)[:80]!r}",flush=True)
-    print(f"       distinct-1={np.mean([d[0] for d in ds]):.2f}  4gram-repetition={np.mean([d[1] for d in ds]):.2f} (0=healthy)",flush=True)
+    d1=np.mean([d[0] for d in ds]); r4=np.mean([d[1] for d in ds])
+    print(f"       distinct-1={d1:.2f}  4gram-repetition={r4:.2f} (0=healthy)",flush=True)
+    # append to a history table so the TRAJECTORY is visible, not just a snapshot
+    hp=os.path.join(os.path.dirname(os.path.abspath(__file__)),"logs","eval_history.tsv")
+    new=not os.path.exists(hp)
+    with open(hp,"a") as f:
+        if new: f.write("step\tparams_M\tD\tNL\tgrows\tloss\tppl\tmem_gain\trecall_12\trecall_120\trecall_480\tdistinct1\trep4\n")
+        f.write(f"{step}\t{P/1e6:.0f}\t{cfg.D}\t{cfg.NL}\t{k}\t{wo[0]:.4f}\t{np.exp(wo[0]):.1f}\t{np.mean(wo[1:]-wi[1:]):+.4f}\t"
+                f"{rec.get(1,0):.0f}\t{rec.get(10,0):.0f}\t{rec.get(40,0):.0f}\t{d1:.2f}\t{r4:.2f}\n")
+    print(f"\n  history -> logs/eval_history.tsv",flush=True)
 if __name__=="__main__": main()
