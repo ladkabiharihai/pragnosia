@@ -21,7 +21,8 @@ TARGET_D,TARGET_NL=1024,16                              # ~235M at the end
 RECALL_FRAC=0.15; VRAM_MIN=8.0                          # leave headroom for prod
 CKPT="/mnt/kv_cache/pragnosia_data/pragnosia.pt"
 PLAN=[('w',128),('d',2),('w',128),('d',2),('w',128),('d',2),('w',128),('d',2),('w',128),('d',4)]
-dm=DataMix(ctx=DOC+1,verbose=True)
+CORPUS=os.environ.get("CORPUS","window2")                    # window2 only: educational text, 170B tokens, least repetitive
+dm=DataMix(ctx=DOC+1,verbose=True,only=CORPUS)
 RD=RV=None
 _rp="/mnt/kv_cache/pragnosia_data/recall_32k.bin"; _ra="/mnt/kv_cache/pragnosia_data/recall_32k_ans.npy"
 if os.path.exists(_rp) and os.path.exists(_ra):
@@ -54,7 +55,9 @@ def main():
     # so the gain comes from doing LESS work). `m` stays the raw module for growth/params; `fwd` is the compiled call.
     USE_COMPILE=os.environ.get("COMPILE","1")=="1"
     fwd=torch.compile(m) if USE_COMPILE else m
-    sensor=G.SaturationSensor(window=400,t_stat=1.0,min_gap=2500)   # fixed: smoothed signal, real spacing (was firing on noise at min_gap)
+    TOK_PER_PARAM=float(os.environ.get("TOK_PER_PARAM","22"))     # Chinchilla-style floor per stage (user's request)
+    sensor=G.SaturationSensor(window=400,t_stat=1.0,min_gap=2500)  # smoothed signal + real spacing
+    tokens_at_size=0
     P=lambda: sum(p.numel() for p in m.parameters())
     print(f"PRAGNOSIA: infant D{cfg.D}x{cfg.NL} ({P()/1e6:.0f}M) -> target D{TARGET_D}x{TARGET_NL}; docs {DOC} chunk {CH} B{B}",flush=True)
     bar=pbar(range(step,STEPS),"pragnosia",total=STEPS-step)
@@ -92,15 +95,19 @@ def main():
             ent=G.SaturationSensor.entropy(last)
         ema=loss.item() if ema is None else 0.995*ema+0.005*loss.item()
         free=torch.cuda.mem_get_info()[0]/2**30
-        if ent is not None and k<len(PLAN) and free>VRAM_MIN and sensor.observe(ent,it):
-            kind,amt=PLAN[k]
+        tokens_at_size+=B*(CH if ent is None else DOC)
+        # a grow needs BOTH: the model's own saturation signal AND enough tokens spent at this size (22/param).
+        earned = tokens_at_size >= TOK_PER_PARAM*P()
+        if ent is not None and k<len(PLAN) and free>VRAM_MIN and earned and sensor.observe(ent,it):
+            kind,amt=PLAN[k]; P_before=P()
             (G.grow_width if kind=='w' else G.grow_depth)(m,amt)
-            opt=torch.optim.Adam(m.parameters(),lr=LR); k+=1
+            earned_tpp=tokens_at_size/max(1,P_before)            # capture BEFORE resetting (my first edit printed 0)
+            opt=torch.optim.Adam(m.parameters(),lr=LR); k+=1; tokens_at_size=0
             fwd=torch.compile(m) if USE_COMPILE else m           # shapes changed -> recompile once per grow
-            bar.write(f"    >>> SELF-GREW #{k} at step {it}: D={m.cfg.D}x{m.cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} -> {P()/1e6:.0f}M (free {free:.0f}G)")
+            bar.write(f"    >>> SELF-GREW #{k} at step {it}: D={m.cfg.D}x{m.cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} -> {P()/1e6:.0f}M (earned {earned_tpp:.0f} tok/param at the old size, free {free:.0f}G)")
         if (it+1)%100==0:
             tps=B*DOC*(it-step+1)/(time.time()-t0)
-            bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} {P()/1e6:.0f}M {tps/1e3:.0f}ktok/s free={free:.0f}G")
+            bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L {P()/1e6:.0f}M {tokens_at_size/P():.0f}tok/param {tps/1e3:.0f}ktok/s free={free:.0f}G")
         if (it+1)%500==0:
             torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':it+1,'k':k},CKPT)
     torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':STEPS,'k':k},CKPT)

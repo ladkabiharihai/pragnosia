@@ -14,11 +14,12 @@ FLOOR={"finemath":0.04,"openmath":0.03,"opencode":0.03,"recall":0.05,"tulu3":0.0
 # base weight already exceeded the floors -- the floors were never the binding constraint. An explicit cap is.
 CAP={"finemath":0.05,"openmath":0.03,"numina":0.01,"opencode":0.03,"evolcode":0.01,"magicoder":0.005}
 class DataMix:
-    def __init__(s, ctx=64, min_tok=2_000_000, exclude=("recall",), verbose=True):
+    def __init__(s, ctx=64, min_tok=2_000_000, exclude=("recall",), verbose=True, only=None):
         s.ctx=ctx; s.bins=[]; s.names=[]; sizes=[]
         for f in sorted(glob.glob(f"{DATADIR}/*_32k.bin")):
             nm=re.sub(r'_32k\.bin$','',os.path.basename(f))
             if any(x in nm for x in exclude): continue                 # recall handled separately (answer-masked)
+            if only and nm!=only: continue                             # `only` restricts to a single corpus
             m=np.memmap(f,dtype=np.uint16,mode="r")
             if len(m)<max(min_tok,ctx+2): continue
             s.bins.append(m); s.names.append(nm); sizes.append(len(m))

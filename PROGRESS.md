@@ -779,3 +779,25 @@ TWO FIXES (both mine to make):
   (24.8% -> 24.7%) because the sqrt(size) base weight already exceeded the floors -- the floors were never the
   binding constraint. With caps: **math/code 24.8% -> 14.2%**, web 76.7%, expected mix repetition 0.080. Every
   faculty is still represented.
+
+## RUN 2 (clean restart from scratch, all gates active) -- run 1 archived to pragnosia_data/run1/
+User's call: restart from scratch so the growth gates are active FROM THE BEGINNING, with a 22 tok/param minimum,
+and train on window2 only. Run 1 (step 8500, 49M, loss 4.561) is archived, not deleted.
+**GATE FOUND DEAD.** The sensor supported `floor_tokens` but the trainer NEVER PASSED IT (nor `tokens_seen`), so the
+Chinchilla floor was dead code for all of run 1. Now wired: a grow requires BOTH the model's own saturation signal
+AND >= 22 tokens/param spent AT THE CURRENT SIZE, with the counter reset at each grow.
+Why it matters: at step 8500 run 1 was at 45 tok/param on a 49M model, so 22 would not have bound there -- but it
+binds HARD at the top, where 235M needs 5.2B tokens at that size alone. Without the gate the model could reach 235M
+badly undertrained, which is exactly the "not trained enough" diagnosis for the 0% needle.
+Budget with the gate (32768x8 = 262144 tokens/step):
+| stage | params | tokens for 22/param | steps |
+|-------|--------|--------------------|-------|
+| infant 384x4L | 31M | 0.7B | 2,602 |
+| 512x6L | 49M | 1.1B | 4,112 |
+| 768x8L | 98M | 2.2B | 8,224 |
+| 1024x16L (target) | 235M | **5.2B** | 19,722 |
+**window2 ONLY** (user's call): educational/textbook text (Cosmopedia + FineWeb-Edu + Wikipedia), 170B tokens, no
+mix confounds. HONEST CORRECTION: window2's own 4-gram repetition measures 0.094, not the 0.072 I reported earlier
+(that was sampling variance on a small sample) -- so window2 is not dramatically cleaner than the mix; the mix's
+problem was specifically the math corpora at 0.20-0.26.
+GATES NOW ACTIVE: intrinsic saturation (smoothed, window 400) + min_gap 2500 + **22 tok/param floor** + VRAM guard.
