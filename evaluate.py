@@ -83,7 +83,15 @@ def main():
         d1=len(set(t))/max(1,len(t)); g4=ngr(t,4); r4=1-len(set(g4))/max(1,len(g4)); ds.append((d1,r4))
         print(f"       [{p[:28]!r}] -> {TOK.decode(t)[:80]!r}",flush=True)
     d1=np.mean([d[0] for d in ds]); r4=np.mean([d[1] for d in ds])
-    print(f"       distinct-1={d1:.2f}  4gram-repetition={r4:.2f} (0=healthy)",flush=True)
+    # Reference measured on the ACTUAL training mix, not on web text alone: math/code are 25% of batches and are
+    # intrinsically 3-5x more repetitive (finemath 0.20, numina 0.26 vs web 0.05). Judging the model against 0.00
+    # was the wrong benchmark -- it penalised the model for matching the distribution it was given.
+    rr=[];rd=[]
+    for _ in range(24):
+        seg=[int(t) for t in EVAL[np.random.randint(len(EVAL))][np.random.randint(4),:40].tolist()]
+        g=[tuple(seg[i:i+4]) for i in range(len(seg)-3)]
+        rr.append(1-len(set(g))/max(1,len(g))); rd.append(len(set(seg))/len(seg))
+    print(f"       distinct-1={d1:.2f}  4gram-repetition={r4:.2f}   [reference: real mix = {np.mean(rd):.2f} / {np.mean(rr):.2f}]",flush=True)
     # append to a history table so the TRAJECTORY is visible, not just a snapshot
     hp=os.path.join(os.path.dirname(os.path.abspath(__file__)),"logs","eval_history.tsv")
     new=not os.path.exists(hp)

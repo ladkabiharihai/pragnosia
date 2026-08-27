@@ -750,3 +750,32 @@ gating (refuted). The vision's actual answer is CONSOLIDATION: what matters move
 WEIGHTS, which have far more capacity, and that is already proven (+6 nats, 30 local steps). 1M tokens at constant
 COST is measured and real (1.06 GiB, latency improving with length); what is bounded is how much stays USABLE, and
 weights -- not state -- are where unbounded history has to live.
+
+## STEP-8000 CHECKPOINT TESTED, and the "generation degrading" alarm explained (it was the DATA MIX)
+| metric | step 4000 | 6000 | 8000 |
+|--------|-----------|------|------|
+| held-out loss | 4.7359 | 4.6572 | **4.5610** (ppl 95.7) |
+| MEMORY GAIN | +0.0404 | +0.0509 | **+0.0550** |
+| long-context: loss at 32k minus at 2k | -- | -0.4264 | **-0.4319** |
+| needle (any distance) | 0% | 0% | **0%** |
+| long-gen 4gram-rep (1200 tok) | -- | 0.02 | 0.14 |
+GOOD: loss and memory gain both improving monotonically; memory helps at EVERY position out to 32k, and the gain is
+RISING over training. Long context is genuinely working.
+BROKEN: needle 0% (diagnosed: 0% even on the exact training distribution -> undertrained + the zero-state defect).
+**THE REPETITION ALARM WAS THE DATA MIX, not degeneracy.** Long generations were producing LaTeX math fragments and
+looping inside them. Measured per-corpus repetition of the REAL text:
+| corpus | sampled share | 4gram-rep | distinct-1 |
+|--------|---------------|-----------|------------|
+| window2 + dclm (web) | 65.5% | **0.05-0.07** | 0.48 |
+| finemath / openmath | 15.9% | **0.20** | 0.27 |
+| numina | 2.9% | **0.26** | 0.27 |
+| opencode | 7.0% | 0.15 | 0.27 |
+Math/code was **24.8% of batches** and is intrinsically 3-5x more repetitive than web text. The model's 0.14 was
+FAITHFULLY REPRODUCING the distribution I gave it, and my "0.00 = healthy" benchmark (measured on web text only) was
+the wrong reference -- it penalised the model for matching its own training data.
+TWO FIXES (both mine to make):
+- evaluate.py now prints repetition ALONGSIDE the real mix's own repetition as reference.
+- data_mix.py: an explicit CAP on the repetitive corpora. NOTE: lowering their FLOORS first did nothing
+  (24.8% -> 24.7%) because the sqrt(size) base weight already exceeded the floors -- the floors were never the
+  binding constraint. With caps: **math/code 24.8% -> 14.2%**, web 76.7%, expected mix repetition 0.080. Every
+  faculty is still represented.

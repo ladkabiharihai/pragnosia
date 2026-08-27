@@ -5,8 +5,14 @@ thin high-value bins (math/code/instruction) are not drowned by the 170B web bul
 import os, numpy as np, glob, re
 DATADIR="/mnt/kv_cache/pragnosia_data"
 # faculty floors (min sampling share) so small but important corpora are always represented
-FLOOR={"finemath":0.08,"openmath":0.06,"opencode":0.06,"recall":0.05,"tulu3":0.03,"numina":0.03,
-       "hermes":0.03,"evolcode":0.01,"glaive":0.01,"magicoder":0.01}
+# Floors keep every faculty present. Values reduced for the intrinsically REPETITIVE corpora: measured 4-gram
+# repetition is 0.20 (finemath/openmath), 0.26 (numina), 0.15 (opencode) vs 0.05 for web text, and at 25% of batches
+# they pushed the model's own generations to 0.14 repetition. Math/code now ~13% instead of ~25%.
+FLOOR={"finemath":0.04,"openmath":0.03,"opencode":0.03,"recall":0.05,"tulu3":0.03,"numina":0.01,
+       "hermes":0.03,"evolcode":0.01,"glaive":0.01,"magicoder":0.005}
+# CAP the intrinsically repetitive corpora. Lowering their FLOORS did nothing (24.8% -> 24.7%) because the sqrt(size)
+# base weight already exceeded the floors -- the floors were never the binding constraint. An explicit cap is.
+CAP={"finemath":0.05,"openmath":0.03,"numina":0.01,"opencode":0.03,"evolcode":0.01,"magicoder":0.005}
 class DataMix:
     def __init__(s, ctx=64, min_tok=2_000_000, exclude=("recall",), verbose=True):
         s.ctx=ctx; s.bins=[]; s.names=[]; sizes=[]
@@ -18,9 +24,11 @@ class DataMix:
             s.bins.append(m); s.names.append(nm); sizes.append(len(m))
         sizes=np.array(sizes,dtype=np.float64)
         w=np.sqrt(sizes); w=w/w.sum()                                  # sqrt-size base weight
-        for i,nm in enumerate(s.names):                                # apply faculty floors
+        for i,nm in enumerate(s.names):                                # apply faculty floors, then caps
             for k,fl in FLOOR.items():
                 if k in nm: w[i]=max(w[i],fl)
+            for k,cp in CAP.items():
+                if k in nm: w[i]=min(w[i],cp)
         s.w=w/w.sum(); s.sizes=sizes
         if verbose:
             print(f"[DataMix] {len(s.names)} corpora, {sizes.sum()/1e9:.0f}B tok total, ctx={ctx}",flush=True)
