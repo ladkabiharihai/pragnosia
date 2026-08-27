@@ -430,3 +430,16 @@ Swept the decay applied to the carried state between chunks (3000 steps each, D2
 - This is exactly what the vision's decay mechanism predicted, and what biology does: a memory that never forgets is
   a memory that cannot retrieve. Operating point ~0.2-0.5 per chunk (keep both quality and gain).
 - STATUS: the model now has a WORKING persistent memory it learned to use, at CONSTANT cost in context length.
+
+## VISION ACCEPTANCE TEST 1 -- "constant-memory, constant-compute, unbounded/streaming context": **PASSES**
+(acceptance1_context.py; D=256 NL=6, streaming in 128-token chunks with carried+decayed state)
+| context | us/token | peak MiB | same-size transformer KV (MiB) | its attention FLOPs |
+|---------|----------|----------|-------------------------------|---------------------|
+| 512 | 27.92 | 117.8 | 6 | 1x |
+| 8192 | 27.03 | 117.8 | 96 | 256x |
+| 32768 | 26.83 | 117.8 | 384 | 4096x |
+| **131072** | **26.86** | **117.8** | **1536** | **65536x** |
+- **Peak memory EXACTLY flat (1.00x) and per-token latency flat (0.96x) across a 256x longer context.** The claim is
+  measured, not asserted. This is the project's most defensible differentiator.
+- HONEST SCOPE: this is a COST claim (architecture-level, valid). It does NOT claim the model USES 131k tokens well --
+  this model was trained on 512-token documents. Long-context ACCURACY needs a model trained at length; separate test.
