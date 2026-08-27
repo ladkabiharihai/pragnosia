@@ -460,3 +460,22 @@ v1 was invalid: `absorb()` padded facts to 128 tokens with token 0, so the memor
   that should persist. The missing piece is the sleep/consolidation loop, not the memory.
 - NOTE the real trade: the decay that makes language modelling good (0.2) is far too aggressive for persistence.
   Fast memory is short-term BY DESIGN; permanence must come from consolidation.
+
+## CONSOLIDATION ("sleep") -- the persistence gap CLOSED (acceptance3_consolidate.py)
+Fast memory forgets within a chunk by design; consolidation must move a verified episode into the SLOW WEIGHTS.
+Implemented with PURE LOCAL PLASTICITY (0c: lifelong learning is local), REPLAY of general data interleaved
+(anti-forgetting), and CHECK-AND-COMMIT with ROLLBACK (7c). Measured with the fast memory CLEARED, so any gain must
+live in the weights:
+| consolidation steps | fact logP gain | general-ability damage | decision |
+|---------------------|----------------|------------------------|----------|
+| **30 (1 second)** | **+6.06** | **-0.155 (improved)** | COMMIT |
+| 100 | +6.46 | +0.058 | COMMIT |
+| 300 | +6.18 | +0.150 | COMMIT |
+- **30 local steps (~1s) permanently install a novel fact at +6 nats with NO damage to general ability.** The
+  persistence failure of acceptance 2b is closed by the mechanism the vision already specified.
+- The whole loop -- inference-time Hebbian write -> consolidation into weights -- is now BACKPROP-FREE, which is
+  exactly what amended 0c requires (local plasticity governs the model's life).
+- Operating point: ~30 steps (more steps add damage without adding gain).
+- HONEST: this is episode memorization (the fact text is replayed), which is what fact-learning IS; the guard is the
+  general-ability check plus rollback. What is still MISSING is VERIFICATION -- nothing yet stops a FALSE fact from
+  being consolidated the same way. That is the anti-poisoning half of flag 2 and the next build.
