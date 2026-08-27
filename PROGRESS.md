@@ -667,3 +667,22 @@ FIX: smooth the entropy internally (EMA 0.02) before the slope test, default win
 fires only on the true plateau, ignores the noisy-but-improving trace.
 LESSON: when a "learned/intrinsic" trigger fires at exactly its rate limit, it is not deciding anything. Test any
 such sensor against synthetic traces where you KNOW the right answer.
+
+## DEGENERACY SCARE: it was MY EVAL, not the model -- and MEMORY FIXES REPETITION (17x)
+Repetition appeared to be rising (0.52 -> 0.77) while loss fell, which looked like a real failure. Tested the two
+hypotheses (exp/degeneracy_test.py, step-4000 checkpoint):
+| condition | 4gram-repetition | distinct-1 |
+|-----------|------------------|------------|
+| no memory (what my eval did) | 0.50 | 0.22 |
+| **with 3 chunks of carried memory** | **0.03** | **0.64** |
+| with memory, no decay | 0.02 | 0.61 |
+| real training text (reference) | 0.00 | 0.78 |
+| temp 0.0 / 0.5 / 0.8 / 1.0 / 1.2 (no memory) | 0.90 / 0.85 / 0.42 / 0.18 / 0.09 | -- |
+- **H2 (our memory design causes repetition) is REFUTED -- the opposite is true: memory REDUCES repetition 17x**
+  (0.50 -> 0.03), to near the level of real text. The carried state gives the model context to be varied about.
+- The "collapse" was an EVAL ARTIFACT: I was generating with memory DISABLED at temp 0.8 -- the two worst choices.
+  The model is never deployed that way.
+- FIX: evaluate.py now generates WITH carried memory at temp 1.0, i.e. as the model actually runs. History reset,
+  since the old generation column was measuring a configuration that does not exist in practice.
+- LESSON: measure the model in the configuration it is USED in. An eval that disables the model's own memory is
+  testing a different model.

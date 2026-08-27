@@ -19,11 +19,11 @@ def load():
     m=C.Core(cfg).to(DEV); m.load_state_dict(sd['model']); m.eval()
     return m,cfg,sd['step'],sd.get('k',0)
 @torch.no_grad()
-def gen(m,ids,n=40,temp=0.0):
+def gen(m,ids,n=40,temp=0.0,states=None):
     x=torch.tensor([ids],device=DEV)
     for _ in range(n):
         with torch.autocast("cuda",dtype=torch.bfloat16):
-            lg=m(x[:,-CH:])[0,-1].float()
+            lg=m(x[:,-CH:],states=states)[0,-1].float()
         nx=int(lg.argmax()) if temp<=0 else int(torch.multinomial((lg/temp).softmax(-1),1))
         x=torch.cat([x,torch.tensor([[nx]],device=DEV)],1)
     return x[0,len(ids):].tolist()
@@ -65,10 +65,15 @@ def main():
             if code in TOK.decode(gen(m,ids,6)): hit+=1
         rec[dist]=100*hit/n; print(f"       ~{dist*12:5d} tokens back: {100*hit/n:3.0f}%",flush=True)
     # 5: generation
-    print("  5) GENERATION:",flush=True)
+    # Generation is measured AS THE MODEL ACTUALLY RUNS: with carried memory, at temp 1.0.
+    # Measuring memory-less at temp 0.8 made repetition look 17x worse (0.50 vs 0.03) -- a pure eval artifact.
+    print("  5) GENERATION (with memory, temp 1.0 -- as deployed):",flush=True)
+    gst=None
+    for i in range(3):
+        _,gst=m(EVAL[0][:1,i*CH:(i+1)*CH],states=gst,return_states=True); gst=m.decay_states(gst,DECAY)
     ds=[]
     for p in ["The capital of France is","Water freezes at","In the beginning of the story,"]:
-        t=gen(m,TOK.encode(p).ids,40,temp=0.8)
+        t=gen(m,TOK.encode(p).ids,40,temp=1.0,states=gst)
         d1=len(set(t))/max(1,len(t)); g4=ngr(t,4); r4=1-len(set(g4))/max(1,len(g4)); ds.append((d1,r4))
         print(f"       [{p[:28]!r}] -> {TOK.decode(t)[:80]!r}",flush=True)
     d1=np.mean([d[0] for d in ds]); r4=np.mean([d[1] for d in ds])
