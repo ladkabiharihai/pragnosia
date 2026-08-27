@@ -415,3 +415,18 @@ state vs state zeroed:
   Likely cause: with decay=1.0 the state accumulates unboundedly across chunks, so by later chunks the denominator is
   dominated by old writes and the retrieval is diluted. NEXT: add a decay/forgetting factor on the carried state
   (biologically right anyway -- memory must forget) and re-measure both absolute loss and memory gain.
+
+## Build step 7: FORGETTING (the caveat resolved) -- memory now helps AND absolute quality is restored
+Swept the decay applied to the carried state between chunks (3000 steps each, D256/NL6/T128, 4 chunks):
+| decay | mean loss (with memory) | memory gain |
+|-------|------------------------|-------------|
+| 1.00 (no forgetting) | 5.6614 | +0.2196 |
+| 0.90 | 5.5984 | +0.2403 |
+| 0.70 | 5.1828 | +0.1991 |
+| 0.50 | 4.8689 | +0.2143 |
+| **0.20** | **4.5982** | **+0.1812** |
+- **Forgetting is essential**: absolute loss improves 5.66 -> 4.60 (now on par with the no-memory arm's 4.55-4.78)
+  while the model KEEPS a +0.18 memory gain. Without forgetting the state accumulates and drowns the current chunk.
+- This is exactly what the vision's decay mechanism predicted, and what biology does: a memory that never forgets is
+  a memory that cannot retrieve. Operating point ~0.2-0.5 per chunk (keep both quality and gain).
+- STATUS: the model now has a WORKING persistent memory it learned to use, at CONSTANT cost in context length.
