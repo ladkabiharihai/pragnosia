@@ -510,3 +510,31 @@ tokens -> 1187.8 MiB at 8192). The transformer's grows 12x over the same range a
   embedding/head + optimizer state, not by the sequence, so growth scales gently. Growth is affordable.
 - CAVEAT: the transformer baseline has MORE params (23.6M vs 17.6M) because MHA uses four DxD projections while our
   key/query projections are small (DIN=8); this slightly favours us on memory. Small scale (17.6M) throughout.
+
+## SCALING AT 32k DOCUMENTS: 40M -> 1B, ours vs param-matched transformer (the decisive efficiency result)
+**FIRST, A BUG IN OUR OWN SETUP: chunk size was costing us 10x.** All session we used chunk=128. At 32768-token
+documents that is 256 sequential steps of tiny kernels -- terrible GPU utilization. Sweeping chunk size:
+| chunk | 40M s/step | ktok/s |   | 200M s/step | ktok/s |
+|-------|-----------|--------|---|-------------|--------|
+| 128 | 5.84 | 11.2 | | 11.65 | 2.8 |
+| 1024 | 0.75 | 87.8 | | **1.60** | **20.5** |
+| **2048** | **0.58** | **113.2** | | 1.66 | 19.8 |
+**Optimal chunk is 1024-2048, not 128.** (Gradient accumulation was NOT the issue -- tested, made no difference.)
+**DEFINITIVE (32768-token documents, optimal chunk, param-matched transformer with fused/flash attention):**
+| scale | params | OURS s/step | GiB | ktok/s | TF s/step | GiB | ktok/s | FASTER | LIGHTER |
+|-------|--------|-------------|-----|--------|-----------|-----|--------|--------|---------|
+| 40M | 40M | 0.58 | 3.64 | 113.5 | 0.81 | 29.06 | 80.7 | **1.41x** | **7.99x** |
+| 200M | 215M | 1.60 | 4.83 | 20.4 | 2.52 | 28.44 | 13.0 | **1.57x** | **5.89x** |
+| 400M | 437M | 2.93 | 9.11 | 11.2 | OOM | -- | -- | **transformer cannot run** |
+| 1B | 958M | 6.30 | 23.05 | 5.2 | OOM | -- | -- | **transformer cannot run** |
+- **We are FASTER (1.4-1.6x) AND LIGHTER (6-8x) than a param-matched transformer at 32k context**, and past ~400M the
+  transformer cannot train at 32k in our available ~45 GiB at all, while we train 1B in 23 GiB.
+- **Memory scales sub-linearly with growth**: 24x more parameters (40M -> 958M) costs only 6.3x memory
+  (3.64 -> 23.05 GiB), because memory is dominated by parameters/optimizer, never by context length.
+- Growth adds a further ~28% compute saving on the way up (measured earlier), so reaching 1B by GROWING rather than
+  training at target size should cost ~0.72x of these numbers.
+- CAVEATS: batch=1 for the big models (sharing the GPU with prod), so absolute ktok/s is pessimistic; the transformer
+  OOM is against our ~45 GiB of free memory, not a full 80 GiB card; ours has no MLP per layer (2*D^2) while the
+  transformer's is ~12*D^2, so at matched params ours is much deeper -- part of why we differ.
+- ACTION: switch all training to long documents with chunk 1024-2048. 128-token chunks were our worst case on BOTH
+  axes (10x slower, and it forfeits the long-context advantage entirely).
