@@ -14,7 +14,7 @@ _dynamo.config.recompile_limit=64          # 10 planned growth events legitimate
 import core as C, growth as G
 from data_mix import DataMix
 DEV=C.DEV
-DOC=32768; CH=2048; NCH=DOC//CH; B=int(os.environ.get("B","8")); DECAY=0.2   # measured optimum: 511 ktok/s
+DOC=32768; CH=2048; NCH=DOC//CH; B=int(os.environ.get("B","8")); DECAY=0.05  # measured optimum: 511 ktok/s
 LR=float(os.environ.get("LR","6e-4")); STEPS=int(os.environ.get("STEPS","100000"))
 D0,NL0=384,4                                            # infant
 TARGET_D,TARGET_NL=1024,16                              # ~235M at the end

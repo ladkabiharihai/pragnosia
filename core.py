@@ -37,7 +37,7 @@ class Layer(nn.Module):
         s.Wk=nn.Linear(cfg.D,cfg.DIN,bias=False); s.Wq=nn.Linear(cfg.D,cfg.DIN,bias=False)
         s.Wv=nn.Linear(cfg.D,cfg.DV,bias=False); s.Wo=nn.Linear(cfg.DV,cfg.D)
         s.m1=nn.Linear(cfg.D,mult*cfg.D); s.m2=nn.Linear(mult*cfg.D,cfg.D)
-    def forward(s,a,state=None):
+    def forward(s,a,state=None,wgate=None):
         """`state`=(M,zM): the PERSISTENT fast-weight memory carried from previous chunks. Reading it costs nothing
         extra and is what gives UNBOUNDED context at CONSTANT memory; carrying it during training is what teaches the
         model to use its own memory. The returned new state is detached (no cross-chunk backprop)."""
@@ -56,7 +56,15 @@ class Layer(nn.Module):
         a1=a+s.rs*o
         H2,n2=rmsnorm(a1); z=H2@s.m1.weight.T+s.m1.bias; g=F.gelu(z)
         a2=a1+s.rs*(g@s.m2.weight.T+s.m2.bias)
-        newM=torch.einsum('btf,btd->bfd',kf,v).detach(); newz=kf.sum(1).detach()
+        # SELECTIVE WRITING (VISION propose gate): `wgate` [B,T] weights each token's write into the PERSISTENT
+        # state. Every token writing means N tokens superimpose in a fixed state, so any one fact's share is ~1/N
+        # (measured: keeping all writes is actively harmful, -1.10 gain). Gating by salience multiplies the
+        # effective span at no extra state cost. wgate=None keeps the old behaviour (write everything).
+        if wgate is None:
+            newM=torch.einsum('btf,btd->bfd',kf,v).detach(); newz=kf.sum(1).detach()
+        else:
+            g=wgate.unsqueeze(-1)
+            newM=torch.einsum('btf,btd->bfd',kf*g,v).detach(); newz=(kf*g).sum(1).detach()
         if state is not None: newM=state[0]+newM; newz=state[1]+newz
         return a2, (H,nrm,Hs,xk,kf,xq,qf,v,A,num,den,r,a1,H2,n2,z,g,(newM,newz))
     def local_vjp(s,a,cache,dout):
@@ -86,11 +94,11 @@ class Core(nn.Module):
         super().__init__(); s.cfg=cfg; s.emb=nn.Embedding(cfg.vocab,cfg.D)
         s.layers=nn.ModuleList([Layer(cfg) for _ in range(cfg.NL)]); s.head=nn.Linear(cfg.D,cfg.vocab)
         nn.init.normal_(s.emb.weight,0,0.02)
-    def forward(s,X,states=None,return_states=False):
+    def forward(s,X,states=None,return_states=False,wgate=None):
         """states: list of per-layer (M,zM) carried from the previous chunk (persistent memory / long context)."""
         a=s.emb(X); ns=[]
         for i,L in enumerate(s.layers):
-            a,c=L(a,None if states is None else states[i]); ns.append(c[-1])
+            a,c=L(a,None if states is None else states[i],wgate=wgate); ns.append(c[-1])
         h,_=rmsnorm(a); lg=s.head(h)
         return (lg,ns) if return_states else lg
     def decay_states(s,states,d):

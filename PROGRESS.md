@@ -722,3 +722,31 @@ order of size:
   SATURATES. Honest reading: 1M context runs at constant cost, but the model stops extracting much beyond ~32k.
   This is the vision's own prediction ("finite state keeps the gist") measured for the first time.
 - Generation after 1M tokens: no degeneracy (rep4 0.00, distinct-1 0.82) but semantically incoherent -- 49M at 1.6B tokens.
+
+## WHY USEFULNESS STOPS BEYOND ~32k -- mechanism, and what actually fixes it (three tests, two negatives)
+MECHANISM: the read is answer = sum_s beta_s v_s / sum_s beta_s, so EVERY written token superimposes in a FIXED
+state (FE x DV). After N writes any one fact's share is ~1/N -- it is not deleted, it is DROWNED. Capacity is bounded
+by the STATE, not the context. Constant memory <=> bounded information; O(1) state cannot perfectly recall unbounded
+history (that would compress arbitrary data into fixed bits).
+**(a) DECAY SWEEP -- confirms the mechanism and gives a free win:**
+| decay | gain @8k | @32k | @131k | @524k | effective window |
+|-------|----------|------|-------|-------|------------------|
+| 1.00 (keep everything) | -0.5627 | **-1.1051** | -0.4355 | -0.4513 | unbounded |
+| 0.20 (what we trained) | -0.1055 | -0.0023 | +0.0353 | -0.0504 | ~2560 tok |
+| **0.05** | **+0.0126** | **+0.0328** | **+0.0520** | **+0.0226** | ~2156 tok |
+Keeping all writes is ACTIVELY HARMFUL (-1.10). Forgetting MORE helps at EVERY length. -> DECAY changed 0.2 -> 0.05.
+**(b) GROWING DV DOES NOT (immediately) EXTEND CONTEXT -- corrects my own claim.** DV 512 -> 1024 -> 2048 gave
+IDENTICAL gains to 4 decimals. Reason: function-preserving growth initializes new state dims to write NOTHING, so
+they are inert until TRAINED. The user's point ("growth should give more context capacity") is right in principle --
+DV does grow with D automatically -- but capacity only materializes through training AFTER the grow, and only ~2.7x
+by target, which will not turn 32k into 1M.
+**(c) SELECTIVE WRITING FAILED (my hypothesis, refuted).** Gating writes by the model's own surprise made it
+MONOTONICALLY WORSE: all writes +0.0520 @131k, top-25% +0.0310, top-10% +0.0189, top-3% +0.0078. Why: the model was
+TRAINED with every token writing, so its query projections expect a state built that way -- filtering at eval time is
+a distribution shift, not an improvement. It might help if TRAINED with the gate, but that is untested, so the gate
+is implemented (core.Layer wgate) and left OFF. Not shipping a mechanism on a hypothesis that just failed.
+**CONCLUSION -- what would really extend usable context:** not a bigger state (2.7x by target) and not eval-time
+gating (refuted). The vision's actual answer is CONSOLIDATION: what matters moves from the fast state into the
+WEIGHTS, which have far more capacity, and that is already proven (+6 nats, 30 local steps). 1M tokens at constant
+COST is measured and real (1.06 GiB, latency improving with length); what is bounded is how much stays USABLE, and
+weights -- not state -- are where unbounded history has to live.
