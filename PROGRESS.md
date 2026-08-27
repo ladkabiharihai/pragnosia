@@ -615,3 +615,27 @@ so there was almost no "brain" there at all. Small D with a 32K vocab is embeddi
   learning rule still applies unchanged.
 - growth.py updated: width-growth now rescales m1/m2 correctly under RMS-norm, and depth-growth zeroes BOTH residual
   branches (Wo AND m2) or a new layer would not be the identity. All four axes re-verified function-preserving.
+
+## PERFORMANCE: the real run was 8.8x slower than it should have been (found by the user pushing back)
+Every one of my configuration choices was wrong, and the biggest was one I had not even considered.
+| lever | before | after | gain |
+|-------|--------|-------|------|
+| **dtype** (I had NO autocast -- pure FP32 on an H100) | 96 ktok/s | 246 | **2.6x** |
+| **chunk** 1024 -> 2048 | 246 | 409 | 1.65x |
+| **doc** 8192 -> 32768 | 409 | 486 | 1.19x |
+| batch 4 -> 8 | 486 | 511 | 1.05x |
+| **torch.compile** | -- | -- | **1.58x** (measured at BOTH 31M and 235M) |
+| **TOTAL (live)** | **96 ktok/s** | **844 ktok/s** | **8.8x** |
+- bf16 VERIFIED SAFE before adopting: identical loss curves (4.368/4.339, 5.284/5.286, ...), held-out difference
+  **-0.0003**, 2.82x faster. Not just fast -- the same model.
+- POWER: the H100 NVL here is capped at **400 W** (power.limit = power.max_limit = 400 W) and we draw 395 W = 99%.
+  My earlier "398W of ~700W means there is headroom" was WRONG. torch.compile still wins because fusion does LESS
+  work (memory traffic), not because it fills idle time.
+- My defence of doc 8192 / chunk 1024 came from a benchmark run at batch=1 in fp32. Both assumptions were wrong at
+  the real batch size. Benchmark at the configuration you will actually use.
+- MEMORY AT TARGET verified: 235M at doc 32768 / chunk 2048 = 12.0 GiB (B=4) or 21.9 GiB (B=8). No scaling problem.
+## MLP-IN-GROWTH BUG (found by the user asking why the MLP was not in the logs)
+The MLP was present (15.2% of params) but width-growth kept the MLP HIDDEN dim FIXED while D grew, so the ratio
+collapsed 4.0x -> 2.4x -> would have been 1.5x at target, silently eroding the measured 1.17-nat MLP advantage as the
+model grew. Fixed: hidden now scales with D, ratio held at 4.00x through every grow, function-preservation intact
+(max|dOut| 3e-06), and the MLP width is now printed in the log line.

@@ -51,11 +51,16 @@ def grow_width(m,add):
             no.weight[:D]=L.Wo.weight*c; no.weight[D:]=0.0
             no.bias[:D]=L.Wo.bias*c; no.bias[D:]=0.0
             L.Wo=no
-            hid=L.m1.weight.shape[0]                                            # MLP: m1 READS the stream, m2 WRITES it
-            n1=nn.Linear(nD,hid).to(DEV)
-            n1.weight[:,:D]=L.m1.weight/c; n1.weight[:,D:]=_new_lin(add,hid,DEV); n1.bias.copy_(L.m1.bias)
-            n2=nn.Linear(hid,nD).to(DEV)
-            n2.weight[:D]=L.m2.weight*c; n2.weight[D:]=0.0
+            # MLP: m1 READS the stream, m2 WRITES it. The HIDDEN dim must grow with D or the MLP ratio collapses
+            # (4x -> 1.5x by the target) and the measured 1.17-nat MLP advantage erodes as the model grows.
+            hid=L.m1.weight.shape[0]; mult=getattr(cfg,'mlp_mult',4); nhid=mult*nD; addh=nhid-hid
+            n1=nn.Linear(nD,nhid).to(DEV)
+            n1.weight[:hid,:D]=L.m1.weight/c; n1.weight[:hid,D:]=_new_lin(add,hid,DEV)
+            if addh>0: n1.weight[hid:]=_new_lin(nD,addh,DEV)                   # new hidden units: random (they learn)
+            n1.bias[:hid]=L.m1.bias; n1.bias[hid:]=0.0
+            n2=nn.Linear(nhid,nD).to(DEV)
+            n2.weight[:D,:hid]=L.m2.weight*c; n2.weight[:D,hid:]=0.0           # new hidden units write NOTHING yet
+            n2.weight[D:]=0.0                                                   # new stream dims are not written yet
             n2.bias[:D]=L.m2.bias*c; n2.bias[D:]=0.0
             L.m1,L.m2=n1,n2
         nh=nn.Linear(nD,cfg.vocab).to(DEV)                                     # READS the normed stream -> /c
