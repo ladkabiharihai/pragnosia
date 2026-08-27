@@ -41,14 +41,20 @@ def grow_width(m,add):
     with torch.no_grad():
         ne=nn.Embedding(cfg.vocab,nD).to(DEV); ne.weight[:,:D]=m.emb.weight*c; ne.weight[:,D:]=0.0
         m.emb=ne
-        for L in m.layers:
-            for nm in ('Wk','Wq','Wv'):                                        # READ the (normed) stream -> /c, new cols random
+        nDV=cfg.DV+add                                                         # the VALUE/state dim must widen too, or
+        for L in m.layers:                                                      # the recurrent memory capacity freezes
+            for nm in ('Wk','Wq'):                                             # keys/queries: output dim is DIN (fixed)
                 old=getattr(L,nm); outf=old.weight.shape[0]
                 new=nn.Linear(nD,outf,bias=False).to(DEV)
                 new.weight[:,:D]=old.weight/c; new.weight[:,D:]=_new_lin(add,outf,DEV)
                 setattr(L,nm,new)
-            no=nn.Linear(L.Wo.weight.shape[1],nD).to(DEV)                      # WRITES the stream -> *c, new dims 0
-            no.weight[:D]=L.Wo.weight*c; no.weight[D:]=0.0
+            nv=nn.Linear(nD,nDV,bias=False).to(DEV)                            # Wv: wider input AND wider value space
+            nv.weight[:cfg.DV,:D]=L.Wv.weight/c; nv.weight[:cfg.DV,D:]=_new_lin(add,cfg.DV,DEV)
+            nv.weight[cfg.DV:]=_new_lin(nD,add,DEV)                            # new value dims (learn; written nowhere yet)
+            L.Wv=nv
+            no=nn.Linear(nDV,nD).to(DEV)                                       # WRITES the stream -> *c, new dims 0
+            no.weight[:D,:cfg.DV]=L.Wo.weight*c; no.weight[:D,cfg.DV:]=0.0      # new value dims contribute nothing yet
+            no.weight[D:]=0.0
             no.bias[:D]=L.Wo.bias*c; no.bias[D:]=0.0
             L.Wo=no
             # MLP: m1 READS the stream, m2 WRITES it. The HIDDEN dim must grow with D or the MLP ratio collapses
@@ -66,8 +72,8 @@ def grow_width(m,add):
         nh=nn.Linear(nD,cfg.vocab).to(DEV)                                     # READS the normed stream -> /c
         nh.weight[:,:D]=m.head.weight/c; nh.weight[:,D:]=0.0; nh.bias.copy_(m.head.bias)
         m.head=nh
-    cfg.D=nD
-    for L in m.layers: L.cfg=cfg
+    cfg.D=nD; cfg.DV=nDV
+    for L in m.layers: L.cfg=cfg; L.rs=cfg.res_scale
     return nD
 
 def grow_vocab(m,new_vocab):

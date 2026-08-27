@@ -639,3 +639,12 @@ The MLP was present (15.2% of params) but width-growth kept the MLP HIDDEN dim F
 collapsed 4.0x -> 2.4x -> would have been 1.5x at target, silently eroding the measured 1.17-nat MLP advantage as the
 model grew. Fixed: hidden now scales with D, ratio held at 4.00x through every grow, function-preservation intact
 (max|dOut| 3e-06), and the MLP width is now printed in the log line.
+
+## GROWTH BUG #2: the VALUE/STATE dim did not widen with D (found when a checkpoint failed to load)
+`grow_width` widened D but left DV (the recurrent value dim) fixed: after one grow, Wv was [384, 512] -- D=512,
+DV=384. So the model widens while its RECURRENT MEMORY CAPACITY (FE x DV) stays frozen, which directly undercuts the
+recall/memory claim. Same class of bug as the MLP-hidden one, and equally silent: training runs fine, the capability
+just never arrives. Fixed: D, DV and the MLP hidden dim now scale together, all four growth axes re-verified
+function-preserving. Checkpoints now record DV so a grown model can always be reconstructed.
+LESSON: whenever a dimension is derived from D at construction time, growth must scale it too. Verify by RELOADING a
+grown checkpoint, not just by checking dOut -- the load is what caught this.

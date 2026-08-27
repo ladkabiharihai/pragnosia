@@ -15,7 +15,7 @@ CKPT=sys.argv[1] if len(sys.argv)>1 else "/mnt/kv_cache/pragnosia_data/pragnosia
 CH=2048; DECAY=0.2
 def load():
     sd=torch.load(CKPT,map_location=DEV)
-    cfg=C.Config(D=sd['D'],DIN=8,DV=sd['D'],NL=sd['NL'],T=CH,res_scale=16**-0.5)
+    cfg=C.Config(D=sd['D'],DIN=8,DV=sd.get('DV',sd['D']),NL=sd['NL'],T=CH,res_scale=16**-0.5)
     m=C.Core(cfg).to(DEV); m.load_state_dict(sd['model']); m.eval()
     return m,cfg,sd['step'],sd.get('k',0)
 @torch.no_grad()

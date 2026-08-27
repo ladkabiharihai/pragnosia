@@ -39,7 +39,7 @@ def main():
     m=C.Core(cfg).to(DEV); k=0
     if os.path.exists(CKPT):
         sd=torch.load(CKPT,map_location=DEV)
-        cfg=C.Config(D=sd['D'],DIN=8,DV=sd['D'],NL=sd['NL'],T=CH,res_scale=TARGET_NL**-0.5)
+        cfg=C.Config(D=sd['D'],DIN=8,DV=sd.get('DV',sd['D']),NL=sd['NL'],T=CH,res_scale=TARGET_NL**-0.5)
         m=C.Core(cfg).to(DEV); m.load_state_dict(sd['model']); step=sd['step']; k=sd['k']
         print(f"RESUMED step {step}: D={cfg.D} NL={cfg.NL} ({sum(p.numel() for p in m.parameters())/1e6:.0f}M), grows done={k}",flush=True)
     opt=torch.optim.Adam(m.parameters(),lr=LR)
@@ -80,6 +80,6 @@ def main():
             tps=B*DOC*(it-step+1)/(time.time()-t0)
             bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} {P()/1e6:.0f}M {tps/1e3:.0f}ktok/s free={free:.0f}G")
         if (it+1)%2000==0:
-            torch.save({'model':m.state_dict(),'D':m.cfg.D,'NL':m.cfg.NL,'step':it+1,'k':k},CKPT)
-    torch.save({'model':m.state_dict(),'D':m.cfg.D,'NL':m.cfg.NL,'step':STEPS,'k':k},CKPT)
+            torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':it+1,'k':k},CKPT)
+    torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':STEPS,'k':k},CKPT)
 if __name__=="__main__": main()
