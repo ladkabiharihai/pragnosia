@@ -26,6 +26,10 @@ class TLM(nn.Module):
         super().__init__(); s.emb=nn.Embedding(V,d); s.pos=nn.Embedding(CH,d)
         s.bl=nn.ModuleList([Blk(d) for _ in range(nl)]); s.nf=nn.LayerNorm(d); s.head=nn.Linear(d,V,bias=False)
         s.head.weight=s.emb.weight                              # tied, like most small LMs
+        # BUG FIX: PyTorch's nn.Embedding defaults to N(0,1) -- 50x larger than the 0.02 our own Core uses. With the
+        # default, the positional embedding SWAMPS the token signal and the model stalls at the unigram floor
+        # (measured: dead flat at loss 7.47 from 0.29B to 0.52B tokens). Match Core's init so the comparison is fair.
+        nn.init.normal_(s.emb.weight,0,0.02); nn.init.normal_(s.pos.weight,0,0.02)
     def forward(s,X):
         x=s.emb(X)+s.pos(torch.arange(X.shape[1],device=X.device))[None]
         for b in s.bl: x=b(x)
@@ -39,7 +43,10 @@ if __name__=="__main__":
     dm=DataMix(ctx=CH+1,verbose=False,only='window2')
     # IDENTICAL fixed eval set to evaluate.py (same seed/procedure) so the numbers are directly comparable
     np.random.seed(1234); EV=[torch.tensor(dm.batch(4),device=DEV) for _ in range(12)]
-    opt=torch.optim.Adam(m.parameters(),lr=6e-4,betas=(0.9,0.95),weight_decay=0.1)
+    dec=[q for n,q in m.named_parameters() if q.dim()>=2]        # weight matrices get weight decay
+    nod=[q for n,q in m.named_parameters() if q.dim()<2]         # norms/biases do not (standard GPT practice)
+    opt=torch.optim.AdamW([{'params':dec,'weight_decay':0.1},{'params':nod,'weight_decay':0.0}],
+                          lr=6e-4,betas=(0.9,0.95))
     steps=int(TARGET_TOK/(CH*B*ACC)); warm=300
     def lr_at(i):
         if i<warm: return 6e-4*(i+1)/warm

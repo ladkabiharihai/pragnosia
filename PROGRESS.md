@@ -951,3 +951,31 @@ ablation exactly: the bands decline monotonically with recency (0.18, 0.085, 0.0
 generation had less time than the one before. If so, the 22 tok/param gate is FAR too permissive, and the fix is a
 much larger token budget per stage, not a different initialiser.
 LESSON (recurring): do not call a winner from a short run. My 1500-step reading inverted at 7000.
+
+## GROWTH PACE IS PART OF IT -- and the deeper cause is that growth ENTRENCHES the incumbent dims
+**(a) PACE TEST (exp/grow_pace.py).** Same final width (D=768), same total training (8000 steps), reached at
+different paces:
+| schedule | final loss | grown dims worth | seed dims worth |
+|----------|-----------|------------------|-----------------|
+| FAST 4x+128 (our real pace) | 4.3483 | +0.1020 | +7.5136 |
+| SLOW 2x+256 | **4.3178** | **+0.1576** | +7.4908 |
+Halving the pace gives BOTH a better loss and 55% more capacity recruited. So the 22 tok/param gate is too
+permissive -- but note the seed dims still carry ~7.5 either way, so pace alone does not close the gap.
+**(b) THE STRUCTURAL CAUSE: growth is SELF-ENTRENCHING.** grow_width preserves the function by writing ZERO into
+every new dim and scaling everything that WRITES the stream by c=sqrt(nD/D). That AMPLIFIES the incumbent dims at
+every single growth:
+| growth | D -> nD | c | cumulative old-dim gain |
+|--------|---------|---|------------------------|
+| 1 | 384 -> 512 | 1.1547 | 1.155x |
+| 3 | 512 -> 640 | 1.1180 | 1.291x |
+| 5 | 640 -> 768 | 1.0954 | 1.414x |
+| 7 | 768 -> 896 | 1.0801 | 1.528x |
+| 9 | 896 -> 1024 | 1.0690 | **1.633x** |
+So the seed dims have been scaled UP 1.63x cumulatively while every newcomer starts at zero. Measured stream RMS in
+the real model: **seed 26.1 vs newest 7.3 (3.6x)**. RMS-norm then divides by a norm the incumbents dominate, so each
+new generation fights a steeper gradient than the last -- which is exactly the monotonic decline the ablation found.
+**(c) THE MIRROR FIX (exp/mirror_growth.py), under test.** Invert which side starts at zero:
+  current: new dims WRITTEN zero, READ random  -> needs the c-amplification of old dims
+  mirror : new dims WRITTEN at MATCHED RMS, READ zero -> total RMS unchanged by construction, so NO amplification is
+           needed and the function is still exactly preserved (nothing reads them yet). Readers then learn to pick
+           up a signal that already exists, instead of writers having to manufacture one from nothing.
