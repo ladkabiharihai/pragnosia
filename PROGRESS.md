@@ -897,3 +897,29 @@ Six live animations (canvas + CSS), each one explaining a real mechanism rather 
 6. ROAD: today -> 235M (1 day) -> 1T words (2 months) -> a self.
 Every number on the page is a real measurement, and the honest scorecard includes both failures (cannot answer
 questions yet; cannot write a sentence yet) with the reason for each.
+
+## GROWTH IS ADDING DEAD WEIGHT -- the efficiency failure, measured (user's criticism, confirmed)
+User's argument: we are at MORE params (193M vs GPT-2-small 124M) and MORE data (24B vs 10B) yet WORSE quality
+(1.48 vs ~1.16 BPB) and worse generation -- so the efficiency claim has failed. Tested it directly. They are right.
+**ABLATION: zero each width band's OUTPUT weights (Wo, m2) and measure the damage.**
+| dims | when added | tokens since | damage if zeroed |
+|------|-----------|--------------|------------------|
+| 0-384 | original 31M seed | 24B | **+8.1337** |
+| 384-512 | growth #1 | 23.1B | +0.1824 |
+| 512-640 | growth #3 | 20.0B | +0.0849 |
+| 640-768 | growth #5 | 16.0B | +0.0396 |
+| 768-896 | growth #7 | 10.4B | +0.0184 |
+| 896-1024 | growth #9 (newest) | 2.6B | **+0.0011** |
+**ALL 640 grown dims together are worth 0.59 nats. The 384 seed dims are worth 8.13.**
+So ~84% of the parameters contribute 0.59 nats; the 16% seed carries the model. Residual-stream activity confirms
+it: RMS 26.1 in the seed dims vs 7.3 in the newest. The grown dims are ACTIVE but not IMPORTANT.
+**MECHANISM (growth.py grow_width).** Function-preserving growth zeroes everything that WRITES the new dims --
+`ne.weight[:,D:]=0`, `no.weight[D:]=0`, `n2.weight[D:]=0` -- while reading them with random weights. The new
+capacity therefore starts contributing exactly nothing, the model has already fit the data with the old dims, and
+there is almost no gradient pressure to recruit it. Preserving the function too well removes the reason to change it.
+Time helps but nowhere near enough: 23B tokens of training gets the oldest grown band to 0.18 nats, still **45x less
+than the seed dims beside it**. Each newer generation is worth roughly half the previous one.
+**HONEST VERDICT: the growth mechanism as implemented is a parameter-efficiency LOSS, not a win.** The intrinsic
+growth TRIGGER works (9 events, all earned 23-25 tok/param) -- what fails is what happens after the trigger fires.
+Candidate fixes, untested: (a) initialise new writers to small random instead of zero, accepting a loss spike in
+exchange for gradient signal; (b) a higher LR on newly added parameters only; (c) drop growth and train fixed-size.
