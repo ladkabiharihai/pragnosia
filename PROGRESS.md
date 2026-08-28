@@ -923,3 +923,31 @@ than the seed dims beside it**. Each newer generation is worth roughly half the 
 growth TRIGGER works (9 events, all earned 23-25 tok/param) -- what fails is what happens after the trigger fires.
 Candidate fixes, untested: (a) initialise new writers to small random instead of zero, accepting a loss spike in
 exchange for gradient signal; (b) a higher LR on newly added parameters only; (c) drop growth and train fixed-size.
+
+## FIXING GROWTH, attempt 1: MY PROPOSED FIX FAILED, and it changed the diagnosis
+Ablation had shown 84% of params contributing 0.59 nats. I blamed the INITIALISATION (grow_width writes zero into
+every new dim) and tested four strategies head to head: A zero (current), B small-random writes, C net2net
+copy+split, D zero + 10x LR on new params.
+SHORT run (1500 steps after growth) -- looked decisive for net2net:
+| strategy | new-dim load |
+|----------|--------------|
+| A zero (current) | -0.0016 |
+| B random write | -0.0002 |
+| C net2net copy+split | **+0.0470** |
+| D zero + 10x LR | +0.0058 |
+I reported "net2net wins decisively". **That was premature.** Running to 7000 steps reverses it:
+| steps after grow | zero (current) | net2net | net2net + 3x LR |
+|------------------|----------------|---------|-----------------|
+| 1500 | 4.7082 (-0.005) | 4.7113 (+0.058) | 4.7446 (+0.056) |
+| 3000 | 4.5469 (+0.022) | 4.5555 (+0.084) | 4.5977 (+0.074) |
+| 5000 | 4.4141 (+0.054) | 4.4208 (+0.104) | 4.4704 (+0.106) |
+| 7000 | **4.3088 (+0.095)** | 4.3353 (+0.115) | 4.3908 (+0.112) |
+**The current zero-init WINS on actual loss.** net2net recruits faster early but plateaus and never repays its
+growth-time spike. Crucially, zero-init's new-dim load CLIMBS STEADILY (-0.005 -> +0.022 -> +0.054 -> +0.095, still
+rising), so the capacity IS recruited -- the initialisation was never the bug.
+**REVISED DIAGNOSIS: the growth PACE is the defect, not the init.** In the real run each stage gets only ~22-27
+tok/param before the next growth adds more dims, so no generation ever finishes being recruited. That matches the
+ablation exactly: the bands decline monotonically with recency (0.18, 0.085, 0.040, 0.018, 0.001) -- each newer
+generation had less time than the one before. If so, the 22 tok/param gate is FAR too permissive, and the fix is a
+much larger token budget per stage, not a different initialiser.
+LESSON (recurring): do not call a winner from a short run. My 1500-step reading inverted at 7000.
