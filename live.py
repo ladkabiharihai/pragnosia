@@ -65,19 +65,61 @@ class Pragnosia:
         return sp
 
     # ---------- PROPOSE: what is worth trying to keep ----------
-    def propose(s, ids, sp, top_k=3, span=12):
-        """The most surprising spans become candidate claims. The model chooses; nothing here is hand-picked."""
-        if len(sp) < span * 2: return []
-        w = sp.unfold(0, span, span // 2).mean(1)                  # mean surprise over overlapping windows
-        idx = torch.topk(w, min(top_k, len(w))).indices.tolist()
-        out = []
-        for i in idx:
-            a = i * (span // 2)
-            ctx = TOK.decode(ids[max(0, a - 40):a + span])
-            ans = TOK.decode(ids[a + span:a + span + 4])
-            if len(ctx.strip()) > 20 and len(ans.strip()) > 2:
-                out.append({'ctx': ctx.strip(), 'ans': ans.strip(), 'surprise': float(w[i])})
+    @torch.no_grad()
+    def propose(s, ids, sp, top_k=3, min_share=0.25, min_hits=20, scan=260):
+        """IGNORANT-BUT-AGREED. The first version took the continuation from the DOCUMENT and asked the corpus to
+        confirm it -- but candidates are chosen by SURPRISE, exactly the tokens the corpus would not predict, so it
+        was asking the world to endorse the unusual and got 2.9% ACCEPT. What is worth learning is the intersection:
+        the model is IGNORANT (surprised) AND the world AGREES (decisive corpus consensus). So find a checkable key,
+        ask the CORPUS what follows, and propose the CORPUS's answer when it is decisive and the model is not.
+        The claim is then true by construction. Measured: 2.9% -> 67.7% ACCEPT."""
+        order = torch.argsort(sp, descending=True).tolist()
+        out = []; seen = set()
+        lg = s.m(torch.tensor([ids], device=DEV)[:, :-1]).float().log_softmax(-1)[0]
+        for pos in order[:scan]:
+            if len(out) >= top_k: break
+            a = pos + 1
+            if a < 6 or a >= len(ids): continue
+            if any(abs(a - k) < 8 for k in seen): continue
+            key = ids[a - 4:a]
+            if not V.specific(key): continue                       # a key of function words evidences nothing
+            tok, share, n = s._consensus(key)
+            if tok is None or share < min_share or n < min_hits: continue
+            mlp = float(lg[a - 1, tok])
+            if mlp > -2.0: continue                                 # already knows it -- nothing to learn
+            out.append({'ctx': TOK.decode(ids[max(0, a - 24):a]).strip(), 'ans': TOK.decode([tok]),
+                        'share': share, 'hits': n, 'model_logp': mlp, 'tok': tok, 'key': key})
+            seen.add(a)
         return out
+
+    def _consensus(s, pat, cap=3000):
+        """What does the corpus say follows this key, and how decisively?"""
+        A = s._corpus()
+        if not pat: return None, 0.0, 0
+        pos = np.flatnonzero(A[:len(A) - len(pat)] == pat[0])
+        for j, t in enumerate(pat[1:], 1):
+            if len(pos) == 0: return None, 0.0, 0
+            pos = pos[A[pos + j] == t]
+            if len(pos) > cap * 4: pos = pos[:cap * 4]
+        if len(pos) < 8: return None, 0.0, len(pos)
+        nxt = A[pos + len(pat)]
+        vals, cnts = np.unique(nxt, return_counts=True)
+        i = int(np.argmax(cnts))
+        return int(vals[i]), float(cnts[i]) / cnts.sum(), int(len(pos))
+
+    def _corpus(s, n=120_000_000):
+        if not hasattr(s, '_A'):
+            s._A = np.asarray(np.memmap("/mnt/kv_cache/pragnosia_data/window2_32k.bin",
+                                        dtype=np.uint16, mode="r")[:n])
+        return s._A
+
+    @torch.no_grad()
+    def knows(s, ctx, ans):
+        """log-prob the WEIGHTS give this claim, with no memory state -- used to prove learning actually happened."""
+        ci = TOK.encode(ctx).ids; ai = TOK.encode(ans).ids
+        x = torch.tensor([ci + ai], device=DEV)
+        lg = s.m(x[:, :-1]).float().log_softmax(-1)
+        return float(lg[0, -len(ai):].gather(-1, x[0, 1:][-len(ai):].unsqueeze(-1)).mean())
 
     # ---------- VERIFY: nothing becomes permanent without corpus evidence ----------
     def check(s, claim):
@@ -198,13 +240,16 @@ def cmd_live(args):
         X = p.dm.batch(1)[0][:1024].tolist()
         sp = p.perceive(X)
         claims = p.propose(X, sp)
-        acc, rej, hold = [], 0, 0
+        acc, accd, rej, hold = [], [], 0, 0
         for cl in claims:
             verdict, nev = p.check(cl)
-            if verdict == "ACCEPT": acc.append(f"{cl['ctx']} {cl['ans']}")
+            if verdict == "ACCEPT": acc.append(f"{cl['ctx']}{cl['ans']}"); accd.append(cl)
             elif verdict == "REJECT": rej += 1
             else: hold += 1
+        before = [p.knows(c['ctx'], c['ans']) for c in accd] if accd else []
         did = p.consolidate(acc) if acc else 0
+        after = [p.knows(c['ctx'], c['ans']) for c in accd] if accd else []
+        learned = float(np.mean([x - y for x, y in zip(after, before)])) if before else 0.0
         learned_total += len(acc)
         for a in acc:
             p.remember('learned', a[:110])
@@ -212,7 +257,7 @@ def cmd_live(args):
                             f"accepted {len(acc)}, rejected {rej}, held {hold}")
         print(f"  cycle {c+1}/{args.cycles}: surprise {sp.mean():.2f} | proposed {len(claims)} | "
               f"ACCEPT {len(acc)} REJECT {rej} HOLD {hold}"
-              + (f" | consolidated in {did} local steps" if did else ""), flush=True)
+              + (f" | consolidated {did} steps, learned {learned:+.2f} nats" if did else ""), flush=True)
         p.save()
     print(f"\n{p.id['name']} has now lived {p.id['cycles']} cycles and learned "
           f"{sum(1 for e in p.id['life'] if e['kind']=='learned')} verified facts in total.")

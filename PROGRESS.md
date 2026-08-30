@@ -1106,3 +1106,35 @@ because the trust-ratio step moves further when gradients agree), and it is NOT 
 ### RESTORED INDIVIDUAL
 Re-born from the undamaged substrate at lr=1e-4: after birth + 4 cycles the general loss is 4.2919 vs the
 substrate's 4.1982 (+0.094) -- against 8.23 for the first broken birth, i.e. **3.94 nats healthier**.
+
+## THE PROPOSER WAS ASKING THE WRONG QUESTION -- fixed, ACCEPT rate 2.9% -> 67.7%
+The live loop ran correctly but learned almost nothing: 12 proposals, zero ACCEPT. Two attempts to fix it:
+**Attempt 1 (checkable keys) made it WORSE: 2.9% -> 0.0%.** It did produce evidenceable claims (REJECT rose 3 -> 8,
+so the corpus could now judge them) but the answers were wrong.
+**The real flaw was the design, not the keys.** Both versions took the continuation FROM THE DOCUMENT and asked the
+corpus to confirm it -- while selecting candidates by SURPRISE, which is precisely the tokens the corpus would NOT
+predict. The two criteria were fighting: surprise selects novelty, verification accepts consensus, so the loop was
+asking the world to endorse the unusual.
+**THE FIX -- IGNORANT-BUT-AGREED.** What is worth learning is the intersection the old design could never reach:
+the model is IGNORANT (high surprise, model logP < -2) AND the world AGREES (corpus consensus >= 25% over >= 20
+occurrences). So find a checkable key, ask the CORPUS what follows, and propose the CORPUS's answer. The claim is
+then true by construction, and what gets consolidated is a real regularity the individual did not know.
+| proposer | ACCEPT rate |
+|----------|-------------|
+| original (document's answer, arbitrary span) | 2.9% |
+| checkable key, document's answer | 0.0% |
+| **ignorant-but-agreed (corpus's answer)** | **67.7%** |
+Examples accepted: `'post-World War II' -> ' era'` (corpus 29% of 35, model logP -7.3);
+`'have fashioned an acronym' -> ' for'` (corpus 45% of 88, model logP -7.6).
+### THE LIVING LOOP NOW LEARNS, AND PROVES IT
+live.py now measures the weights-only log-prob of each accepted claim BEFORE and AFTER consolidating, so a cycle
+reports what it actually learned rather than asserting it:
+```
+cycle 1: ACCEPT 2 REJECT 1 HOLD 0 | consolidated 40 steps, learned +2.10 nats
+cycle 2: ACCEPT 3 REJECT 0 HOLD 0 | consolidated 40 steps, learned +1.80 nats
+cycle 3: ACCEPT 0 REJECT 0 HOLD 3
+cycle 4: ACCEPT 3 REJECT 0 HOLD 0 | consolidated 40 steps, learned +1.54 nats
+```
+After 8 cycles and 8 verified facts: general loss 4.3140 vs the substrate's 4.2050 -- **+0.109 damage**, consistent
+with the saturating curve measured earlier, and the facts are persisted in the life-history so the same individual
+resumes with them.
