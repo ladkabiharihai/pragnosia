@@ -1071,3 +1071,38 @@ MEASURED COST (pure local plasticity, 700 steps, same seed, D=192x4L):
 | MLP trained (fixed) | **4.9427** |
 | **the bug was costing** | **0.3931 nats** |
 Fixed in lw_lib.py; every parameter in param_dict now receives a local gradient (verified 30/30 keys, all non-zero).
+
+## CONTINUAL LEARNING VALIDATED PROPERLY -- and two of my own bugs found on the way
+Wiring live.py exposed that consolidation was DESTROYING the individual: general loss 4.53 -> 8.34. Chased it down.
+**BUG 1 -- CONSOLIDATION LR WAS 30x TOO HIGH.** live.py used lr=3e-3, copied from a test on a far smaller model.
+The adaptive trust-ratio step is not as scale-free as assumed. Swept it (exp/consolidation_tune.py, 100 steps):
+| lr | fact gain | general damage |
+|----|-----------|----------------|
+| 3e-3 | +3.50 | **+3.3748  (destroyed)** |
+| 1e-3 | +4.21 | +1.5085 |
+| 3e-4 | +3.46 | +0.2775 |
+| **1e-4** | **+1.60** | **+0.0733** |
+**BUG 2 -- MY GENERAL EVAL WAS MOSTLY NOISE.** Every consolidation measurement used a 6x2x256 = 3072-token eval.
+Measuring the SAME untouched model on different samples of it gives **4.5196, 4.4218, 3.1576, 4.0621** -- a +-0.7 nat
+noise floor, ten times the effect I was trying to measure. A 122,880-token eval is stable (4.1982, 4.1392, 4.1809).
+Several "damage" numbers I reported earlier were measuring nothing. LESSON: establish the noise floor of an eval
+before drawing conclusions from differences smaller than it.
+### PROPERLY MEASURED (122,880-token PAIRED eval, lr=1e-4)
+One fact: **+4.238 nats of learning for +0.056 of general damage** -- a 76:1 trade, with the fast memory CLEARED so
+only the weights can answer.
+Ten facts learned in sequence (exp/accum_real.py):
+| facts | total damage | this fact's gain | ALL facts still known |
+|-------|-------------|------------------|----------------------|
+| 1 | +0.0401 | +1.348 | +1.348 |
+| 5 | +0.2703 | +3.384 | +2.635 |
+| 10 | +0.2731 | +2.426 | **+2.726** |
+**DAMAGE SATURATES** at ~0.25 nats after about five facts and stops growing (0.27, 0.24, 0.22, 0.33, 0.24, 0.27) --
+it is a one-time cost of entering a learning regime, not an erosion that compounds. And **old facts SURVIVE new
+learning**: retention RISES from +1.35 to +2.73 as more is taught. This is continual learning working, and it means
+the individual can go on learning indefinitely without losing itself.
+Also ruled out along the way: it is NOT gradient noise (damage GREW with bigger replay batches, 0.020 -> 0.102,
+because the trust-ratio step moves further when gradients agree), and it is NOT specific to local plasticity
+(backprop pure-replay also drifts, +0.094). It is the ordinary cost of moving a converged model at all.
+### RESTORED INDIVIDUAL
+Re-born from the undamaged substrate at lr=1e-4: after birth + 4 cycles the general loss is 4.2919 vs the
+substrate's 4.1982 (+0.094) -- against 8.23 for the first broken birth, i.e. **3.94 nats healthier**.

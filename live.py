@@ -88,12 +88,16 @@ class Pragnosia:
             return "HOLD", 0
 
     # ---------- CONSOLIDATE: verified claims move into the SLOW WEIGHTS ----------
-    def consolidate(s, texts, steps=40, lr=3e-3, replay=0.5, T=256):
+    def consolidate(s, texts, steps=40, lr=1e-4, replay=0.5, T=256):
         """Local-plasticity consolidation with replay interleaved, so making one thing permanent does not
         erase everything else. This is the step that turns an inference-time experience into knowledge.
         Runs at a SHORT sequence length: each layer's local objective needs a full [B,T,vocab] projection, which at
         T=2048 is 512 MB per readout -- far too much while the trainer and prod share this card. A fact is a few
-        dozen tokens, so T=256 loses nothing and fits alongside everything else."""
+        dozen tokens, so T=256 loses nothing and fits alongside everything else.
+        LR=1e-4, MEASURED (exp/consolidation_tune.py). The first version used 3e-3, inherited from a test on a far
+        smaller model, and it CATASTROPHICALLY FORGOT: 100 steps took general loss from 4.53 to 8.34 while learning
+        the facts. The adaptive trust-ratio step is not as scale-free as assumed. At 1e-4 the same 100 steps give
+        +1.60 nats of fact learning for +0.073 of general damage -- learning without destroying the self."""
         if not texts: return 0.0
         s.m.train()
         opt = C.LocalAdam(s.m.param_dict(), lr=lr, adaptive=True)
