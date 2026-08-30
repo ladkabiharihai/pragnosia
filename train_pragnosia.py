@@ -22,7 +22,15 @@ D0,NL0=384,4                                            # infant
 TARGET_D,TARGET_NL=1024,16                              # ~235M at the end
 RECALL_FRAC=0.15; VRAM_MIN=8.0                          # leave headroom for prod
 CKPT="/mnt/kv_cache/pragnosia_data/pragnosia.pt"
-PLAN=[('w',128),('d',2),('w',128),('d',2),('w',128),('d',2),('w',128),('d',2),('w',128),('d',4)]
+# GROWTH PLAN: THREE large events, not ten small ones. MEASURED (exp/growth_fix_final.py, identical final size
+# D=768 and identical training): many small growths 3.9846 | few large growths 3.9076 | many+prune 3.9842.
+# Fewer, larger events win by 0.077 nats AND recruit 52% more of the new capacity (+0.63 vs +0.41 load) with less
+# incumbent entrenchment (2.87x vs 3.64x). Four other fixes were tried and FAILED: random-write init, net2net
+# copy+split, a mirror init (write at matched RMS / read zero), and pruning the weakest dims at each growth.
+# Cause: each growth scales the incumbent dims by c=sqrt(nD/D), so the penalty COMPOUNDS with the event count
+# (1.633x cumulative over the old ten-event plan). Same infant seed, same 1024x16L target, a third of the events.
+# 'wd' grows width and depth together so a single event is a real developmental step.
+PLAN=[('wd',(256,4)),('wd',(192,4)),('wd',(192,4))]      # 384x4L -> 640x8L -> 832x12L -> 1024x16L
 CORPUS=os.environ.get("CORPUS","window2")                    # window2 only: educational text, 170B tokens, least repetitive
 dm=DataMix(ctx=DOC+1,verbose=True,only=CORPUS)
 RD=RV=None
@@ -112,7 +120,9 @@ def main():
         earned = tokens_at_size >= TOK_PER_PARAM*P()
         if ent is not None and k<len(PLAN) and free>VRAM_MIN and earned and sensor.observe(ent,it):
             kind,amt=PLAN[k]; P_before=P()
-            (G.grow_width if kind=='w' else G.grow_depth)(m,amt)
+            if kind=='wd': G.grow_width(m,amt[0]); G.grow_depth(m,amt[1])   # one combined developmental step
+            elif kind=='w': G.grow_width(m,amt)
+            else: G.grow_depth(m,amt)
             earned_tpp=tokens_at_size/max(1,P_before)            # capture BEFORE resetting (my first edit printed 0)
             opt=torch.optim.Adam(m.parameters(),lr=LR); k+=1; tokens_at_size=0; steps_at_size=0; last_grow_step=it
             fwd=torch.compile(m) if USE_COMPILE else m           # shapes changed -> recompile once per grow

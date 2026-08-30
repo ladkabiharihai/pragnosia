@@ -1011,3 +1011,31 @@ on this checkpoint:
 | 0.40 | -1.0127 |
 Fixed evaluate.py to match training: memory gain is **+0.0332**, the HIGHEST it has ever been (+0.0212 -> +0.0332).
 LESSON: when a config value changes in training, every evaluation that mirrors it must change too.
+
+## GROWTH FIX APPLIED: PLAN cut from 10 events to 3 (exp/growth_fix_final.py)
+Final three-way result, identical final size (D=768) and identical training (20k steps):
+| arm | loss | grown-dim load | entrenchment |
+|-----|------|----------------|--------------|
+| A many small growths (our pace) | 3.9846 | +0.4118 | 3.64x |
+| **B few large growths** | **3.9076** | **+0.6277** | **2.87x** |
+| C many + prune weakest 25% | 3.9842 | +0.2969 | 4.26x |
+**PRUNING DID NOTHING** (+0.0004 nats, inside noise) and made both sub-metrics WORSE -- less capacity recruited and
+MORE entrenchment. The biological argument (neurogenesis needs pruning) was appealing and wrong: re-initialising
+partly-trained dims destroys work and hands the incumbents more room.
+**FEWER, LARGER EVENTS is the only fix that worked**: +0.077 nats, 52% more capacity recruited, less entrenchment.
+Five fixes tested, four failed: random-write init, net2net copy+split, mirror init (write matched-RMS / read zero),
+prune-weakest. The survivor is pace, which matches the mechanism -- each growth scales incumbents by c=sqrt(nD/D),
+so the penalty COMPOUNDS with the EVENT COUNT (1.633x cumulative over the ten-event plan).
+NEW PLAN (same infant seed, same target, a third of the events; 'wd' grows width and depth in one step):
+```
+PLAN=[('wd',(256,4)),('wd',(192,4)),('wd',(192,4))]      # 384x4L -> 640x8L -> 832x12L -> 1024x16L
+```
+| stage | params | tokens @22/param |
+|-------|--------|------------------|
+| 384x4L | 31M | 0.68B |
+| 640x8L | 75M | 1.65B |
+| 832x12L | 138M | 3.03B |
+| 1024x16L | 235M | 5.18B |
+Reaches the SAME 1024x16L / 235M target in **10.5B tokens instead of 26.3B**. The intrinsic saturation trigger and
+the 22 tok/param earned-token gate are unchanged -- only the number of events. The live run is NOT affected (its 10
+growths are already complete); this takes effect on the next run from the infant seed.
