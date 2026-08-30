@@ -979,3 +979,35 @@ new generation fights a steeper gradient than the last -- which is exactly the m
   mirror : new dims WRITTEN at MATCHED RMS, READ zero -> total RMS unchanged by construction, so NO amplification is
            needed and the function is still exactly preserved (nothing reads them yet). Readers then learn to pick
            up a signal that already exists, instead of writers having to manufacture one from nothing.
+
+## 235M / 66B TOKENS: growth plan COMPLETE. Coherence + emergence probed (exp/emergence.py)
+All 10 planned growths done (#10 at step 101201, 193M -> 235M, earned 23 tok/param). The model is now OVERTRAINING
+at the target size: 144 tok/param and climbing. Fixed-eval loss 4.3538 (ppl 77.8), down from 96.0 at 193M.
+**BITS PER BYTE 1.4812 -> 1.4255** (GPT-2 small ~1.16).
+### WHAT HAS EMERGED (all far above chance)
+| capability | result | chance |
+|-----------|--------|--------|
+| **FACTUAL knowledge** | **80% correct** | 50% |
+| COPYING (replay a novel sequence) | 9.0% | 0.003% |
+| INDUCTION ([A][B]...[A]->[B] on random tokens) | 1.5% | 0.003% |
+| FEW-SHOT (numeric pattern 1,2,3 -> 4->5) | 1 of 3 | -- |
+The factual result is the notable one: it scores "The capital of France is Paris" above "...Tokyo", "Water is made
+of hydrogen and oxygen" above "iron and gold", "A dog is an animal" above "a vegetable" -- real world knowledge at
+235M/66B, even though free generation is still incoherent. Induction at 500x chance and copying at 3000x chance mean
+the retrieval CIRCUITS exist but are weak; that matches recall reading 0% on natural text while the synthetic
+key-value task scores 92-100%.
+### COHERENCE IS STILL THE GAP
+Greedy decoding still collapses into loops (' at at at', ' of of of'), though it now produces real structure from
+the data ("Question: Who is") rather than noise. Sampled text has grammatical fragments with no semantics.
+### MEMORY GAIN WAS AN EVAL BUG, NOT A REGRESSION
+evaluate.py reported -0.0157 and I nearly recorded a regression in a core vision claim. Cause: evaluate.py still had
+DECAY=0.2 after training moved to 0.05, decaying the memory 4x faster than the model was trained for. Sweeping decay
+on this checkpoint:
+| decay | memory gain |
+|-------|-------------|
+| 0.02 | +0.0186 |
+| **0.05 (trained)** | **+0.0314** |
+| 0.15 | -0.4097 |
+| 0.40 | -1.0127 |
+Fixed evaluate.py to match training: memory gain is **+0.0332**, the HIGHEST it has ever been (+0.0212 -> +0.0332).
+LESSON: when a config value changes in training, every evaluation that mirrors it must change too.

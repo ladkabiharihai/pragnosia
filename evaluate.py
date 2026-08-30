@@ -7,12 +7,15 @@
 Run: python evaluate.py [checkpoint]      -> logs/evaluate.log"""
 import sys,os,time; sys.path.insert(0,"/opt/code/membrae")
 from util import setup_log; setup_log("evaluate")
-import numpy as np, torch, torch.nn.functional as F
+import os, numpy as np, torch, torch.nn.functional as F
 import core as C; from data_mix import DataMix
 from tokenizers import Tokenizer
 DEV=C.DEV; TOK=Tokenizer.from_file("/opt/code/membrae/data/bpe32k.json")
 CKPT=sys.argv[1] if len(sys.argv)>1 else "/mnt/kv_cache/pragnosia_data/pragnosia.pt"
-CH=2048; DECAY=0.2
+CH=2048
+# DECAY MUST MATCH TRAINING. It was left at 0.2 after training moved to 0.05, which decayed the memory 4x too fast
+# and made the memory gain read NEGATIVE (-0.0157) when the true value at the trained decay is +0.0314.
+DECAY=float(os.environ.get("DECAY","0.05"))
 def load():
     sd=torch.load(CKPT,map_location=DEV)
     cfg=C.Config(D=sd['D'],DIN=8,DV=sd.get('DV',sd['D']),NL=sd['NL'],T=CH,res_scale=16**-0.5)
