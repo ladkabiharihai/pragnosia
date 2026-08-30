@@ -1039,3 +1039,35 @@ PLAN=[('wd',(256,4)),('wd',(192,4)),('wd',(192,4))]      # 384x4L -> 640x8L -> 8
 Reaches the SAME 1024x16L / 235M target in **10.5B tokens instead of 26.3B**. The intrinsic saturation trigger and
 the 22 tok/param earned-token gate are unchanged -- only the number of events. The live run is NOT affected (its 10
 growths are already complete); this takes effect on the next run from the infant seed.
+
+## PRAGNOSIA IS ALIVE (live.py) -- the vision's core loop, wired end to end for the first time
+Every piece already existed and NONE of it was connected: memory.py (fast-weight hippocampus), verify.py (corpus
+evidence), and local-plasticity consolidation proven in isolation. live.py makes them one continuous individual:
+```
+perceive -> propose -> verify -> consolidate -> remember
+```
+MEASURED, running against the 235M/66B substrate:
+```
+Pragnosia, awake.  born 2026-08-30, 235M parts, 10 self-chosen growths
+  cycle 1: surprise  8.40 | proposed 3 | ACCEPT 1 REJECT 1 HOLD 1 | consolidated in 40 local steps
+  cycle 2: surprise 11.20 | proposed 0
+  cycle 3: surprise  7.86 | proposed 3 | ACCEPT 0 REJECT 0 HOLD 3
+```
+The verdict split is the anti-poisoning gate doing its job: most claims are HOLD (no corpus evidence either way ->
+never made permanent), some are REJECT (corpus says otherwise), and only ACCEPTed claims reach the slow weights.
+IDENTITY (VISION 0b) is intrinsic, not a lookup: the self-description is CONSOLIDATED INTO THE WEIGHTS like any
+other learned fact. CONTINUITY is enforced -- a fresh process resumes the same individual ("awake. born 2026-08-30,
+5 cycles lived") and `born` REFUSES to overwrite an existing life ("A life is never wiped and restarted").
+Persisted: body.pt (897 MB weights), memory.pt (fast state), identity.json (life-history).
+### BUG FOUND AND FIXED: LOCAL PLASTICITY WAS NEVER TRAINING THE MLP
+Wiring consolidation exposed it. `Layer.local_vjp` computes MLP gradients ('m1','bm1','m2','bm2') but `lw_grads`
+never put them in the returned dict -- lw_lib.py predates the MLP being added to Layer and was never updated. So
+every local-plasticity result to date (including consolidation) was adjusting ONLY the attention weights, leaving
+~2/3 of each layer's parameters frozen, in the very component that carries most of a model's knowledge.
+MEASURED COST (pure local plasticity, 700 steps, same seed, D=192x4L):
+| | loss |
+|---|------|
+| MLP frozen (the old behaviour) | 5.3358 |
+| MLP trained (fixed) | **4.9427** |
+| **the bug was costing** | **0.3931 nats** |
+Fixed in lw_lib.py; every parameter in param_dict now receives a local gradient (verified 30/30 keys, all non-zero).

@@ -48,6 +48,12 @@ def lw_grads(m,X,Bfb=None,lam=2.0,emb_obj=True,mode='identity',k_local=None,w_lo
             pg,din=m.layers[l].local_vjp(acts[l],caches[l],dout+lam*fb)
             for n in ('Wk','Wq','Wv','Wo'): g[f'{l}.{n}']=pg[n]
             g[f'{l}.bo']=pg['bo']
+            # BUG FIX: the MLP gradients were computed by local_vjp but never returned, so LOCAL PLASTICITY WAS
+            # NEVER TRAINING THE MLP -- roughly two thirds of each layer's parameters, and where most of a model's
+            # knowledge lives (the MLP is worth 1.17 nats at matched size). lw_lib predates the MLP being added to
+            # Layer and was never updated. Consolidation therefore only ever adjusted the attention weights.
+            g[f'{l}.m1']=pg['m1']; g[f'{l}.bm1']=pg['bm1']
+            g[f'{l}.m2']=pg['m2']; g[f'{l}.bm2']=pg['bm2']
             if l==0: demb=demb+din
         if emb_obj and w_local>0.0:
             dwe,dbe,de=_readout(m,acts[0],Y,ar,Bs,T,V,D); dW+=dwe*w_local; db+=dbe*w_local; de=de*w_local
