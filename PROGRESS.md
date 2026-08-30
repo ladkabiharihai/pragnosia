@@ -1171,3 +1171,29 @@ STRUCTURE with no semantics). So the honest split is: the LOOPING was our measur
 SEMANTIC gap is real and is the training-token problem.
 evaluate.py now reports an IN-DISTRIBUTION generation line (continue real text with the state built from it), so
 generation quality is never again judged from the worst-case regime.
+
+## THE EVAL WAS MEASURING THE WRONG CORPUS -- every headline number understated the model by 0.50 nats
+Chasing the user's "something is wrong with generation" found a second measurement bug. exp/context_use.py showed
+mid-chunk loss around 3.07 while the eval's headline said 4.35 -- too large a gap to be position effects.
+CAUSE: evaluate.py called `DataMix(ctx=32769)` with NO corpus filter, so it measured on the FULL 11-corpus mix,
+while training has used **window2 only** since the restart. The eval was scoring the model on math and code it no
+longer sees. Same class of bug as the DECAY mismatch: a training config changed and its mirror in the eval did not.
+| measured on | loss | ppl |
+|-------------|------|-----|
+| **window2 (what we train on)** | **3.8461** | **46.8** |
+| full mix (what the eval reported) | 4.3489 | 77.4 |
+Fixed: evaluate.py now takes CORPUS from the environment and defaults to window2, matching the trainer.
+NOTE: **bits-per-byte was already measured in-distribution** (exp/emergence.py used only='window2'), so BPB 1.4255
+stands unchanged and the gap to GPT-2 small (~1.16) is real. What was wrong is the loss/ppl headline, not BPB.
+## THE MODEL STRONGLY USES ITS CONTEXT (exp/context_use.py)
+Tested whether it merely predicts from local statistics -- which would look identical to "no semantics":
+| context preceding the same 128 target tokens | loss |
+|----------------------------------------------|------|
+| real | 3.1140 |
+| **SHUFFLED** | **8.2379  (+5.12)** |
+| a DIFFERENT document's | 3.7837 (+0.67) |
+| none at all | 3.4912 (+0.38) |
+Shuffling the context costs **+5.12 nats**. The model is deeply context-dependent, not a unigram parrot. Loss also
+falls as context accumulates within a chunk (4.86 at positions 0-16 -> 3.07 at 256-1024).
+And the training-vs-eval gap is explained: chunk 0 with no memory 3.3312 vs chunk 3 with carried memory 3.0169 --
+the eval's regime is **+0.31 nats worse** than the one the model actually runs in.

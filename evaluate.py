@@ -49,7 +49,11 @@ def main():
     m,cfg,step,k=load()
     P=sum(p.numel() for p in m.parameters())
     print(f"\n=== PRAGNOSIA @ step {step} | D={cfg.D}x{cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} | {P/1e6:.0f}M params | {k} grows ===",flush=True)
-    dm=DataMix(ctx=32769,verbose=False)
+    # CORPUS MUST MATCH TRAINING. This read the FULL 11-corpus mix while training has used window2 ONLY since the
+    # restart, so every headline loss was measured OUT OF DISTRIBUTION (math/code the model no longer sees). Same
+    # class of bug as the DECAY mismatch: a training config changed and its mirror in the eval did not.
+    CORPUS=os.environ.get("CORPUS","window2")
+    dm=DataMix(ctx=32769,verbose=False,only=CORPUS)
     # FIXED eval set (seeded): the same documents every time, so numbers are COMPARABLE across checkpoints.
     # Random batches made the same checkpoint score 4.32 and 4.95 -- useless for tracking progress.
     np.random.seed(1234); torch.manual_seed(1234)
