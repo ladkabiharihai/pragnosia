@@ -33,7 +33,9 @@ def gen(m,ids,n=40,temp=0.0,states=None):
     x=torch.tensor([ids],device=DEV)
     if states is None: states=[(torch.zeros(1,m.cfg.FE,m.cfg.DV,device=DEV),torch.zeros(1,m.cfg.FE,device=DEV)) for _ in range(m.cfg.NL)]
     with torch.autocast("cuda",dtype=torch.bfloat16):
-        st,pv=m.prefill(x,states)
+        # prefill everything EXCEPT the last token: prefill(x) then step(x[:,-1:]) processed it TWICE, writing it
+        # into the state twice and corrupting the first prediction (mean logit error 3.8e-01, 2.9% argmax flips).
+        st,pv=(m.prefill(x[:,:-1],states) if x.shape[1]>1 else (states,None))
     out=[]; cur=x[:,-1:]
     for _ in range(n):
         with torch.autocast("cuda",dtype=torch.bfloat16):

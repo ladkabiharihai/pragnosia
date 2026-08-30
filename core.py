@@ -126,6 +126,37 @@ class Core(nn.Module):
             ns.append((M,z)); npv.append(H[:,0])
         h,_=rmsnorm(a); return s.head(h)[:,0], ns, npv
     @torch.no_grad()
+    def generate(s,ids,n=40,temp=1.0,states=None,top_p=1.0,greedy=False):
+        """CORRECT generation. Use this instead of calling prefill/step by hand.
+
+        THE BUG THIS EXISTS TO PREVENT: every call site wrote `prefill(x)` then `cur=x[:,-1:]` and stepped, which
+        processes the LAST PROMPT TOKEN TWICE -- once inside prefill and again as the first step. That writes it
+        into the recurrent state twice and corrupts the first prediction. Measured against the full forward:
+        double-counted gives mean |logit diff| 3.8e-01 and flips the argmax on 2.9% of tokens; done correctly it is
+        6.5e-05 with 0% flips, i.e. exact. Prefill everything EXCEPT the last token, then step the last token.
+
+        Also note GREEDY is a poor decoder here: this model's top-1 is often ~0.09, and argmax on a flat
+        distribution picks an arbitrary peak that then locks in at 0.95+ and repeats forever."""
+        import torch as _t
+        x=_t.tensor([ids],device=s.emb.weight.device) if not _t.is_tensor(ids) else ids
+        if states is None:
+            states=[(_t.zeros(x.shape[0],s.cfg.FE,s.cfg.DV,device=x.device),
+                     _t.zeros(x.shape[0],s.cfg.FE,device=x.device)) for _ in range(s.cfg.NL)]
+        st,pv=(s.prefill(x[:,:-1],states) if x.shape[1]>1 else (states,None))
+        out=[]; cur=x[:,-1:]
+        for _ in range(n):
+            lg,st,pv=s.step(cur,st,pv)
+            lg=lg[0].float()
+            if greedy: nx=int(lg.argmax())
+            else:
+                p=(lg/temp).softmax(-1)
+                if top_p<1.0:
+                    sp,si=_t.sort(p,descending=True); keep=(sp.cumsum(0)-sp)<top_p
+                    p=_t.zeros_like(p).scatter_(0,si[keep],sp[keep]); p=p/p.sum()
+                nx=int(_t.multinomial(p,1))
+            out.append(nx); cur=_t.tensor([[nx]],device=x.device)
+        return out,st
+    @torch.no_grad()
     def prefill(s,X,states=None):
         """process a prompt/context in one parallel pass, returning the state and prev needed by step()."""
         a=s.emb(X); ns=[]; npv=[]

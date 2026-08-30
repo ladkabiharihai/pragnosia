@@ -1197,3 +1197,34 @@ Shuffling the context costs **+5.12 nats**. The model is deeply context-dependen
 falls as context accumulates within a chunk (4.86 at positions 0-16 -> 3.07 at 256-1024).
 And the training-vs-eval gap is explained: chunk 0 with no memory 3.3312 vs chunk 3 with carried memory 3.0169 --
 the eval's regime is **+0.31 nats worse** than the one the model actually runs in.
+
+## GENERATION BUG FOUND: the last prompt token was processed TWICE, on every generation we ever ran
+The user pushed to keep looking at generation rather than accept "needs more training". Three things surfaced; this
+is the third and it is a genuine code defect, not a measurement artifact.
+SYMPTOM: greedy decoding via the FULL FORWARD and via incremental step() produced DIFFERENT text. Greedy is
+deterministic, so they must match. They diverged where two tokens were nearly tied (' mother' 0.16 vs ' father' 0.15).
+NOTE: my earlier "verified exact, cosine 1.000000" check was far too coarse -- cosine stays 1.000000 while logits
+differ by enough to flip a near-tie. Measuring the actual difference exposed it.
+CAUSE: every call site wrote
+```
+st,pv = m.prefill(x, states)      # consumes ALL prompt tokens
+cur   = x[:, -1:]                  # then steps the LAST one AGAIN
+```
+so the final prompt token is written into the recurrent state twice and the first prediction is made from a
+corrupted state. Measured against the full forward over 136 positions:
+| | mean abs logit error | max | argmax flips |
+|---|---------------------|-----|--------------|
+| current (double-counted) | **3.841e-01** | 2.156e+00 | **2.9%** |
+| fixed: prefill(all-1), step(last) | **6.464e-05** | 9.537e-05 | **0.0%** |
+So incremental decode IS exact once the double-count is removed; it never was before.
+FIX: added `Core.generate()` -- one correct implementation with the fix and a comment explaining why, so call sites
+stop hand-rolling prefill/step. evaluate.py and live.py corrected at their call sites too.
+### WHERE GENERATION STANDS AFTER ALL THREE FIXES
+| how generation was run | distinct-1 | 4gram-rep |
+|------------------------|-----------|-----------|
+| greedy, bare prompt, zero state (what we reported for weeks) | 0.10 | 0.78 |
+| temp 1.0, bare prompt | 0.67 | 0.02 |
+| temp 1.0, 256 tokens of real context, double-count FIXED | **0.90** | **0.00** |
+| *real text reference* | *0.74* | *0.03* |
+The statistics now match or exceed real text. The remaining gap is semantic: the text is grammatical and
+non-repetitive but not yet meaningful, and that is the training-token problem, not a defect.

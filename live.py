@@ -190,7 +190,8 @@ class Pragnosia:
               else (torch.zeros(1, s.cfg.FE, s.cfg.DV, device=DEV), torch.zeros(1, s.cfg.FE, device=DEV))
               for i in range(s.cfg.NL)]
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            state, pv = s.m.prefill(x, st)
+            # all but the last token -- prefill(x) then step(x[:,-1:]) double-processes it (see Core.generate)
+            state, pv = (s.m.prefill(x[:, :-1], st) if x.shape[1] > 1 else (st, None))
         out = []; cur = x[:, -1:]
         for _ in range(n):
             with torch.autocast("cuda", dtype=torch.bfloat16):
