@@ -1228,3 +1228,23 @@ stop hand-rolling prefill/step. evaluate.py and live.py corrected at their call 
 | *real text reference* | *0.74* | *0.03* |
 The statistics now match or exceed real text. The remaining gap is semantic: the text is grammatical and
 non-repetitive but not yet meaningful, and that is the training-token problem, not a defect.
+
+## THE MODEL HAS SATURATED AT 235M -- and PLAN is blocking the vision's own answer
+Fixed-eval loss moved 3.8461 -> 3.8439 across 4.7B tokens; training loss just bounces 3.72-3.91 with no trend.
+Suspected the LR: the per-stage schedule decays to 10% of peak by the end of a growth stage, and PLAN is EXHAUSTED
+(10/10), so the rate has sat at its 6e-5 floor with no next stage to warm up for. Tested it (exp/plateau.py,
+400 steps from the checkpoint at each rate, 122,880-token paired eval):
+| learning rate | loss after | change |
+|---------------|-----------|--------|
+| **6e-5 (current)** | **3.9356** | **-0.0153** |
+| 2e-4 | 4.0086 | +0.0577 |
+| 6e-4 | 4.2113 | +0.2603 |
+| 2e-3 | 4.6110 | +0.6601 |
+**NOT LR-starved.** Every higher rate is worse; the current one is already optimal. (My script first printed
+"LR-STARVED" because 6e-5 scored best -- but 6e-5 IS the current rate, so that means the opposite. Verdict logic
+corrected. The small gain at 6e-5 is also confounded: the test trains and evaluates at CH=1024 while the run uses
+2048, so part of it is specialisation to the shorter context.)
+So 235M is near its ceiling on window2. **The vision's answer to saturation is to GROW** (0d: grow as needed,
+unbounded) -- and PLAN caps this individual at 235M, so the saturation signal has nothing to trigger. The growth
+machinery is fine; the plan is the constraint. This also revises the coherence timeline I gave: those estimates
+assumed continued improvement at the historical rate, and the model is currently flat.
