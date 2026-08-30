@@ -1138,3 +1138,36 @@ cycle 4: ACCEPT 3 REJECT 0 HOLD 0 | consolidated 40 steps, learned +1.54 nats
 After 8 cycles and 8 verified facts: general loss 4.3140 vs the substrate's 4.2050 -- **+0.109 damage**, consistent
 with the saturating curve measured earlier, and the facts are persisted in the life-history so the same individual
 resumes with them.
+
+## GENERATION WAS BROKEN BY HOW WE RAN IT, not by the model (user's intuition, confirmed)
+The numbers did not fit together: 80% on factual pairs, ppl 43, 26.9% exact next-token accuracy on real text -- yet
+greedy decoding produced ' at at at at'. Diagnosed it (exp/gen_debug.py, exp/decode_fix.py, exp/ood_gen.py).
+**NOT a self-feedback loop.** FREEZING the recurrent state during generation gives the SAME collapse, so it is not
+the model feeding on its own writes (the architecture-specific suspect).
+**NOT a prediction failure.** Teacher-forced on real text the model repeats its previous prediction only **5.0%** of
+positions and reaches 26.9% next-token accuracy. Free-running is what breaks, not prediction.
+**THE MECHANISM -- greedy on a FLAT distribution.** Watching the probabilities collapse:
+```
+step 4: ' of':0.09  ' Linda':0.06  ' Nor':0.06   <- nearly flat, top-1 only 0.09
+step 5: ' of':0.92                                <- locked in
+step 6: ' of':0.97
+```
+At a flat distribution greedy picks an arbitrary tiny peak, which then self-reinforces to 0.95+ and repeats forever.
+**TWO COMPOUNDING MISTAKES, both mine:**
+| how we generated | distinct-1 | 4gram-rep |
+|------------------|-----------|-----------|
+| greedy, bare prompt, zero state | **0.10** | **0.78** |
+| greedy + repetition penalty 1.3 | 0.19 | 0.69 |
+| temp 1.0, bare prompt | 0.67 | 0.02 |
+| temp 0.9 + **256 tokens of real context** | **0.77** | **0.00** |
+| *real text reference* | *0.74* | *0.03* |
+1. GREEDY is the worst possible decoder for a model whose top-1 is often 0.09.
+2. Generating from a 6-token prompt with a ZERO state is far OUT OF DISTRIBUTION -- in training every chunk carries
+   2048 tokens and a populated memory. The model had essentially never been in that condition.
+Run in distribution, the output statistics **match real text exactly** (0.77/0.00 vs 0.74/0.03).
+**WHAT REMAINS.** Fixing the decoder does not create meaning: the text is now diverse and grammatical but still
+semantically empty ("Adam is the mother of Jane... Question: Who is Iris to Michael? Answer:" is correct document
+STRUCTURE with no semantics). So the honest split is: the LOOPING was our measurement error and is fixed; the
+SEMANTIC gap is real and is the training-token problem.
+evaluate.py now reports an IN-DISTRIBUTION generation line (continue real text with the state built from it), so
+generation quality is never again judged from the worst-case regime.
