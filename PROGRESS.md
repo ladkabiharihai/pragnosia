@@ -1248,3 +1248,36 @@ So 235M is near its ceiling on window2. **The vision's answer to saturation is t
 unbounded) -- and PLAN caps this individual at 235M, so the saturation signal has nothing to trigger. The growth
 machinery is fine; the plan is the constraint. This also revises the coherence timeline I gave: those estimates
 assumed continued improvement at the historical rate, and the model is currently flat.
+
+## THE RETRIEVAL BOTTLENECK: DIN never grew with the model (user's "params are enough, something is wrong")
+The user pushed back on "it needs more tokens": 235M should be enough for coherence, since GPT-2 small is 124M and
+coherent. They were right that something else is wrong.
+**DIN has been 8 since the infant, and grow_width deliberately keeps it there** ("keys/queries: output dim is DIN
+(fixed)"). DIN is the width of the key/query projection, and the Taylor map turns it into FE = 1 + DIN +
+DIN(DIN+1)/2 features through which EVERY key-query association in the entire model must pass.
+| stage | D | DIN | FE | D/FE |
+|-------|---|-----|----|----- |
+| infant | 384 | 8 | 45 | 8.5 |
+| current | **1024** | **8** | **45** | **22.8** |
+The model grew 2.7x in width and its retrieval space never grew AT ALL. A transformer at D=1024 has 1024 dimensions
+of attention; we have 45.
+**MEASURED (exp/din_bottleneck.py, exp/din_scaling.py) -- and the penalty GROWS with width:**
+| D | DIN=8 | DIN=16 | DIN=32 | gain 8->32 |
+|---|-------|--------|--------|-----------|
+| 384 | 4.9323 | 4.8585 | 4.7994 | **+0.133** |
+| 768 | 5.6163 | 5.4902 | 5.4199 | **+0.196** |
+So the wider the model, the more it is strangled by a fixed retrieval space -- exactly the regime the 235M model
+plateaued in. DIN costs almost NO PARAMETERS (Wk,Wq are D x DIN); it costs state size and attention compute.
+**FIX:** added `growth.grow_din()`, verified EXACTLY function-preserving (max logit change 0.000e+00 -- new key/query
+dims are zero, so their linear Taylor features and every cross term are zero). PLAN now grows retrieval alongside
+width and depth:
+```
+PLAN=[('wdi',(256,4,4)),('wdi',(192,4,4)),('wdi',(192,4,8))]   # 384x4L/DIN8 -> ... -> 1024x16L/DIN24
+```
+ending at D/FE = 3.2 instead of 22.8. State at the target is 1.27 MiB/layer x 16 = 20 MiB, so unbounded context at
+constant cost is unaffected.
+**HONEST LIMIT:** retrofitting the LIVE 235M model was INCONCLUSIVE (exp/din_retrofit.py). All arms degraded by the
+same +0.064 because the test ran at CH=512 while the model trained at 2048 -- the context mismatch dominates -- and
+0.3M tokens is nowhere near enough for zero-initialised capacity to be recruited (measured elsewhere to take
+billions). The from-scratch sweep is the reliable evidence; whether the existing individual can be repaired in place
+needs real training time, not a 10-minute probe.

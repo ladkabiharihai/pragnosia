@@ -76,6 +76,33 @@ def grow_width(m,add):
     for L in m.layers: L.cfg=cfg; L.rs=cfg.res_scale
     return nD
 
+def grow_din(m,add):
+    """GROW THE RETRIEVAL SPACE. DIN is the width of the key/query projection, and the Taylor map turns it into
+    FE = 1 + DIN + DIN(DIN+1)/2 features through which EVERY key-query association in the model must pass.
+
+    THE DEFECT THIS FIXES: DIN was fixed at 8 from the infant onward, and grow_width deliberately kept it there
+    ("keys/queries: output dim is DIN (fixed)"). So the model grew 2.7x in width, 384 -> 1024, while its retrieval
+    space never grew at all: still 45 features against 1024 residual dims. A transformer at D=1024 has 1024
+    dimensions of attention. MEASURED (exp/din_scaling.py): raising DIN 8 -> 32 is worth 0.133 nats at D=384 and
+    0.196 nats at D=768 -- the penalty GROWS with width, which is exactly the regime our 235M model is in.
+
+    FUNCTION-PRESERVING: new key/query dims are initialised to ZERO, so their linear Taylor features are zero and
+    every cross term with them is zero. The added features contribute nothing until trained, and the existing
+    retrieval is bit-for-bit unchanged. DIN costs almost no parameters (Wk,Wq are D x DIN); it costs state size
+    (FE x DV) and attention compute."""
+    cfg=m.cfg; D=cfg.D; nDIN=cfg.DIN+add
+    with torch.no_grad():
+        for L in m.layers:
+            for nm in ('Wk','Wq'):
+                old=getattr(L,nm)
+                new=nn.Linear(D,nDIN,bias=False).to(DEV)
+                new.weight[:cfg.DIN]=old.weight; new.weight[cfg.DIN:]=0.0   # new dims inert -> exactly preserving
+                setattr(L,nm,new)
+    cfg.DIN=nDIN
+    cfg.iu=torch.triu_indices(nDIN,nDIN,device=DEV); cfg.FE=1+nDIN+cfg.iu.shape[1]
+    for L in m.layers: L.cfg=cfg
+    return nDIN
+
 def grow_vocab(m,new_vocab):
     """+new token rows in emb and head. Old tokens' behaviour is unchanged (function preserved on the old vocab)."""
     cfg=m.cfg; V=cfg.vocab

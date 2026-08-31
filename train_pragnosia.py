@@ -30,7 +30,13 @@ CKPT="/mnt/kv_cache/pragnosia_data/pragnosia.pt"
 # Cause: each growth scales the incumbent dims by c=sqrt(nD/D), so the penalty COMPOUNDS with the event count
 # (1.633x cumulative over the old ten-event plan). Same infant seed, same 1024x16L target, a third of the events.
 # 'wd' grows width and depth together so a single event is a real developmental step.
-PLAN=[('wd',(256,4)),('wd',(192,4)),('wd',(192,4))]      # 384x4L -> 640x8L -> 832x12L -> 1024x16L
+# Each event now also grows DIN, the RETRIEVAL width. DIN was fixed at 8 from the infant through all ten growths
+# of the last run, so a D=1024 model was still routing every key-query association through the infant's 45 Taylor
+# features -- a transformer at D=1024 has 1024 dimensions of attention. MEASURED (exp/din_scaling.py): raising
+# DIN 8->32 is worth 0.133 nats at D=384 and 0.196 at D=768, i.e. the penalty GROWS with width, exactly the regime
+# the 235M model plateaued in. DIN costs almost no parameters (Wk,Wq are D x DIN); it costs state and attention
+# compute, and at DIN=24 the state is still only 1.3 MiB per layer, so constant-memory context is unaffected.
+PLAN=[('wdi',(256,4,4)),('wdi',(192,4,4)),('wdi',(192,4,8))]   # 384x4L/DIN8 -> 640x8L/12 -> 832x12L/16 -> 1024x16L/24
 CORPUS=os.environ.get("CORPUS","window2")                    # window2 only: educational text, 170B tokens, least repetitive
 dm=DataMix(ctx=DOC+1,verbose=True,only=CORPUS)
 RD=RV=None
@@ -120,13 +126,15 @@ def main():
         earned = tokens_at_size >= TOK_PER_PARAM*P()
         if ent is not None and k<len(PLAN) and free>VRAM_MIN and earned and sensor.observe(ent,it):
             kind,amt=PLAN[k]; P_before=P()
-            if kind=='wd': G.grow_width(m,amt[0]); G.grow_depth(m,amt[1])   # one combined developmental step
+            if kind=='wdi':                                                 # width + depth + RETRIEVAL together
+                G.grow_width(m,amt[0]); G.grow_depth(m,amt[1]); G.grow_din(m,amt[2])
+            elif kind=='wd': G.grow_width(m,amt[0]); G.grow_depth(m,amt[1])
             elif kind=='w': G.grow_width(m,amt)
             else: G.grow_depth(m,amt)
             earned_tpp=tokens_at_size/max(1,P_before)            # capture BEFORE resetting (my first edit printed 0)
             opt=torch.optim.Adam(m.parameters(),lr=LR); k+=1; tokens_at_size=0; steps_at_size=0; last_grow_step=it
             fwd=torch.compile(m) if USE_COMPILE else m           # shapes changed -> recompile once per grow
-            bar.write(f"    >>> SELF-GREW #{k} at step {it}: D={m.cfg.D}x{m.cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} -> {P()/1e6:.0f}M (earned {earned_tpp:.0f} tok/param at the old size, free {free:.0f}G)")
+            bar.write(f"    >>> SELF-GREW #{k} at step {it}: D={m.cfg.D}x{m.cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} -> {P()/1e6:.0f}M DIN{m.cfg.DIN} (earned {earned_tpp:.0f} tok/param at the old size, free {free:.0f}G)")
         if (it+1)%100==0:
             tps=B*DOC*(it-step+1)/(time.time()-t0)
             bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L {P()/1e6:.0f}M {tokens_at_size/P():.0f}tok/param lr={cur_lr:.1e} {tps/1e3:.0f}ktok/s free={free:.0f}G")
