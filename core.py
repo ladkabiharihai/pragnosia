@@ -9,8 +9,16 @@ import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 DEV="cuda" if torch.cuda.is_available() else "cpu"
 
 class Config:
-    def __init__(s, D=96, DIN=8, DV=96, NL=4, T=32, vocab=32768, res_scale=1.0, mlp_mult=4):
+    def __init__(s, D=96, DIN=8, DV=96, NL=4, T=32, vocab=32768, res_scale=1.0, mlp_mult=4,
+                 tie_emb=False, head_scale=1.0):
         s.D=D; s.DIN=DIN; s.DV=DV; s.NL=NL; s.T=T; s.vocab=vocab; s.res_scale=res_scale; s.mlp_mult=mlp_mult
+        # TIED EMBEDDINGS: one matrix serves input and output. At vocab 32768 / D=1024 that saves 33.5M parameters
+        # (14% of a 235M model) and MEASURES BETTER: -0.108 nats at 37% fewer params (exp/tied_emb.py).
+        # `head_scale` carries the growth rescaling that the head would otherwise absorb into its weights: the
+        # embedding is a stream WRITER (wants *c) and the head a stream READER (wants /c), and one shared matrix
+        # cannot be both -- so neither is scaled and the head's factor lives here instead. Scaling the head's
+        # OUTPUT by 1/c is exactly equivalent to scaling its weights by 1/c.
+        s.tie_emb=tie_emb; s.head_scale=head_scale
         s.iu=torch.triu_indices(DIN,DIN,device=DEV); s.FE=1+DIN+s.iu.shape[1]
 
 def rmsnorm(x,eps=1e-6):
@@ -94,12 +102,13 @@ class Core(nn.Module):
         super().__init__(); s.cfg=cfg; s.emb=nn.Embedding(cfg.vocab,cfg.D)
         s.layers=nn.ModuleList([Layer(cfg) for _ in range(cfg.NL)]); s.head=nn.Linear(cfg.D,cfg.vocab)
         nn.init.normal_(s.emb.weight,0,0.02)
+        if getattr(cfg,'tie_emb',False): s.head.weight=s.emb.weight     # one shared matrix
     def forward(s,X,states=None,return_states=False,wgate=None):
         """states: list of per-layer (M,zM) carried from the previous chunk (persistent memory / long context)."""
         a=s.emb(X); ns=[]
         for i,L in enumerate(s.layers):
             a,c=L(a,None if states is None else states[i],wgate=wgate); ns.append(c[-1])
-        h,_=rmsnorm(a); lg=s.head(h)
+        h,_=rmsnorm(a); lg=s.head(h)*getattr(s.cfg,'head_scale',1.0)
         return (lg,ns) if return_states else lg
     def decay_states(s,states,d):
         return None if states is None else [(M*d,z*d) for (M,z) in states]
@@ -124,7 +133,7 @@ class Core(nn.Module):
             H2,_=rmsnorm(a1)
             a=a1+L.rs*(F.gelu(H2@L.m1.weight.T+L.m1.bias)@L.m2.weight.T+L.m2.bias)
             ns.append((M,z)); npv.append(H[:,0])
-        h,_=rmsnorm(a); return s.head(h)[:,0], ns, npv
+        h,_=rmsnorm(a); return s.head(h)[:,0]*getattr(s.cfg,'head_scale',1.0), ns, npv
     @torch.no_grad()
     def generate(s,ids,n=40,temp=1.0,states=None,top_p=1.0,greedy=False):
         """CORRECT generation. Use this instead of calling prefill/step by hand.

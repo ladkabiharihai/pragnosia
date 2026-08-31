@@ -139,7 +139,7 @@ def main():
             tps=B*DOC*(it-step+1)/(time.time()-t0)
             bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L {P()/1e6:.0f}M {tokens_at_size/P():.0f}tok/param lr={cur_lr:.1e} {tps/1e3:.0f}ktok/s free={free:.0f}G")
         if (it+1)%500==0:
-            ck={'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':it+1,'k':k}
+            ck={'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'DIN':m.cfg.DIN,'NL':m.cfg.NL,'step':it+1,'k':k}
             torch.save(ck,CKPT)
             # keep the LAST save before each grow and the TWO after it, so growth can be probed after the fact
             if last_grow_step and (it+1)-last_grow_step<=1000: torch.save(ck,f"{CKPT[:-3]}_probe{it+1}.pt")

@@ -47,7 +47,8 @@ class Pragnosia:
             raise SystemExit("No individual lives here yet. Run:  python live.py born --name <name>")
         s.id = json.load(open(s.idf))
         sd = torch.load(s.bodyf, map_location=DEV)
-        s.cfg = C.Config(D=sd['D'], DIN=8, DV=sd.get('DV', sd['D']), NL=sd['NL'], T=2048, res_scale=16 ** -0.5)
+        from util import cfg_from_ckpt
+        cfg = cfg_from_ckpt(sd, T=2048)
         s.m = C.Core(s.cfg).to(DEV); s.m.load_state_dict(sd['model']); s.m.eval()
         s.hip = Hippocampus(s.m)                                   # fast memory: what it has seen recently
         if os.path.exists(f"{home}/memory.pt"):                    # memory persists too -- it is part of the self

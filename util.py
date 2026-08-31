@@ -54,3 +54,15 @@ def pbar(it,desc="train",total=None,every=10.0):
         return tqdm(it,desc=desc,total=total,file=sys.__stdout__,ncols=110,mininterval=every,smoothing=0.1,
                     bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}")
     return _LinePbar(it,desc,total,every)
+
+def cfg_from_ckpt(sd,T=2048,res_scale=16**-0.5):
+    """Build a Config that MATCHES a checkpoint, inferring anything the checkpoint did not record.
+    DIN is read from the Wk weight shape when absent: DIN grows now (grow_din), and a checkpoint written before
+    that change records only D/DV/NL, so a loader that assumed DIN=8 would fail to load a grown model. This is the
+    same class of bug as DV not being recorded, caught the same way -- by reloading a grown checkpoint."""
+    import core as _C
+    w=sd['model']
+    DIN=sd.get('DIN') or int(w['layers.0.Wk.weight'].shape[0])
+    DV=sd.get('DV') or int(w['layers.0.Wv.weight'].shape[0])
+    NL=sd.get('NL') or len([k for k in w if k.endswith('.Wk.weight')])
+    return _C.Config(D=sd['D'],DIN=DIN,DV=DV,NL=NL,T=T,res_scale=res_scale)

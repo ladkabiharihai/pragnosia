@@ -1281,3 +1281,25 @@ same +0.064 because the test ran at CH=512 while the model trained at 2048 -- th
 0.3M tokens is nowhere near enough for zero-initialised capacity to be recruited (measured elsewhere to take
 billions). The from-scratch sweep is the reliable evidence; whether the existing individual can be repaired in place
 needs real training time, not a 10-minute probe.
+
+## TIED EMBEDDINGS: a real win, STAGED BUT NOT ENABLED (its growth path is not yet exact)
+Another unquestioned choice: the embedding and output head are separate matrices. At vocab 32768 / D=1024 that is
+33.5M + 33.5M = 67M parameters, 29% of a 235M model, spent twice on the same vocabulary.
+MEASURED (exp/tied_emb.py, 3000 steps, DIN=12):
+| config | params | loss |
+|--------|--------|------|
+| 384x6L untied (current) | 34.1M | 4.8996 |
+| **384x6L TIED** | **21.5M** | **4.7912** |
+| 448x8L tied (savings spent on layers) | 30.9M | 4.8513 |
+**Tying alone is -0.108 nats at 37% FEWER parameters** -- comparable to the DIN fix, and free.
+**BUT IT CONFLICTS WITH OUR GROWTH.** grow_width scales the embedding (a stream WRITER) by c and the head (a
+stream READER) by 1/c, and one shared matrix cannot be both. Measured: after a growth event
+`head.weight is emb.weight` becomes **False** -- the tie is silently lost and the model quietly doubles its
+embedding cost again at the first growth.
+Implemented a fix: `cfg.tie_emb` plus `cfg.head_scale`, which carries the head's 1/c on its OUTPUT instead of its
+weights (exactly equivalent: (W/c).h == (1/c)(W.h)), with the writers left unscaled in the tied case because the
+stream keeps its magnitude. That restores the tie through growth (verified `still tied: True` across two events) and
+improved preservation from 1.36e-01 to 1.23e-02 -- but the UNTIED path preserves to **3.695e-06**, so the tied path
+is still three orders of magnitude off and something in the rescaling is not yet right.
+**NOT ENABLED.** tie_emb defaults to False and the trainer does not set it, so run 3 is unaffected. Shipping a
+change whose function-preservation I cannot verify is exactly the mistake that produced today's earlier bugs.

@@ -38,8 +38,13 @@ def grow_width(m,add):
     """+add residual-stream dims (D). RMS-norm makes this subtle: adding zero dims changes mean(x^2), so rescale by
     c=sqrt((D+add)/D) on everything that WRITES the stream and 1/c on everything that READS it. Exactly preserving."""
     cfg=m.cfg; D=cfg.D; nD=D+add; c=(nD/D)**0.5
+    cw=1.0 if getattr(cfg,'tie_emb',False) else c    # writer scale: 1 when tied (stream magnitude is unchanged)
     with torch.no_grad():
-        ne=nn.Embedding(cfg.vocab,nD).to(DEV); ne.weight[:,:D]=m.emb.weight*c; ne.weight[:,D:]=0.0
+        ne=nn.Embedding(cfg.vocab,nD).to(DEV)
+        # when tied, the shared matrix must not be scaled (the head needs /c, the embedding *c); the head's factor
+        # is carried on cfg.head_scale instead, and the stream keeps its magnitude so readers still take /c.
+        ne.weight[:,:D]=m.emb.weight if getattr(cfg,'tie_emb',False) else m.emb.weight*c
+        ne.weight[:,D:]=0.0
         m.emb=ne
         nDV=cfg.DV+add                                                         # the VALUE/state dim must widen too, or
         for L in m.layers:                                                      # the recurrent memory capacity freezes
@@ -53,9 +58,9 @@ def grow_width(m,add):
             nv.weight[cfg.DV:]=_new_lin(nD,add,DEV)                            # new value dims (learn; written nowhere yet)
             L.Wv=nv
             no=nn.Linear(nDV,nD).to(DEV)                                       # WRITES the stream -> *c, new dims 0
-            no.weight[:D,:cfg.DV]=L.Wo.weight*c; no.weight[:D,cfg.DV:]=0.0      # new value dims contribute nothing yet
+            no.weight[:D,:cfg.DV]=L.Wo.weight*cw; no.weight[:D,cfg.DV:]=0.0      # new value dims contribute nothing yet
             no.weight[D:]=0.0
-            no.bias[:D]=L.Wo.bias*c; no.bias[D:]=0.0
+            no.bias[:D]=L.Wo.bias*cw; no.bias[D:]=0.0
             L.Wo=no
             # MLP: m1 READS the stream, m2 WRITES it. The HIDDEN dim must grow with D or the MLP ratio collapses
             # (4x -> 1.5x by the target) and the measured 1.17-nat MLP advantage erodes as the model grows.
@@ -65,13 +70,20 @@ def grow_width(m,add):
             if addh>0: n1.weight[hid:]=_new_lin(nD,addh,DEV)                   # new hidden units: random (they learn)
             n1.bias[:hid]=L.m1.bias; n1.bias[hid:]=0.0
             n2=nn.Linear(nhid,nD).to(DEV)
-            n2.weight[:D,:hid]=L.m2.weight*c; n2.weight[:D,hid:]=0.0           # new hidden units write NOTHING yet
+            n2.weight[:D,:hid]=L.m2.weight*cw; n2.weight[:D,hid:]=0.0           # new hidden units write NOTHING yet
             n2.weight[D:]=0.0                                                   # new stream dims are not written yet
-            n2.bias[:D]=L.m2.bias*c; n2.bias[D:]=0.0
+            n2.bias[:D]=L.m2.bias*cw; n2.bias[D:]=0.0
             L.m1,L.m2=n1,n2
-        nh=nn.Linear(nD,cfg.vocab).to(DEV)                                     # READS the normed stream -> /c
-        nh.weight[:,:D]=m.head.weight/c; nh.weight[:,D:]=0.0; nh.bias.copy_(m.head.bias)
-        m.head=nh
+        if getattr(cfg,'tie_emb',False):
+            # TIED: the head shares the embedding matrix, so it cannot carry its own /c. Neither matrix is scaled
+            # (see the embedding branch above) and the head's factor accumulates on cfg.head_scale instead.
+            nh=nn.Linear(nD,cfg.vocab).to(DEV); nh.bias.copy_(m.head.bias)
+            nh.weight=m.emb.weight                                             # re-tie: growth silently untied it
+            m.head=nh; cfg.head_scale=getattr(cfg,'head_scale',1.0)/c
+        else:
+            nh=nn.Linear(nD,cfg.vocab).to(DEV)                                 # READS the normed stream -> /c
+            nh.weight[:,:D]=m.head.weight/c; nh.weight[:,D:]=0.0; nh.bias.copy_(m.head.bias)
+            m.head=nh
     cfg.D=nD; cfg.DV=nDV
     for L in m.layers: L.cfg=cfg; L.rs=cfg.res_scale
     return nD

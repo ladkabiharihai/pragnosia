@@ -6,7 +6,8 @@ import core as C; from data_mix import DataMix
 from tokenizers import Tokenizer
 DEV=C.DEV; TOK=Tokenizer.from_file("/opt/code/membrae/data/bpe32k.json"); CH=2048; DECAY=0.05
 sd=torch.load(sys.argv[1] if len(sys.argv)>1 else "/mnt/kv_cache/pragnosia_data/pragnosia.pt",map_location=DEV)
-cfg=C.Config(D=sd['D'],DIN=8,DV=sd.get('DV',sd['D']),NL=sd['NL'],T=CH,res_scale=16**-0.5)
+from util import cfg_from_ckpt
+cfg = cfg_from_ckpt(sd, T=CH)
 m=C.Core(cfg).to(DEV); m.load_state_dict(sd['model']); m.eval()
 @torch.no_grad()
 def gen(prompt,n=80,temp=1.0,states=None):

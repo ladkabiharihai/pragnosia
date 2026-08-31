@@ -20,7 +20,8 @@ from tokenizers import Tokenizer
 DEV = C.DEV; CH = 2048
 TOK = Tokenizer.from_file("/opt/code/membrae/data/bpe32k.json")
 sd = torch.load(sys.argv[1] if len(sys.argv) > 1 else "/mnt/kv_cache/pragnosia_data/pragnosia.pt", map_location=DEV)
-cfg = C.Config(D=sd['D'], DIN=8, DV=sd.get('DV', sd['D']), NL=sd['NL'], T=CH, res_scale=16 ** -0.5)
+from util import cfg_from_ckpt
+cfg = cfg_from_ckpt(sd, T=CH)
 m = C.Core(cfg).to(DEV); m.load_state_dict(sd['model']); m.eval()
 P = sum(p.numel() for p in m.parameters())
 print(f"=== {P/1e6:.0f}M, step {sd['step']}, {sd['step']*32768*8/1e9:.1f}B tokens, {sd.get('k')} grows ===\n", flush=True)

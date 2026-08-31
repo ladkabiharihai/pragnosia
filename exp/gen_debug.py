@@ -29,7 +29,8 @@ CK = "/mnt/kv_cache/pragnosia_data/pragnosia.pt"
 
 def load(T=2048):
     sd = torch.load(CK, map_location=DEV)
-    cfg = C.Config(D=sd['D'], DIN=8, DV=sd.get('DV', sd['D']), NL=sd['NL'], T=T, res_scale=16 ** -0.5)
+    from util import cfg_from_ckpt
+    cfg = cfg_from_ckpt(sd, T=T)
     m = C.Core(cfg).to(DEV); m.load_state_dict(sd['model']); m.eval()
     return m, cfg, sd
 
