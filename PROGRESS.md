@@ -1351,3 +1351,27 @@ Every layer adds `a + rs*o` with rs = TARGET_NL**-0.5 = 0.25 -- a PERMANENT atte
 **Ours is the best value and unscaled residuals cost 0.59 nats.** Our linear-attention layers produce large outputs
 that genuinely need attenuation, so this choice was right. Third structural hypothesis tested, first one to confirm
 the existing design rather than overturn it -- worth recording so it is not re-litigated.
+
+## RUN 3: DIN GROWTH IS BEING RECRUITED, and it is far faster than width growth was
+Growth #1 at step 2500 (30 tok/param) -> 54M DIN12; growth #2 at step 8380 (25 tok/param) -> 111M DIN16. Both
+cleared the 22 tok/param gate.
+**ABLATION of the key/query rows added at each growth** (step 9000, 111M, DIN=16):
+| DIN dims | when added | damage if zeroed |
+|----------|-----------|------------------|
+| 0-8 | original seed | +0.3441 |
+| 8-12 | growth #1 | **+0.0441** |
+| 12-16 | growth #2 (added ~700 steps ago) | +0.0000 |
+Growth #1's retrieval dims already carry **13% of the seed's load** after ~6000 steps. For contrast, run 2's newest
+WIDTH band was worth **+0.0011 after 2.6B tokens**. DIN capacity recruits far faster than width capacity -- which
+makes sense: a new DIN dim immediately participates in every key-query product, whereas a new residual dim starts
+written-to by zeros and has to earn its way into the stream.
+### HOW HIGH SHOULD DIN GO? (exp/din_target.py, D=512, 8 layers, matched STEPS)
+| DIN | FE | D/FE | loss | gain | ktok/s |
+|-----|----|----- |------|------|--------|
+| 16 | 153 | 3.3 | 4.8422 | +0.0000 | 105 |
+| 24 | 325 | 1.6 | 4.8165 | -0.0257 | 92 |
+| 32 | 561 | 0.9 | 4.7463 | **-0.0959** | 76 |
+| 48 | 1225 | 0.4 | 4.7256 | -0.1166 | 51 |
+Most of the available gain arrives by DIN=32 (-0.096 of the -0.117 maximum) and DIN=48 costs another 33% of
+throughput for only -0.021 more. BUT this compares at matched STEPS, which quietly hands the wider model more
+compute. Since the real run is throughput-bound, the honest comparison is matched WALL-CLOCK -- running now.
