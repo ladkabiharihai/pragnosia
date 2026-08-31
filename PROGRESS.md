@@ -1325,3 +1325,29 @@ head_scale so a resume rebuilds the same model. At the 1024x16L target this save
 worth **-0.108 nats**.
 Run 3 restarted with it (35 minutes of progress traded for a fix that compounds over 10.6B tokens). The infant is
 now **19M instead of 31M** for the same architecture, because the embedding is no longer paid for twice.
+
+## RUN 3 EARLY, AND A STRUCTURAL SUSPECT CLEARED
+**Run 3 (tied + DIN growing) at step 5500, 1.44B tokens, 54M params:**
+| metric | value |
+|--------|-------|
+| held-out loss | 4.7072 (ppl 110.7) |
+| memory gain | +0.0405 |
+| **recall @120 tokens** | **15%** (best at any comparable stage) |
+| generation distinct-1 / rep4 | 0.82 / 0.00 (reference 0.82 / 0.01) |
+For scale: run 2 needed **4.06B tokens at 67M** to reach 4.5237. Run 3 is at 4.7072 with **2.8x fewer tokens and
+20% fewer parameters**, so it is ahead per-token; the matched-token comparison at step 15500 is the real test.
+Also resolved a parameter-accounting confusion: with tying the model is genuinely **53.93M** (torch deduplicates
+shared tensors) while the state_dict writes the shared matrix under BOTH keys, so only the checkpoint FILE is
+larger. `m.parameters()` is the honest count.
+### RESIDUAL SCALE: SUSPECT CLEARED (my hypothesis was wrong)
+Every layer adds `a + rs*o` with rs = TARGET_NL**-0.5 = 0.25 -- a PERMANENT attenuation, where a transformer uses
+`x + f(x)` unscaled and puts 1/sqrt(depth) only in the INITIALISATION. Suspected this was throttling depth.
+| res_scale | value | loss |
+|-----------|-------|------|
+| **16**-0.5 (ours)** | **0.2500** | **4.7721** |
+| NL**-0.5 (matched depth) | 0.4082 | 4.7912 (+0.019) |
+| 2**-0.5 | 0.7071 | 4.9645 (+0.192) |
+| 1.0 (transformer-style) | 1.0000 | 5.3621 (+0.590) |
+**Ours is the best value and unscaled residuals cost 0.59 nats.** Our linear-attention layers produce large outputs
+that genuinely need attenuation, so this choice was right. Third structural hypothesis tested, first one to confirm
+the existing design rather than overturn it -- worth recording so it is not re-litigated.
