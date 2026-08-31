@@ -59,11 +59,16 @@ def zero_state(m,bs):
     return [(torch.zeros(bs,cfg.FE,cfg.DV,device=DEV),torch.zeros(bs,cfg.FE,device=DEV)) for _ in range(cfg.NL)]
 def main():
     step=0
-    cfg=C.Config(D=D0,DIN=8,DV=D0,NL=NL0,T=CH,res_scale=TARGET_NL**-0.5)
+    # TIED EMBEDDINGS: one matrix for input and output. At vocab 32768 / D=1024 this saves 33.5M parameters (14%
+    # of a 235M model) and MEASURES BETTER: -0.108 nats at 37% fewer params (exp/tied_emb.py). Growth keeps the tie
+    # via cfg.head_scale and is loss-neutral in practice (+0.0001 across a growth event vs untied -0.0000).
+    cfg=C.Config(D=D0,DIN=8,DV=D0,NL=NL0,T=CH,res_scale=TARGET_NL**-0.5,tie_emb=True)
     m=C.Core(cfg).to(DEV); k=0
     if os.path.exists(CKPT):
         sd=torch.load(CKPT,map_location=DEV)
-        cfg=C.Config(D=sd['D'],DIN=8,DV=sd.get('DV',sd['D']),NL=sd['NL'],T=CH,res_scale=TARGET_NL**-0.5)
+        from util import cfg_from_ckpt
+        cfg=cfg_from_ckpt(sd,T=CH,res_scale=TARGET_NL**-0.5)
+        cfg.tie_emb=sd.get('tie_emb',False); cfg.head_scale=sd.get('head_scale',1.0)
         m=C.Core(cfg).to(DEV); m.load_state_dict(sd['model']); step=sd['step']; k=sd['k']
         print(f"RESUMED step {step}: D={cfg.D} NL={cfg.NL} ({sum(p.numel() for p in m.parameters())/1e6:.0f}M), grows done={k}",flush=True)
     opt=torch.optim.Adam(m.parameters(),lr=LR)
@@ -139,7 +144,8 @@ def main():
             tps=B*DOC*(it-step+1)/(time.time()-t0)
             bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L {P()/1e6:.0f}M {tokens_at_size/P():.0f}tok/param lr={cur_lr:.1e} {tps/1e3:.0f}ktok/s free={free:.0f}G")
         if (it+1)%500==0:
-            ck={'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'DIN':m.cfg.DIN,'NL':m.cfg.NL,'step':it+1,'k':k}
+            ck={'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'DIN':m.cfg.DIN,'NL':m.cfg.NL,'step':it+1,'k':k,
+                'tie_emb':m.cfg.tie_emb,'head_scale':m.cfg.head_scale}
             torch.save(ck,CKPT)
             # keep the LAST save before each grow and the TWO after it, so growth can be probed after the fact
             if last_grow_step and (it+1)-last_grow_step<=1000: torch.save(ck,f"{CKPT[:-3]}_probe{it+1}.pt")

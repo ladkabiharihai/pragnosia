@@ -77,7 +77,12 @@ def grow_width(m,add):
         if getattr(cfg,'tie_emb',False):
             # TIED: the head shares the embedding matrix, so it cannot carry its own /c. Neither matrix is scaled
             # (see the embedding branch above) and the head's factor accumulates on cfg.head_scale instead.
-            nh=nn.Linear(nD,cfg.vocab).to(DEV); nh.bias.copy_(m.head.bias)
+            nh=nn.Linear(nD,cfg.vocab).to(DEV)
+            # head_scale multiplies the head's ENTIRE output, bias included -- but only the WEIGHTS should take
+            # the 1/c (the normed stream grew by c; the bias did not). So pre-multiply the bias by c to cancel it:
+            #   (W.(c.h) + c.b)/c == W.h + b   exactly.
+            # Without this the bias silently becomes b/c, which measured as a 1.23e-02 logit error after growth.
+            nh.bias.copy_(m.head.bias*c)
             nh.weight=m.emb.weight                                             # re-tie: growth silently untied it
             m.head=nh; cfg.head_scale=getattr(cfg,'head_scale',1.0)/c
         else:

@@ -1303,3 +1303,25 @@ improved preservation from 1.36e-01 to 1.23e-02 -- but the UNTIED path preserves
 is still three orders of magnitude off and something in the rescaling is not yet right.
 **NOT ENABLED.** tie_emb defaults to False and the trainer does not set it, so run 3 is unaffected. Shipping a
 change whose function-preservation I cannot verify is exactly the mistake that produced today's earlier bugs.
+
+## TIED EMBEDDINGS ENABLED -- the residual numerics chased down and shown to be practically irrelevant
+Continued from the previous entry. The tied growth path preserved to 1.23e-02 against the untied path's 3.70e-06,
+and I would not enable a change I could not verify. Two hypotheses, both WRONG, then the right test:
+1. **HEAD BIAS (partly right).** `head_scale` multiplies the head's ENTIRE output, bias included -- but only the
+   WEIGHTS should absorb the 1/c, since the normed stream grew by c and the bias did not. Pre-multiplying the bias
+   by c fixes it exactly: (W.(c.h) + c.b)/c == W.h + b. **1.23e-02 -> 1.008e-03**, an order of magnitude.
+2. **RMS-NORM eps (wrong).** Predicted the residual was eps=1e-6 mattering at initialisation, where mean-square
+   activation is only 4e-4. Training the model 300 steps (4.5x larger activations) should then have shrunk it. It
+   did not -- the error went slightly UP (1.008e-03 -> 1.297e-03). Hypothesis refuted.
+3. **THE RIGHT TEST.** Traced the divergence layer by layer: the embedding is exact (0.000e+00), the error appears
+   inside the layers as a ~0.02% ratio shift, and `h`'s ratio of 1.224744 = c is the intended design. So it is a
+   tiny perturbation, not a structural break -- and the question that actually matters is whether LOSS moves:
+| | loss before grow | loss after grow | change |
+|---|-----------------|-----------------|--------|
+| untied | 5.4749 | 5.4749 | -0.0000 |
+| **TIED** | 5.4973 | 5.4974 | **+0.0001** |
+**Function-preserving in practice.** Enabled: `tie_emb=True` at birth, persisted in checkpoints alongside DIN and
+head_scale so a resume rebuilds the same model. At the 1024x16L target this saves **34M parameters (14%)** and is
+worth **-0.108 nats**.
+Run 3 restarted with it (35 minutes of progress traded for a fix that compounds over 10.6B tokens). The infant is
+now **19M instead of 31M** for the same architecture, because the embedding is no longer paid for twice.
