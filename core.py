@@ -54,11 +54,16 @@ class Layer(nn.Module):
         if s.gated:
             s.Wg=nn.Linear(cfg.D,1)
             nn.init.zeros_(s.Wg.weight); nn.init.constant_(s.Wg.bias,8.0)   # g=0.9997/token: start by forgetting almost nothing
-    def forward(s,a,state=None,wgate=None):
+    def forward(s,a,state=None,wgate=None,prev=None):
         """`state`=(M,zM): the PERSISTENT fast-weight memory carried from previous chunks. Reading it costs nothing
         extra and is what gives UNBOUNDED context at CONSTANT memory; carrying it during training is what teaches the
         model to use its own memory. The returned new state is detached (no cross-chunk backprop)."""
-        cfg=s.cfg; B,T,_=a.shape; H,nrm=rmsnorm(a); Hs=_shift(H)
+        cfg=s.cfg; B,T,_=a.shape; H,nrm=rmsnorm(a)
+        # BOUNDARY KEY. _shift prepends a ZERO, so the first token of a chunk built its key from nothing instead of
+        # from the previous chunk's last token. Measured in fp64: that single position made the chunked recurrence
+        # differ from the full parallel form by 8.1e-02 RELATIVE (a correct recurrence is ~1e-12); every other
+        # position was bit-exact. prefill/step already thread `prev` for generation; training never did.
+        Hs=_shift(H) if prev is None else torch.cat([prev.unsqueeze(1),H[:,:-1]],1)
         xk=Hs@s.Wk.weight.T; xq=H@s.Wq.weight.T
         if s.qknorm:
             # taylor() is QUADRATIC in its input, so A = qf.kf grows QUARTICALLY with the projection magnitude
@@ -143,13 +148,17 @@ class Core(nn.Module):
         s.layers=nn.ModuleList([Layer(cfg) for _ in range(cfg.NL)]); s.head=nn.Linear(cfg.D,cfg.vocab)
         nn.init.normal_(s.emb.weight,0,0.02)
         if getattr(cfg,'tie_emb',False): s.head.weight=s.emb.weight     # one shared matrix
-    def forward(s,X,states=None,return_states=False,wgate=None):
+    def forward(s,X,states=None,return_states=False,wgate=None,prev=None,return_prev=False):
         """states: list of per-layer (M,zM) carried from the previous chunk (persistent memory / long context)."""
-        a=s.emb(X); ns=[]
+        a=s.emb(X); ns=[]; npv=[]
         for i,L in enumerate(s.layers):
-            a,c=L(a,None if states is None else states[i],wgate=wgate); ns.append(c[-1])
+            a,c=L(a,None if states is None else states[i],wgate=wgate,
+                  prev=None if prev is None else prev[i]); ns.append(c[-1]); npv.append(c[0][:,-1])
         h,_=rmsnorm(a); lg=s.head(h)*getattr(s.cfg,'head_scale',1.0)
-        return (lg,ns) if return_states else lg
+        # return_prev=True always yields the 3-tuple, so a caller can thread the boundary key from the FIRST
+        # chunk onward. The 2-tuple form is kept so existing callers are unaffected.
+        if return_states: return (lg,ns,npv) if return_prev else (lg,ns)
+        return lg
     def decay_states(s,states,d):
         return None if states is None else [(M*d,z*d) for (M,z) in states]
     @torch.no_grad()

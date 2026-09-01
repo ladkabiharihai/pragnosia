@@ -1560,3 +1560,21 @@ HONEST NOTE: my first attempted fix -- adding the missing key to the carried sta
 2.334e-02) because the chunk still computes its own zero key at position 0, so the fix double-counts rather than
 replaces. The correct fix is to pass the previous chunk's last normed activation into `_shift`, exactly as `step`
 does with `prev`. Not yet applied: the benchmark is mid-run and this touches the training path.
+
+## BOUNDARY KEY FIXED: the chunked recurrence is now EXACT
+Threading the previous chunk's last normed activation into `_shift` (the same `prev` mechanism `step()` already
+used for generation) makes the chunked form match the full parallel form to machine precision:
+| | relative error, fp64 |
+|---|---------------------|
+| before | **8.1e-02** |
+| after, ungated | **8.7e-16** |
+| after, gated | **9.7e-16** |
+My FIRST attempt at this failed silently: I passed `prev` but the 3-tuple return was conditioned on `prev is not
+None`, so the first chunk took the 2-tuple branch and the caller never captured it -- the fix never engaged and the
+error was unchanged at 7e-02. Added an explicit `return_prev` flag. Second time I checked the number rather than
+trusting that the edit did what it said.
+### STATE OF THE CLAIM, HONESTLY
+Loss at 100M tokens: transformer **3.4617**, ours **3.5165** -- we are **+0.055 BEHIND**, not ahead. The gate closed
+87% of a 0.413-nat gap, which is progress, not victory. And GENERATION QUALITY -- the thing the vision actually
+claims -- has not been compared at all. Running both to 250M tokens now and generating from the same contexts with
+the same decoding, because loss is not the deliverable.
