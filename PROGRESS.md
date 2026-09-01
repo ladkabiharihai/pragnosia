@@ -1988,3 +1988,34 @@ snapshot is now taken AT the growth instant as `_before_grow{N}.pt`, so growth #
 Two further bugs fixed while measuring: `evaluate.py` applied the hand-set DECAY to a GATED model (double-decay,
 the same defect fixed in the trainer), and `cfg_from_ckpt` did not restore gated/qknorm, so every gated checkpoint
 failed to load with unexpected `Wg` keys. It now infers them from the weights when the flags are absent.
+
+## COHERENCE AND GENERATION STABILITY AT 54M -- tested now, as the user insisted, and it found a REAL DEFECT
+Deferring generation quality to 200M was not defensible: a 21.6M model of this architecture already beat a
+transformer on generation. Tested at the current 54M / 1.44B tokens, run the way the model was TRAINED (continue
+real text, temperature sampling, Core.generate, no hand-set decay since the model is gated).
+### SHORT-RANGE COHERENCE: at parity with real text
+120 generated tokens, 4 documents: **distinct-1 0.59 vs real text's 0.63, 4gram-rep 0.06 vs 0.07.**
+### LONG-RANGE STABILITY: it degenerates -- and the cause is located exactly
+1200 tokens, windowed 4-gram repetition, averaged over 3 documents, against a LENGTH-MATCHED real-text reference
+(d1 and rep both change with length, so the earlier short-text reference was the wrong yardstick):
+| source | 0-200 | 200-400 | 400-600 | 600-800 | 800-1000 | 1000-1200 |
+|--------|-------|---------|---------|---------|----------|-----------|
+| real text | 0.12 | 0.12 | 0.09 | 0.08 | 0.09 | 0.11 |
+| **ours, self-writes ON** | 0.11 | 0.09 | 0.07 | **0.26** | **0.46** | **0.48** |
+| **ours, self-writes OFF** | 0.17 | 0.02 | 0.01 | 0.01 | 0.01 | **0.01** |
+**THE MODEL IS NOT INCOHERENT. The self-write feedback loop is.** With the state frozen after priming it is stable
+for the full 1200 tokens and LESS repetitive than real text; with self-writes on it collapses after ~600 tokens
+into a single repeated token.
+### ROOT CAUSE: a train/generate mismatch, amplified by the learned gate
+The gate learned a forget rate of **g = 0.9997, a half-life of ~2000 tokens** (measured per layer, 1824-2107). So
+during generation the model's own output accumulates in the state almost undecayed until the read is dominated by
+what it just produced. During TRAINING the state only ever receives REAL text -- the model was never given a reason
+to learn to discount its own writes.
+`Core.step()/generate()` now take `write_scale` (default 1.0, no behaviour change) to control this. A sweep found
+0.25 suppresses repetition but produces digit garbage -- **4gram-rep alone is not a quality metric**, so a
+letter-fraction check was added; 0.0 is the best of the options tested.
+HONEST LIMIT: what is demonstrated is SYNTACTIC stability at parity with real text. The text is grammatical
+English but semantically shallow ("cherished with him slee and killed our to knew that the meaning of shook is
+increasingly of powerful changes of the various kinds of the holy windows") -- expected for 54M at 1.44B tokens.
+**200M would NOT have fixed this** -- it is a mechanism defect, not a capacity one, and it would have been found
+just as clearly here. The user was right to demand it be tested now.

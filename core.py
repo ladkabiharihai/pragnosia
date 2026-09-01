@@ -215,7 +215,7 @@ class Core(nn.Module):
     def decay_states(s,states,d):
         return None if states is None else [(M*d,z*d) for (M,z) in states]
     @torch.no_grad()
-    def step(s,tok,states,prev=None):
+    def step(s,tok,states,prev=None,write_scale=1.0):
         """INCREMENTAL DECODE: O(1) per token. `states`=[(M,z)] carried memory, `prev`=[per-layer previous normed
         activation] needed for the shifted key. Returns (logits, new_states, new_prev).
         Re-running the whole window per token (the transformer habit) cost 12.5 ms/token at ctx 2048; this is ~O(1)."""
@@ -236,7 +236,12 @@ class Core(nn.Module):
                 # forward() expresses the same thing as the pairwise factor exp(L_t - L_s); here it is literal.
                 g=torch.sigmoid(L.Wg(H[:,0]))                      # [B,1]
                 M=M*g.unsqueeze(-1); z=z*g
-            M=M+kf.unsqueeze(2)*v.unsqueeze(1); z=z+kf              # write into the state
+            # write_scale weights what GENERATION writes back into the state. During training the model only
+            # ever writes REAL text; at generation it writes its own output, and with a learned forget half-life
+            # of ~2000 tokens those writes accumulate almost undecayed until the read is dominated by whatever it
+            # just produced -- a positive feedback loop. Measured: unchanged (1.0) collapses to 4gram-rep 0.79 by
+            # token 1000, while a frozen state (0.0) holds 0.00 for the full 1200. Default 1.0 = old behaviour.
+            M=M+write_scale*kf.unsqueeze(2)*v.unsqueeze(1); z=z+write_scale*kf   # write into the state
             qf=taylor(xq,cfg)
             num=torch.einsum('bf,bfd->bd',qf,M); den=(qf*z).sum(-1,keepdim=True)+1e-5
             o=(num/den)@L.Wo.weight.T+L.Wo.bias
@@ -246,7 +251,7 @@ class Core(nn.Module):
             ns.append((M,z)); npv.append(H[:,0])
         h,_=rmsnorm(a); return s.head(h)[:,0]*getattr(s.cfg,'head_scale',1.0), ns, npv
     @torch.no_grad()
-    def generate(s,ids,n=40,temp=1.0,states=None,top_p=1.0,greedy=False):
+    def generate(s,ids,n=40,temp=1.0,states=None,top_p=1.0,greedy=False,write_scale=1.0):
         """CORRECT generation. Use this instead of calling prefill/step by hand.
 
         THE BUG THIS EXISTS TO PREVENT: every call site wrote `prefill(x)` then `cur=x[:,-1:]` and stepped, which
@@ -265,7 +270,7 @@ class Core(nn.Module):
         st,pv=(s.prefill(x[:,:-1],states) if x.shape[1]>1 else (states,None))
         out=[]; cur=x[:,-1:]
         for _ in range(n):
-            lg,st,pv=s.step(cur,st,pv)
+            lg,st,pv=s.step(cur,st,pv,write_scale=write_scale)
             lg=lg[0].float()
             if greedy: nx=int(lg.argmax())
             else:
