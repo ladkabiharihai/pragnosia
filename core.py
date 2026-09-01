@@ -183,10 +183,19 @@ class Core(nn.Module):
             M,z=states[i]
             H,nrm=rmsnorm(a)                                       # [B,1,D]
             src=prev[i] if prev is not None else torch.zeros_like(H[:,0])
-            kf=taylor(src@L.Wk.weight.T,cfg)                       # key from the PREVIOUS token (the shift)
+            xk=src@L.Wk.weight.T; xq=(H[:,0])@L.Wq.weight.T
+            if L.qknorm:                                           # MUST match forward() or generation drifts
+                xk=xk*torch.rsqrt(xk.pow(2).mean(-1,keepdim=True)+1e-6)
+                xq=xq*torch.rsqrt(xq.pow(2).mean(-1,keepdim=True)+1e-6)
+            kf=taylor(xk,cfg)                                      # key from the PREVIOUS token (the shift)
             v=(H[:,0])@L.Wv.weight.T
+            if L.gated:
+                # the recurrent form of the gate: decay the whole state by this token's rate, then write.
+                # forward() expresses the same thing as the pairwise factor exp(L_t - L_s); here it is literal.
+                g=torch.sigmoid(L.Wg(H[:,0]))                      # [B,1]
+                M=M*g.unsqueeze(-1); z=z*g
             M=M+kf.unsqueeze(2)*v.unsqueeze(1); z=z+kf              # write into the state
-            qf=taylor((H[:,0])@L.Wq.weight.T,cfg)
+            qf=taylor(xq,cfg)
             num=torch.einsum('bf,bfd->bd',qf,M); den=(qf*z).sum(-1,keepdim=True)+1e-5
             o=(num/den)@L.Wo.weight.T+L.Wo.bias
             a1=a+L.rs*o.unsqueeze(1)

@@ -1605,3 +1605,17 @@ fp64, and step() still matches forward().
 WHAT I HAD ASSUMED: that we were slow because linear attention with a big feature map is inherently expensive. It
 was not -- it was one badly-shaped op whose backward the profiler names outright. I should have profiled before
 theorising about FLOPs.
+
+## step() BROUGHT INTO LINE WITH forward()
+The feature-map change exposed that `step()` -- the O(1) generation path -- had neither qk-norm nor the gate, so
+GENERATION WOULD NOT MATCH TRAINING (measured 0.126 absolute logit divergence on the last token). Added both, with
+the gate in its literal recurrent form (decay the state by this token's rate, then write) rather than the pairwise
+factor `forward()` uses. Verified all four combinations in fp64:
+| gated | qknorm | step vs forward, relative |
+|-------|--------|---------------------------|
+| no | no | 7.05e-16 |
+| no | yes | 8.19e-16 |
+| yes | no | 9.39e-16 |
+| yes | yes | 9.10e-16 |
+All exact. This mattered: every generation sample we have judged was produced by a path that did not match the
+trained function.
