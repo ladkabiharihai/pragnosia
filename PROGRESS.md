@@ -1514,3 +1514,27 @@ it. Line 101 still read `.exp()`.
 asserts the fix is present. Four experiments and roughly an hour of GPU time went to chasing a bug that was already
 diagnosed and simply not applied. When a probe and the harness disagree on identical math, suspect the harness
 content before inventing new physics.
+
+## GATING CLOSES 87% OF THE TRANSFORMER GAP (exp/bench.py, 100M tokens each, matched size)
+| variant | params | loss | vs target | ktok/s |
+|---------|--------|------|-----------|--------|
+| **transformer (the target)** | 23.4M | **3.4617** | -- | 756 |
+| ours before this work | 21.6M | 3.8747 | +0.4130 | 292 |
+| + multi-head only (6 x dh=10) | 21.8M | 3.9149 | +0.4532 | 209 |
+| + qk-norm only | 21.6M | 3.8578 | +0.3961 | 314 |
+| + gating + qk-norm (dh=24) | 21.6M | 3.5794 | +0.1177 | 279 |
+| **+ gating + qk-norm, dh=32** | 21.6M | **3.5165** | **+0.0548** | 221 |
+| + gating + qk-norm, dh=48 | 21.7M | 3.5577 | +0.0960 | 144 |
+**DATA-DEPENDENT GATING IS THE FIX: -0.28 nats on its own.** Replacing our single global decay constant with a
+per-token forget rate closes most of the gap. This is exactly what separates Mamba-2 / GLA / RWKV-6 from plain
+linear attention, and we had the constant-decay version.
+**RETRIEVAL WIDTH SATURATES AT dh=32.** 24 -> 32 gains 0.063; 32 -> 48 LOSES 0.041 and costs 35% throughput.
+**MULTI-HEAD ALONE HURTS** (+0.04): splitting dh=24 into 6 heads of dh=10 shrinks each head's Taylor space from
+FE=325 to FE=66, and the lost per-head expressivity outweighs having several channels.
+**qk-NORM IS FREE** (-0.017 nats AND faster) and is what makes gating numerically safe.
+Remaining gap: **+0.055 nats**, from +0.413. Still behind on speed (221 vs 756 ktok/s) at this context length,
+though our cost is flat in context while the transformer's is quadratic.
+**THE FACULTIES ARE UNAFFECTED.** Gating changes the state update to M_t = g_t * M_{t-1} + k_t (x) v_t -- still a
+fixed-size state, still constant cost per token, still carried across chunks. Memory, growth, and consolidation all
+operate on that same state and need no change. The gate REPLACES our hand-set decay=0.05 with a learned per-token
+rate, which is the "selective memory" the vision describes and we had implemented as a constant.

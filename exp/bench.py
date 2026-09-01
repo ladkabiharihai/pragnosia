@@ -153,10 +153,12 @@ def train(m, tag):
 # measured at this budget already: transformer 3.4617 (756 ktok/s), ours-now 3.8747 (292),
 # multi-head-only 3.9149 (209) -- multi-head alone HURTS, so it is dropped from further arms.
 REF = 3.4617
+# GATING is the big win: -0.28 nats. qk-norm is free (-0.017 and faster). Multi-head alone HURTS.
+# Widening dh keeps paying (24 -> 32 gave another -0.063), so push it and check where it stops.
 VARIANTS = [
-    ("+ qk-norm only", lambda: Ours(dh=24, H=1, gate=False, qknorm=True)),
-    ("+ gating + qk-norm", lambda: Ours(dh=24, H=1, gate=True, qknorm=True)),
-    ("+ gating + qk-norm, dh=32", lambda: Ours(dh=32, H=1, gate=True, qknorm=True)),
+    ("gate+qknorm, dh=48", lambda: Ours(dh=48, H=1, gate=True, qknorm=True)),
+    ("gate+qknorm, dh=64", lambda: Ours(dh=64, H=1, gate=True, qknorm=True)),
+    ("gate+qknorm, dh=32, 2 heads", lambda: Ours(dh=32, H=2, gate=True, qknorm=True)),
 ]
 
 if __name__ == "__main__":
@@ -167,6 +169,9 @@ if __name__ == "__main__":
     print(f"  {'transformer (the target)':>32s} {23.4:7.1f}M {3.4617:8.4f} {0.0:+10.4f} {756:8.0f}", flush=True)
     print(f"  {'ours now: 1 head, no gate':>32s} {21.6:7.1f}M {3.8747:8.4f} {0.4130:+10.4f} {292:8.0f}", flush=True)
     print(f"  {'+ multi-head only (6 x dh=10)':>32s} {21.8:7.1f}M {3.9149:8.4f} {0.4532:+10.4f} {209:8.0f}", flush=True)
+    print(f"  {'+ qk-norm only':>32s} {21.6:7.1f}M {3.8578:8.4f} {0.3961:+10.4f} {314:8.0f}", flush=True)
+    print(f"  {'+ gating + qk-norm (dh=24)':>32s} {21.6:7.1f}M {3.5794:8.4f} {0.1177:+10.4f} {279:8.0f}", flush=True)
+    print(f"  {'+ gating + qk-norm, dh=32':>32s} {21.6:7.1f}M {3.5165:8.4f} {0.0548:+10.4f} {221:8.0f}", flush=True)
     for name, build in VARIANTS:
         torch.manual_seed(0); np.random.seed(0)
         m = build().to(DEV)
