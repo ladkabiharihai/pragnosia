@@ -155,7 +155,17 @@ def main():
             else: G.grow_depth(m,amt)
             earned_tpp=tokens_at_size/max(1,P_before)            # capture BEFORE resetting (my first edit printed 0)
             opt=torch.optim.Adam(m.parameters(),lr=LR); k+=1; tokens_at_size=0; steps_at_size=0; last_grow_step=it
-            fwd=torch.compile(m) if USE_COMPILE else m           # shapes changed -> recompile once per grow
+            # RECOMPILE, BUT DO NOT DIE IF THE COMPILER CANNOT HANDLE THE NEW SHAPE. Growth changes FE from
+            # DIN^2+DIN+1 to a new value, and inductor hit an internal tiling bug on FE=157
+            # (CantSplit.__init__() missing 2 required positional arguments) which killed run 4 right after a
+            # SUCCESSFUL growth. Eager is ~2x slower but correct, and a lost run costs far more than that.
+            if USE_COMPILE:
+                try:
+                    fwd=torch.compile(m); fwd(torch.zeros(1,CH,dtype=torch.long,device=DEV))   # force the compile now
+                except Exception as e:
+                    bar.write(f"    compile failed after growth ({type(e).__name__}) -- continuing EAGER")
+                    fwd=m
+            else: fwd=m
             bar.write(f"    >>> SELF-GREW #{k} at step {it}: D={m.cfg.D}x{m.cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} -> {P()/1e6:.0f}M DIN{m.cfg.DIN} (earned {earned_tpp:.0f} tok/param at the old size, free {free:.0f}G)")
         if (it+1)%100==0:
             # COUNT WHAT WE ACTUALLY PROCESSED. This used B*DOC for every iteration, but RECALL_FRAC of them are

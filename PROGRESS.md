@@ -1830,3 +1830,25 @@ logits at batch 8. None of it grows with document length -- which is exactly why
 Verified equivalent to **9.5e-07** in eval mode; measured **18% less peak memory for 6% throughput** at B=2, and
 the saving grows with batch. (My first comparison showed different losses -- that was TRAINING DRIFT in my own
 test, each arm having stepped the optimizer on a different code path, not a real discrepancy.)
+
+## THE 30 GB IS PROD, NOT US
+| process | MiB |
+|---------|-----|
+| vLLM::EngineCore (prod) | 39,406 |
+| whisper | 2,798 |
+| kokoro x4 | ~7,900 |
+| **prod total** | **~49 GiB** |
+| our trainer | did not appear in nvidia-smi at all -- it had crashed |
+Our activation memory is ~3 GiB at B=8 (attention 1.0 + logits 2.0), exactly 8x the 0.38 GiB measured at B=1 in the
+1M test. Both scale linearly with batch and neither grows with document length.
+## RUN 4 CRASHED AGAIN -- but growth #1 SUCCEEDED first
+```
+>>> SELF-GREW #1 at step 3108: D=640x8L -> 54M DIN12 (earned 38 tok/param)
+torch._inductor.exc.InductorError: TypeError: CantSplit.__init__() missing 2 required positional arguments
+```
+The three growth fixes WORKED -- the model grew correctly, Wg resized, FE updated. It then died RECOMPILING for the
+new shape: an inductor internal bug in its tiling pass. Every shape (FE=73/157/273/601) compiles fine in isolation,
+so it is the live transition that trips it, not the shape.
+FIX: compile failure after a growth is now caught and the run continues EAGER. Eager is ~2x slower; a dead run
+costs far more. The compile is also forced immediately after growth so the failure surfaces at a known point
+instead of mid-step.
