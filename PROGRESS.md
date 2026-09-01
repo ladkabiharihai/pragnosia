@@ -2019,3 +2019,37 @@ English but semantically shallow ("cherished with him slee and killed our to kne
 increasingly of powerful changes of the various kinds of the holy windows") -- expected for 54M at 1.44B tokens.
 **200M would NOT have fixed this** -- it is a mechanism defect, not a capacity one, and it would have been found
 just as clearly here. The user was right to demand it be tested now.
+
+## THE SELF-WRITE COLLAPSE IS STRUCTURAL -- proven by testing models we ALREADY have
+The user's instruction was to fix it now rather than train to 200M and discover the need to retrain. Testing the
+checkpoints already on disk settles it without spending any new compute:
+| checkpoint | 0-200 | 200-400 | 400-600 | 600-800 | 800-1000 | 1000-1200 | letters |
+|-----------|-------|---------|---------|---------|----------|-----------|---------|
+| REAL TEXT | 0.12 | 0.12 | 0.09 | 0.08 | 0.09 | 0.11 | 0.93 |
+| 54M gated 0.9B | 0.06 | 0.17 | 0.35 | 0.35 | 0.34 | 0.35 | 0.42 |
+| 54M gated 1.0B | 0.17 | 0.45 | 0.56 | 0.57 | 0.55 | 0.64 | 0.91 |
+| 54M gated 1.4B | 0.11 | 0.09 | 0.07 | 0.26 | 0.46 | 0.48 | 0.95 |
+| **111M UNGATED 2.4B** | 0.02 | 0.04 | 0.04 | 0.33 | 0.37 | 0.38 | 0.95 |
+| **202M UNGATED 5.4B** | 0.07 | 0.42 | 0.42 | 0.48 | 0.32 | 0.29 | 0.95 |
+**TWO THINGS ARE NOW RULED OUT.**
+1. **SCALE IS NOT THE FIX.** A 202M model on 5.4B tokens -- 4x the parameters and 4x the tokens of the current
+   checkpoint -- degenerates just as badly. Training to 200M and hoping would have wasted the entire run.
+2. **THE GATE IS NOT THE CAUSE.** The 111M and 202M models are UNGATED and collapse too. (Caveat stated honestly:
+   those were trained with a hand-set inter-chunk decay that m.step() does not reproduce, so their absolute
+   numbers are not comparable to the gated rows -- but "does it degenerate" is answered either way.)
+### THE FIX ATTEMPT THAT FAILED
+Scheduled sampling (feed the model its own sampled token for 25% of positions, supervise against the true
+continuation) made it WORSE, not better:
+| arm | tail 4gram-rep | letters |
+|-----|---------------|---------|
+| untouched | 0.48 | 0.95 |
+| control: same 400 steps, p=0 | 0.33 | 0.94 |
+| **FIX: scheduled sampling p=0.25** | **0.55** | **0.84** |
+Output became digit spam ('00.00000apped0000000006000...') and the gate half-lives did not move (~2000 tokens).
+The CONTROL is what makes this readable: 400 steps of fine-tuning is itself disruptive, and the fix arm was worse
+than the control on both metrics. Recorded as a NEGATIVE result rather than retried blindly.
+### WHAT IS ESTABLISHED AS WORKING
+`write_scale=0` (do not write generated tokens into the state) gives stable, coherent English for the full 1200
+tokens at 4gram-rep 0.01 and letters 0.96 -- better than real text on repetition. The model retains the entire
+primed context; it only stops adding its own output. A careful 12-generation-per-setting sweep is choosing the
+value, since the first single-document sweep gave contradictory readings between runs.
