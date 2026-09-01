@@ -1732,3 +1732,24 @@ plagued every earlier sample is gone** -- it was the 512-token training regime, 
 | torch.compile in the comparison | 2.1x for us vs 1.15x for it |
 | multi-head | +0.04 (rejected) |
 | elementwise feature map | +1.8 (rejected) |
+
+## RUN 4 STARTED with every measured fix. Run 3 archived.
+The 202M model from run 3 scored **4.4474 (ppl 85.4)** on the same eval where a **21M gated model scores 3.6315
+(ppl 37.8)** -- 0.82 nats WORSE with 9.4x the parameters and 100x the tokens. Not a scaling failure: it was trained
+with three known defects. Also worth correcting: that model's GENERATION is fine when judged in the right regime
+(d1 0.66, rep 0.00, on-topic across the whole sample). The catastrophic looping I showed earlier came from
+generating with a 1024-token prompt at 512-token context, not from the model.
+| | run 3 (202M) | run 4 |
+|---|---|---|
+| gating | no, fixed decay 0.05 | **learned per-token** |
+| qk-norm | no | **yes** |
+| boundary key | DROPPED at all 16 chunk boundaries | **threaded** |
+| taylor() | gather (slow) | outer product (1.8x) |
+| step() vs forward() | mismatched once gated | exact to 1e-15 |
+| throughput counter | 1.16x optimistic | counts real tokens |
+DOUBLE-DECAY AVOIDED: with gating the state already decays per token inside the layer, so the hand-set DECAY is
+skipped (`if not cfg.gated`). The gate IS the vision's selective memory, learned instead of tuned.
+TWO BUGS I INTRODUCED AND CAUGHT: the `st=None; pv=None` edit matched a string that no longer existed, so `pv` was
+referenced before assignment and the first run crashed immediately; and an earlier `pv` detach landed on the wrong
+line. Both found by running rather than trusting the edit, and both fixed with a read-back assertion.
+Now training: infant 19M (tied embeddings), gated, qk-normed, 647 ktok/s, no errors.

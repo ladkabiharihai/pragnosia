@@ -63,12 +63,17 @@ def main():
     # of a 235M model) and MEASURES BETTER: -0.108 nats at 37% fewer params (exp/tied_emb.py). Growth keeps the tie
     # via cfg.head_scale and is loss-neutral in practice (+0.0001 across a growth event vs untied -0.0000).
     cfg=C.Config(D=D0,DIN=8,DV=D0,NL=NL0,T=CH,res_scale=TARGET_NL**-0.5,tie_emb=True)
+    # THE TWO MEASURED WINS. Gating replaces the hand-set DECAY with a LEARNED per-token forget rate: worth
+    # -0.28 nats, it is what separates Mamba-2/GLA/RWKV-6 from plain linear attention, and it improved our own
+    # memory gain 18x (+0.0016 -> +0.0286). qk-norm bounds the quartic growth of A=qf.kf: -0.017 nats AND faster.
+    cfg.gated=True; cfg.qknorm=True
     m=C.Core(cfg).to(DEV); k=0
     if os.path.exists(CKPT):
         sd=torch.load(CKPT,map_location=DEV)
         from util import cfg_from_ckpt
         cfg=cfg_from_ckpt(sd,T=CH,res_scale=TARGET_NL**-0.5)
         cfg.tie_emb=sd.get('tie_emb',False); cfg.head_scale=sd.get('head_scale',1.0)
+        cfg.gated=sd.get('gated',False); cfg.qknorm=sd.get('qknorm',False)
         m=C.Core(cfg).to(DEV); m.load_state_dict(sd['model']); step=sd['step']; k=sd['k']
         print(f"RESUMED step {step}: D={cfg.D} NL={cfg.NL} ({sum(p.numel() for p in m.parameters())/1e6:.0f}M), grows done={k}",flush=True)
     opt=torch.optim.Adam(m.parameters(),lr=LR)
@@ -113,14 +118,22 @@ def main():
                     loss=F.cross_entropy(lg.reshape(-1,cfg.vocab),Y.reshape(-1),ignore_index=-100)
             loss.backward(); opt.step(); ent=None
         else:                                                        # long document with memory carried across chunks
-            Xd=torch.tensor(dm.batch(B),device=DEV); st=zero_state(m,B); opt.zero_grad(); last=None
+            Xd=torch.tensor(dm.batch(B),device=DEV); st=zero_state(m,B); pv=None; opt.zero_grad(); last=None
             for i in range(NCH):
                 xi=Xd[:,i*CH:(i+1)*CH]; yi=Xd[:,i*CH+1:(i+1)*CH+1]
                 with torch.autocast("cuda",dtype=torch.bfloat16):        # 2.82x faster, verified same quality
-                    lg,st=fwd(xi,states=st,return_states=True)
+                    # `prev` carries the last normed activation across the boundary. Without it _shift fed a ZERO
+                    # into the first key of every chunk -- 16 corrupted positions per document, and the chunked
+                    # recurrence was 8.1e-02 WRONG in fp64 (now exact to 1e-15).
+                    lg,st,pv=fwd(xi,states=st,return_states=True,prev=pv,return_prev=True)
                     # no .float(): cross_entropy upcasts internally anyway, and the copy costs 1 GiB at this shape
                     l=F.cross_entropy(lg.reshape(-1,cfg.vocab),yi.reshape(-1))/NCH
-                st=m.decay_states(st,DECAY); l.backward(); last=lg.detach().float()
+                # DECAY IS NOW LEARNED. With gating the state already decays per token inside the layer
+                # (M_t = g_t*M_{t-1} + k_t (x) v_t); applying the hand-set DECAY on top would decay it TWICE.
+                # The gate is the "selective memory" the vision describes -- the model chooses, not a constant.
+                if not cfg.gated: st=m.decay_states(st,DECAY)
+                st=[(a.detach(),b.detach()) for a,b in st]; pv=[p.detach() for p in pv]
+                l.backward(); last=lg.detach().float()
             opt.step(); loss=F.cross_entropy(last.reshape(-1,cfg.vocab),Xd[:,(NCH-1)*CH+1:NCH*CH+1].reshape(-1))
             ent=G.SaturationSensor.entropy(last)
         ema=loss.item() if ema is None else 0.995*ema+0.005*loss.item()
@@ -148,7 +161,7 @@ def main():
             bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L {P()/1e6:.0f}M {tokens_at_size/P():.0f}tok/param lr={cur_lr:.1e} {tps/1e3:.0f}ktok/s free={free:.0f}G")
         if (it+1)%500==0:
             ck={'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'DIN':m.cfg.DIN,'NL':m.cfg.NL,'step':it+1,'k':k,
-                'tie_emb':m.cfg.tie_emb,'head_scale':m.cfg.head_scale}
+                'tie_emb':m.cfg.tie_emb,'head_scale':m.cfg.head_scale,'gated':m.cfg.gated,'qknorm':m.cfg.qknorm}
             torch.save(ck,CKPT)
             # keep the LAST save before each grow and the TWO after it, so growth can be probed after the fact
             if last_grow_step and (it+1)-last_grow_step<=1000: torch.save(ck,f"{CKPT[:-3]}_probe{it+1}.pt")
