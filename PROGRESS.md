@@ -1619,3 +1619,29 @@ factor `forward()` uses. Verified all four combinations in fp64:
 | yes | yes | 9.10e-16 |
 All exact. This mattered: every generation sample we have judged was produced by a path that did not match the
 trained function.
+
+## TWO SPEED QUESTIONS ANSWERED (and a methodological flaw in all my benchmarks)
+**Q: why was run 3's infant at 1022 ktok/s when benchmarks show ~300?**
+Two different things were being compared. The infant was D=384x**4L**, DIN=8 (FE=73), B=8 x CH=2048 -- and the real
+trainer uses **torch.compile**, which every benchmark I ran did not.
+| configuration | ktok/s |
+|---------------|--------|
+| run-3 infant shape, eager | 325 |
+| run-3 infant shape, **compiled** | **518** (1.60x) |
+| benchmark shape 384x6L DIN16 B16xCH512, eager | 207 |
+| run-3 TARGET 1024x16L DIN24, eager | 38 |
+The remaining difference to 1022 is that the trainer counts tokens across a 32768-token document with state carried
+between 2048-token chunks, which amortises fixed overheads that a single 512-token step pays every time.
+**Q: why are we still slower than the transformer?** Because I was measuring EAGER on both sides, which flatters
+the transformer: flash attention is already one fused kernel, while our many small ops are exactly what a compiler
+fuses. With BOTH compiled:
+| | eager | compiled | compile speedup |
+|---|-------|----------|-----------------|
+| transformer | 871 | 1006 | 1.15x |
+| **ours** | 403 | **846** | **2.10x** |
+| **ratio ours/transformer** | **0.46x** | **0.84x** | |
+**Compilation nearly closes the speed gap.** Combined with the taylor() fix (1.8x) the picture is very different
+from "2.7x slower": at matched shape and both compiled we are at 0.84x the transformer's throughput, and our cost
+stays flat as context grows while its is quadratic.
+LESSON: I benchmarked eager for a whole session while the production trainer compiles. Every speed number I reported
+before this was understated, and understated MORE for us than for the transformer.
