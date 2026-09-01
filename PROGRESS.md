@@ -1405,3 +1405,34 @@ For a throughput-bound run, extra tokens beat extra retrieval width in the 16-32
 (run 2's D/FE was 22.8, far outside this range) but it does mean the optimum is MODEST, not maximal -- our DIN=24
 target at D=1024 gives D/FE = 3.2, close to the D/FE = 3.3 that won here. The DIN=8 arm needed to close this
 argument was killed by an OOM (exit 137) with the trainer holding the card; still outstanding.
+
+## GENERATION QUALITY, SHOWN -- and a CONTROLLABILITY bug found
+Ran generation properly (temp sampling, real context, Core.generate) on run 3 at 202M / 12.1B tokens.
+**WHAT IT DOES WELL.** Continuing a genealogy passage:
+```
+CONTEXT: ...Liam is the father of Luke. ... Liam is the father of Lucy.
+         Question: Who is Lucy to Luke? Answer: Lucy is Luke's
+MODEL:   sister. ...
+```
+**"sister" is CORRECT** -- Liam fathers both Luke and Lucy, so they are siblings. Genuine multi-step relational
+inference, then it degenerates into repetition. On a military-history passage it stays firmly on-topic (trap,
+mountains, targets, attack, invasion, campaign, surrender, aircraft) with broken grammar. On a Jack London passage
+about dogs it writes generic academic filler and ignores the content entirely. So: domain tracking yes, occasional
+real inference yes, sustained meaning no.
+**THE CONTROLLABILITY BUG.** With 1024 tokens primed into memory, five completely different prompts produced
+NEAR-IDENTICAL text -- the model ignored what it was asked. Measured prompt-divergence (1.0 = prompts fully steer):
+| primed tokens | state decay | divergence |
+|---------------|-------------|-----------|
+| 0 | none | 0.871 |
+| 256 | none | 0.646 |
+| 1024 | none | **0.285** |
+| 2048 | none | 0.221 |
+| 1024 | 0.50 | 0.452 |
+| 1024 | 0.20 | 0.590 |
+| **1024** | **0.05 (trained value)** | **0.860** |
+**The bug was mine, in the test.** I primed the state WITHOUT decay, but training applies DECAY=0.05 after every
+single chunk. A state carried undecayed saturates and drowns the prompt. With the trained decay applied, prompt
+control returns almost fully (0.285 -> 0.860) and the completions become prompt-appropriate ("The Roman Empire was"
+-> Emperor/Roman Empire/olympian; "In the beginning of the story" -> hero/story/dies).
+LESSON, the same one as the eval's DECAY and CORPUS mismatches: **any deployment path must mirror what training
+did.** evaluate.py already decays correctly; it was only this probe that did not.
