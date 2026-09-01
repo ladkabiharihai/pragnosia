@@ -1795,3 +1795,38 @@ AND CONSTANT COST CONFIRMED TO 200k TOKENS (chunk 4096, document length growing)
 | 131,072 | 32 | 674 | 2.39 |
 | **200,704** | 49 | **675** | **2.39** |
 Throughput and memory perfectly flat across a 6x range. A transformer at 200k would need ~90 GB of KV cache.
+
+## 1M CONTEXT: TRAINING AND GENERATION BOTH VERIFIED
+**A) TRAINING at 1M tokens** -- a real training loop: every chunk does forward, loss and backward, with one
+optimizer step per document.
+| document | chunks | ktok/s | peak GiB | state MiB |
+|----------|--------|--------|----------|-----------|
+| 32,768 | 8 | 299 | 2.39 | 0.428 |
+| 262,144 | 64 | 303 | 2.40 | 0.428 |
+| 524,288 | 128 | 304 | 2.40 | 0.428 |
+| **1,048,576** | **256** | **303** | **2.40** | **0.428** |
+Flat across a 32x range. We can TRAIN on million-token documents at the same cost as 32k. Caveat worth stating:
+the GRADIENT horizon is still the chunk (4096) because state is detached between chunks -- the model SEES 1M of
+context, but credit assignment does not cross chunk boundaries.
+**B) GENERATION after reading up to 1M tokens**
+| read | ms/token | tok/s | peak GiB |
+|------|----------|-------|----------|
+| 32,768 | 6.96 | 144 | 1.11 |
+| 131,072 | 5.83 | 172 | 1.11 |
+| 524,288 | 5.84 | 171 | 1.12 |
+| **1,048,576** | **5.83** | **172** | **1.12** |
+Per-token cost is INDEPENDENT of how much was read. A transformer at 1M context needs ~450 GB of KV cache and its
+per-token cost grows with everything read.
+## WHY 19M PARAMS USES 2.4 GiB -- parameters are 9% of it
+| component | GiB |
+|-----------|-----|
+| weights + Adam + grads (the 19M model) | 0.283 |
+| **logits [B=8, CH=4096, V=32768]** | **2.000** |
+| **attention A [4,8,4096,4096]** | **1.000** |
+| recurrent state | 0.003 |
+Memory is dominated by PER-CHUNK activations, not model size. The 32768-token vocabulary alone costs 2 GiB of
+logits at batch 8. None of it grows with document length -- which is exactly why 1M context costs the same as 32k.
+**AND 2 GiB OF IT IS AVOIDABLE**: projecting to vocab in 8 slices never materialises the [B,CH,V] tensor whole.
+Verified equivalent to **9.5e-07** in eval mode; measured **18% less peak memory for 6% throughput** at B=2, and
+the saving grows with batch. (My first comparison showed different losses -- that was TRAINING DRIFT in my own
+test, each arm having stepped the optimizer on a different code path, not a real discrepancy.)
