@@ -1375,3 +1375,33 @@ written-to by zeros and has to earn its way into the stream.
 Most of the available gain arrives by DIN=32 (-0.096 of the -0.117 maximum) and DIN=48 costs another 33% of
 throughput for only -0.021 more. BUT this compares at matched STEPS, which quietly hands the wider model more
 compute. Since the real run is throughput-bound, the honest comparison is matched WALL-CLOCK -- running now.
+
+## RUN 3 REACHES TARGET: 202M in 3 growths, and RECALL APPEARS
+```
+#1 step  2500:  54M DIN12  (earned 30 tok/param)
+#2 step  8380: 111M DIN16  (25 tok/param)
+#3 step 19687: 202M DIN24  (23 tok/param)   <- full plan complete in 3 events, not 10
+```
+**At step 45500 (12.0B tokens, 202M, DIN=24, tied):**
+| metric | run 3 | run 2 final |
+|--------|-------|-------------|
+| tokens | **12.0B** | 89B |
+| params | **202M** | 235M |
+| held-out loss | 4.0587 (ppl 57.9) | 3.8141 (ppl 45.3) |
+| memory gain | **+0.0499** (best ever recorded) | +0.0311 |
+| **recall @12 tokens** | **80%** | 0% |
+| generation distinct-1 / rep4 | **0.90 / 0.00** | 0.86 / 0.00 |
+Run 3 is within 0.24 nats of run 2's FINAL using **7.4x fewer tokens and 14% fewer parameters**. And in-context
+recall, which never exceeded 25% anywhere in run 2, reads **80% at 12 tokens** -- the faculty the retrieval fix was
+meant to buy. HONEST CAVEAT: recall at 120 and 480 tokens is still 0%, so this is short-range only.
+### MATCHED-COMPUTE CAVEAT ON DIN (exp/din_compute.py)
+Raising DIN wins at matched STEPS but the wide model is slower, so at matched WALL-CLOCK the picture reverses:
+| DIN | steps in 300s | tokens | loss |
+|-----|--------------|--------|------|
+| **16** | 7615 | 31.2M | **4.3551** |
+| 24 | 6702 | 27.5M | 4.3913 (+0.036) |
+| 32 | 5557 | 22.8M | 4.4198 (+0.065) |
+For a throughput-bound run, extra tokens beat extra retrieval width in the 16-32 range. That does NOT rescue DIN=8
+(run 2's D/FE was 22.8, far outside this range) but it does mean the optimum is MODEST, not maximal -- our DIN=24
+target at D=1024 gives D/FE = 3.2, close to the D/FE = 3.3 that won here. The DIN=8 arm needed to close this
+argument was killed by an OOM (exit 137) with the trainer holding the card; still outstanding.

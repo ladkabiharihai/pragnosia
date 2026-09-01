@@ -48,7 +48,7 @@ class Pragnosia:
         s.id = json.load(open(s.idf))
         sd = torch.load(s.bodyf, map_location=DEV)
         from util import cfg_from_ckpt
-        cfg = cfg_from_ckpt(sd, T=2048)
+        s.cfg = cfg_from_ckpt(sd, T=2048)     # my batch edit assigned a LOCAL cfg while the next line used s.cfg
         s.m = C.Core(s.cfg).to(DEV); s.m.load_state_dict(sd['model']); s.m.eval()
         s.hip = Hippocampus(s.m)                                   # fast memory: what it has seen recently
         if os.path.exists(f"{home}/memory.pt"):                    # memory persists too -- it is part of the self

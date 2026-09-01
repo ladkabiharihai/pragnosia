@@ -37,10 +37,17 @@ def run(DIN,budget=BUDGET):
 if __name__=="__main__":
     print(f"SAME GPU-SECONDS, DIFFERENT RETRIEVAL WIDTHS ({BUDGET:.0f}s each, D={D}, {NL} layers)\n",flush=True)
     print(f"  {'DIN':>4s} {'FE':>5s} {'steps done':>11s} {'tokens':>9s} {'loss':>8s} {'vs DIN=16':>10s}",flush=True)
-    base=None
-    for DIN in (16,24,32):
+    base=None; res={}
+    for DIN in (8,12,16,24):   # the critical arm is 8 -- if it wins at matched compute, the DIN thesis is wrong
         l,fe,st=run(DIN)
         if base is None: base=l
+        res[DIN]=l
         print(f"  {DIN:4d} {fe:5d} {st:11d} {st*B*CH/1e6:8.1f}M {l:8.4f} {l-base:+10.4f}",flush=True)
-    print(f"\n  At matched STEPS, DIN=32 won by 0.096 nats. At matched COMPUTE the wide model gets fewer",flush=True)
-    print(f"  tokens, so this is the honest comparison for a throughput-bound run.",flush=True)
+    best=min(res,key=res.get)
+    print(f"\n  BEST AT MATCHED COMPUTE: DIN={best} ({res[best]:.4f})",flush=True)
+    if best<=8:
+        print(f"  -> DIN=8 wins even after paying for its narrowness. The DIN thesis would be WRONG:",flush=True)
+        print(f"     run 2's bottleneck was not costing what the matched-STEPS sweep implied.",flush=True)
+    else:
+        print(f"  -> DIN=8 LOSES at matched compute, so it really was too narrow; but the optimum is",flush=True)
+        print(f"     modest, not maximal -- retrieval width has to be paid for in throughput.",flush=True)
