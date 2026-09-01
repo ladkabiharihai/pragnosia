@@ -1959,3 +1959,32 @@ Loss also rose after growth (4.781 -> 4.973) and is recovering. That is the per-
 | 3992 | **4.802** | 5.7e-04 |
 Loss is back to its PRE-GROWTH level while running at **~10x the learning rate** -- so the model is genuinely
 ahead of where it was, not recovering from damage. Growth itself is function-preserving (verified 5.4e-04).
+
+## PRECISION: we are NOT training in fp64 -- it is bf16 autocast with fp32 masters
+Verified by inspecting live dtypes in the training loop, not by reading the config:
+| | dtype |
+|---|-------|
+| master weights | **fp32** |
+| gradients | fp32 |
+| Adam state (m, v) | fp32 |
+| **A = qf.kf [B,T,T]** (the memory-dominant tensor) | **bf16** |
+| num = A.v, state write | bf16 |
+| loss | fp32 |
+fp64 appears ONLY in correctness tests (the chunked-recurrence and step-vs-forward checks), deliberately, to remove
+precision as a confound when asserting exactness. No training has ever used it.
+**Why bf16 and not fp16:** `taylor()` is quadratic, so A = qf.kf is a QUARTIC function of the projections and spans
+an enormous dynamic range -- measured |A|max reaching **2.7e5** in the ungated case, well past fp16's 65504 ceiling.
+bf16 has fp32's exponent range with fewer mantissa bits, so it cannot overflow where fp16 would.
+**Why not fp32 throughout:** measured 2.82x slower, with no quality difference.
+## QUALITY ACROSS GROWTH #1
+| checkpoint | params | loss | ppl | memory gain |
+|-----------|--------|------|-----|-------------|
+| step 3500 (430 steps after growth) | 54M | 4.8151 | 123.4 | +0.0125 |
+| step 4000 (930 steps after growth) | 54M | **4.6321** | **102.7** | **+0.0183** |
+0.18 nats in 500 steps, with memory gain rising -- the new capacity is being recruited, not sitting idle.
+**HONEST GAP: there is no true PRE-growth checkpoint for growth #1.** `_pregrow.pt` was written every 500 steps
+whenever growths remained, so it was only ever a duplicate of the latest checkpoint -- never a BEFORE. Fixed: a
+snapshot is now taken AT the growth instant as `_before_grow{N}.pt`, so growth #2 gives an exact comparison.
+Two further bugs fixed while measuring: `evaluate.py` applied the hand-set DECAY to a GATED model (double-decay,
+the same defect fixed in the trainer), and `cfg_from_ckpt` did not restore gated/qknorm, so every gated checkpoint
+failed to load with unexpected `Wg` keys. It now infers them from the weights when the flags are absent.

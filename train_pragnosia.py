@@ -157,6 +157,10 @@ def main():
         earned = tokens_at_size >= TOK_PER_PARAM*P()
         if ent is not None and k<len(PLAN) and free>VRAM_MIN and earned and sensor.observe(ent,it):
             kind,amt=PLAN[k]; P_before=P()
+            # TRUE PRE-GROWTH SNAPSHOT, taken at the growth instant so before/after is exactly measurable.
+            torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'DIN':m.cfg.DIN,'NL':m.cfg.NL,
+                        'step':it,'k':k,'tie_emb':m.cfg.tie_emb,'head_scale':m.cfg.head_scale,
+                        'gated':m.cfg.gated,'qknorm':m.cfg.qknorm}, f"{CKPT[:-3]}_before_grow{k+1}.pt")
             if kind=='wdi':                                                 # width + depth + RETRIEVAL together
                 G.grow_width(m,amt[0]); G.grow_depth(m,amt[1]); G.grow_din(m,amt[2])
             elif kind=='wd': G.grow_width(m,amt[0]); G.grow_depth(m,amt[1])
@@ -214,6 +218,7 @@ def main():
             torch.save(ck,CKPT)
             # keep the LAST save before each grow and the TWO after it, so growth can be probed after the fact
             if last_grow_step and (it+1)-last_grow_step<=1000: torch.save(ck,f"{CKPT[:-3]}_probe{it+1}.pt")
-            if k<len(PLAN): torch.save(ck,f"{CKPT[:-3]}_pregrow.pt")
+            # (the pre-growth snapshot is taken AT the growth event instead -- see below. Saving it every 500
+            #  steps only duplicated the latest checkpoint and gave no true BEFORE to compare against.)
     torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'NL':m.cfg.NL,'step':STEPS,'k':k},CKPT)
 if __name__=="__main__": main()

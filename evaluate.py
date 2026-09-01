@@ -16,6 +16,8 @@ CH=2048
 # DECAY MUST MATCH TRAINING. It was left at 0.2 after training moved to 0.05, which decayed the memory 4x too fast
 # and made the memory gain read NEGATIVE (-0.0157) when the true value at the trained decay is +0.0314.
 DECAY=float(os.environ.get("DECAY","0.05"))
+# A GATED model already decays its state per token inside the layer, so applying DECAY on top decays it TWICE --
+# the same defect that was fixed in the trainer. Skipped automatically when cfg.gated is set.
 def load():
     sd=torch.load(CKPT,map_location=DEV)
     from util import cfg_from_ckpt
@@ -70,7 +72,7 @@ def main():
                 lg,st=m(xi,states=st,return_states=True)
                 wi[i]+=F.cross_entropy(lg.reshape(-1,cfg.vocab).float(),yi.reshape(-1)).item()
                 wo[i]+=F.cross_entropy(m(xi).reshape(-1,cfg.vocab).float(),yi.reshape(-1)).item()
-            st=m.decay_states(st,DECAY)
+            st=st if getattr(cfg,'gated',False) else m.decay_states(st,DECAY)
     wi/=nb; wo/=nb
     print(f"  1) held-out loss (first chunk, no memory) = {wo[0]:.4f}   ppl={np.exp(wo[0]):.1f}   [fixed {nb}x4 eval docs]",flush=True)
     print(f"  2) MEMORY GAIN (mean over chunks 1..15)   = {np.mean(wo[1:]-wi[1:]):+.4f}   (positive = memory helps)",flush=True)
@@ -92,7 +94,7 @@ def main():
     print("  5) GENERATION (with memory, temp 1.0 -- as deployed):",flush=True)
     gst=None
     for i in range(3):
-        _,gst=m(EVAL[0][:1,i*CH:(i+1)*CH],states=gst,return_states=True); gst=m.decay_states(gst,DECAY)
+        _,gst=m(EVAL[0][:1,i*CH:(i+1)*CH],states=gst,return_states=True); gst=gst if getattr(cfg,'gated',False) else m.decay_states(gst,DECAY)
     ds=[]
     for p in ["The capital of France is","Water freezes at","In the beginning of the story,"]:
         t=gen(m,TOK.encode(p).ids,40,temp=1.0,states=gst)

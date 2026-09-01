@@ -67,4 +67,9 @@ def cfg_from_ckpt(sd,T=2048,res_scale=16**-0.5):
     NL=sd.get('NL') or len([k for k in w if k.endswith('.Wk.weight')])
     cfg=_C.Config(D=sd['D'],DIN=DIN,DV=DV,NL=NL,T=T,res_scale=res_scale)
     cfg.tie_emb=sd.get('tie_emb',False); cfg.head_scale=sd.get('head_scale',1.0)
+    # gated/qknorm MUST be restored too: without them Core builds no Wg and load_state_dict fails on the
+    # unexpected layers.N.Wg keys. Fall back to INFERRING from the weights so checkpoints written before these
+    # flags were persisted still load.
+    cfg.gated=sd.get('gated', any(k.endswith('Wg.weight') for k in sd['model']))
+    cfg.qknorm=sd.get('qknorm', cfg.gated)
     return cfg
