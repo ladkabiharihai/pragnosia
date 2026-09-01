@@ -68,8 +68,8 @@ def taylor_h(x, iu):
 
 class Mixer(nn.Module):
     """our recurrent mixer. heads>1 = multi-head; gate=True = per-token data-dependent forgetting."""
-    def __init__(s, D, dh, H, rs, gate=False, mult=4):
-        super().__init__(); s.H = H; s.dh = dh; s.rs = rs; s.gate = gate; s.dv = D // H
+    def __init__(s, D, dh, H, rs, gate=False, qknorm=False, mult=4):
+        super().__init__(); s.H = H; s.dh = dh; s.rs = rs; s.gate = gate; s.qknorm = qknorm; s.dv = D // H
         s.Wk = nn.Linear(D, H * dh, bias=False); s.Wq = nn.Linear(D, H * dh, bias=False)
         s.Wv = nn.Linear(D, D, bias=False); s.Wo = nn.Linear(D, D)
         s.m1 = nn.Linear(D, mult * D); s.m2 = nn.Linear(mult * D, D)
@@ -82,8 +82,15 @@ class Mixer(nn.Module):
         Bs, T, _ = a.shape; H, dh = s.H, s.dh
         Hn, _ = C.rmsnorm(a)
         Hs = torch.cat([torch.zeros_like(Hn[:, :1]), Hn[:, :-1]], 1)     # key from the PREVIOUS token
-        kf = taylor_h(s.Wk(Hs).view(Bs, T, H, dh), s.iu)
-        qf = taylor_h(s.Wq(Hn).view(Bs, T, H, dh), s.iu)
+        xk = s.Wk(Hs).view(Bs, T, H, dh); xq = s.Wq(Hn).view(Bs, T, H, dh)
+        if s.qknorm:
+            # BOUND THE FEATURE MAP. taylor() is QUADRATIC in its input, so A = qf.kf grows QUARTICALLY with the
+            # projection magnitude. Measured over 3000 steps: |xq|max 2 -> 12 and |A|max 17 -> 1.3e4, still climbing,
+            # and the long run went NaN. Normalising q and k to unit RMS bounds the features for good.
+            xk = xk * torch.rsqrt(xk.pow(2).mean(-1, keepdim=True) + 1e-6)
+            xq = xq * torch.rsqrt(xq.pow(2).mean(-1, keepdim=True) + 1e-6)
+        kf = taylor_h(xk, s.iu)
+        qf = taylor_h(xq, s.iu)
         v = s.Wv(Hn).view(Bs, T, H, s.dv)
         A = torch.einsum('bthf,bshf->bhts', qf, kf)
         if s.gate:
@@ -102,9 +109,9 @@ class Mixer(nn.Module):
 
 
 class Ours(nn.Module):
-    def __init__(s, dh=24, H=1, gate=False, d=D, nl=NL):
+    def __init__(s, dh=24, H=1, gate=False, qknorm=False, d=D, nl=NL):
         super().__init__(); s.emb = nn.Embedding(V, d)
-        s.layers = nn.ModuleList([Mixer(d, dh, H, nl ** -0.5, gate) for _ in range(nl)])
+        s.layers = nn.ModuleList([Mixer(d, dh, H, nl ** -0.5, gate, qknorm) for _ in range(nl)])
         s.head = nn.Linear(d, V); s.head.weight = s.emb.weight
         nn.init.normal_(s.emb.weight, 0, 0.02)
     def forward(s, X):
@@ -140,26 +147,30 @@ def train(m, tag):
     return evl(m), P, STEPS * B * CH / dt
 
 
+# already measured at this budget: transformer 3.4617 (756 ktok/s), ours-now 3.8747 (292 ktok/s)
+# measured at this budget already: transformer 3.4617 (756 ktok/s), ours-now 3.8747 (292),
+# multi-head-only 3.9149 (209) -- multi-head alone HURTS, so it is dropped from further arms.
+REF = 3.4617
 VARIANTS = [
-    ("transformer (the target)", lambda: TLM()),
-    ("ours now: 1 head, no gate", lambda: Ours(dh=24, H=1, gate=False)),
-    ("+ multi-head (6 x dh=10)", lambda: Ours(dh=10, H=6, gate=False)),
-    ("+ gating (1 head)", lambda: Ours(dh=24, H=1, gate=True)),
-    ("+ BOTH (6 heads + gate)", lambda: Ours(dh=10, H=6, gate=True)),
+    ("+ qk-norm only", lambda: Ours(dh=24, H=1, gate=False, qknorm=True)),
+    ("+ gating + qk-norm", lambda: Ours(dh=24, H=1, gate=True, qknorm=True)),
+    ("+ gating + qk-norm, dh=32", lambda: Ours(dh=32, H=1, gate=True, qknorm=True)),
 ]
 
 if __name__ == "__main__":
     print(f"BENCHMARK vs the transformer. {TOKENS/1e6:.0f}M tokens each, D={D}, {NL} layers, "
           f"same data and eval\n", flush=True)
-    print(f"  {'variant':>28s} {'params':>8s} {'loss':>8s} {'vs target':>10s} {'ktok/s':>8s}", flush=True)
-    ref = None
+    print(f"  {'variant':>32s} {'params':>8s} {'loss':>8s} {'vs target':>10s} {'ktok/s':>8s}", flush=True)
+    ref = REF
+    print(f"  {'transformer (the target)':>32s} {23.4:7.1f}M {3.4617:8.4f} {0.0:+10.4f} {756:8.0f}", flush=True)
+    print(f"  {'ours now: 1 head, no gate':>32s} {21.6:7.1f}M {3.8747:8.4f} {0.4130:+10.4f} {292:8.0f}", flush=True)
+    print(f"  {'+ multi-head only (6 x dh=10)':>32s} {21.8:7.1f}M {3.9149:8.4f} {0.4532:+10.4f} {209:8.0f}", flush=True)
     for name, build in VARIANTS:
         torch.manual_seed(0); np.random.seed(0)
         m = build().to(DEV)
         torch.manual_seed(1); np.random.seed(1)
         l, P, tps = train(m, name)
-        if ref is None: ref = l
-        print(f"  {name:>28s} {P/1e6:7.1f}M {l:8.4f} {l-ref:+10.4f} {tps/1e3:8.0f}", flush=True)
+        print(f"  {name:>32s} {P/1e6:7.1f}M {l:8.4f} {l-ref:+10.4f} {tps/1e3:8.0f}", flush=True)
         del m; torch.cuda.empty_cache()
     print(f"\n  GOAL: a variant with 'vs target' <= 0 at comparable speed. Anything above 0 is still behind.",
           flush=True)

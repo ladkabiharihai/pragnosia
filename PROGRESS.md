@@ -1471,3 +1471,28 @@ FASTER than us; above it, it cannot run at all while we continue unchanged on ~6
 2.7x slower and 1.02 nats worse. What we have is CONSTANT cost in context length, which becomes decisive only where
 quadratic attention stops fitting. That is a real advantage, but it is narrower than "more efficient than a
 transformer" and it does not excuse the quality gap.
+
+## THE BENCHMARK: closing the 1.02-nat gap to a transformer (exp/bench.py)
+Target: a 23.4M transformer trained on the same data reaches **3.4617**; our mixer at matched size reaches 3.8747.
+That gap, not the token count, is the real problem. Results at 100M tokens each, D=384, 6 layers, same eval:
+| variant | params | loss | vs target | ktok/s |
+|---------|--------|------|-----------|--------|
+| **transformer (the target)** | 23.4M | **3.4617** | +0.0000 | 756 |
+| ours now: 1 head, no gate | 21.6M | 3.8747 | +0.4130 | 292 |
+| + multi-head only (6 x dh=10) | 21.8M | 3.9149 | **+0.4532** | 209 |
+| + qk-norm only | 21.6M | **3.8578** | +0.3961 | 317 |
+**MULTI-HEAD ALONE HURTS** (-0.04 worse, 30% slower). My reasoning was that one head can only express one retrieval
+pattern -- but splitting dh=24 into 6 heads of dh=10 shrinks each head's Taylor space from FE=325 to FE=66, and that
+loss of per-head expressivity outweighs having several channels. Dropped.
+**qk-NORM helps and is FREE** (-0.017 nats, and FASTER at 317 vs 292 ktok/s).
+### TWO NaN BUGS IN THE GATE, both mine
+1. The pairwise gate factor is exp(L_t - L_s), which is <=0 only for t >= s. For t < s it is POSITIVE, so .exp()
+   overflowed to inf BEFORE the causal mask was applied, and inf*0 in tril() gave NaN. Fixed by clamping the
+   exponent at 0 (those entries are masked away, so nothing used changes).
+2. That was not the whole story -- it still went NaN later. Traced it: `taylor()` is QUADRATIC in its input, so
+   A = qf.kf grows QUARTICALLY with the projection magnitude. Measured over 3000 steps the gated model was fine
+   (loss 3.99, beating ungated 4.38) but |xq|max climbed 2 -> 12 and |A|max 17 -> 1.3e4, still rising. Unbounded
+   growth in a quartic quantity is the NaN. Fixed by normalising q and k to unit RMS before the feature map -- and
+   that fix is what makes qk-norm a win in its own right.
+LESSON: the feature map being quadratic means every magnitude problem is amplified to the fourth power. Any change
+that lets the projections grow will eventually produce a NaN.
