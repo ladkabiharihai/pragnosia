@@ -1496,3 +1496,21 @@ loss of per-head expressivity outweighs having several channels. Dropped.
    that fix is what makes qk-norm a win in its own right.
 LESSON: the feature map being quadratic means every magnitude problem is amplified to the fourth power. Any change
 that lets the projections grow will eventually produce a NaN.
+
+## THE GATE NaN: my FIX NEVER LANDED, and I spent four experiments not noticing
+The gated variant went NaN. Diagnosed the cause correctly the first time -- exp(L_t - L_s) is positive for t < s, so
+it overflows to inf before the causal mask, and inf*0 = NaN -- and applied a clamp. It still went NaN, so I chased
+three more hypotheses:
+1. **quartic feature growth** -- real, and worth fixing on its own (|xq|max 2->12, |A|max 17->1.3e4 over 3000
+   steps). Added qk-normalisation, which is a genuine win: **3.8578 vs 3.8747, and FASTER (314 vs 292 ktok/s)**.
+2. **denominator collapse** -- ruled out: den_min stayed at 1.0 for 12,200 steps.
+3. **bf16 in the gate backward** -- ruled out: fp32 and bf16 both survived 400 steps in my probe.
+Meanwhile a probe with the same math **survived 12,200 steps and reached loss 3.18, beating the transformer's
+3.4617**, while bench died at step 78 reproducibly across seeds. That contradiction was the clue.
+**CAUSE: the clamp was never in the file.** My edit asserted on a string from BEFORE qk-norm was added, matched an
+older copy, and the replacement was overwritten by the later edit. The tool reported success; the file did not have
+it. Line 101 still read `.exp()`.
+**LESSON: verify the file, not the edit's return value.** The corrected edit now re-reads the file after writing and
+asserts the fix is present. Four experiments and roughly an hour of GPU time went to chasing a bug that was already
+diagnosed and simply not applied. When a probe and the harness disagree on identical math, suspect the harness
+content before inventing new physics.

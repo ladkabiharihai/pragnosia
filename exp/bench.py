@@ -95,10 +95,12 @@ class Mixer(nn.Module):
         A = torch.einsum('bthf,bshf->bhts', qf, kf)
         if s.gate:
             # per-token forget rate -> pairwise factor exp(L_t - L_s), L_t = sum_{u<=t} log g_u.
-            # t >= s under the causal mask so the exponent is <= 0: bounded, no overflow.
+            # The exponent is <= 0 only for t >= s. For t < s it is POSITIVE and .exp() overflows to inf; the
+            # causal mask is applied AFTER, and inf * 0 = NaN. CLAMP at 0 -- those entries are masked away, so
+            # nothing the model uses changes. This is what caused the NaN at step ~78, reproducibly across seeds.
             lg = F.logsigmoid(s.Wg(Hn)).transpose(1, 2)                  # [B,H,T], each <= 0
             L = lg.cumsum(-1)
-            A = A * (L.unsqueeze(-1) - L.unsqueeze(-2)).exp()
+            A = A * (L.unsqueeze(-1) - L.unsqueeze(-2)).clamp(max=0.0).exp()
         A = A.tril()
         den = A.sum(-1, keepdim=True) + 1e-5
         num = torch.einsum('bhts,bshd->bthd', A, v)
