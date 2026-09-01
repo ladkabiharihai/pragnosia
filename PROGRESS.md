@@ -1436,3 +1436,38 @@ control returns almost fully (0.285 -> 0.860) and the completions become prompt-
 -> Emperor/Roman Empire/olympian; "In the beginning of the story" -> hero/story/dies).
 LESSON, the same one as the eval's DECAY and CORPUS mismatches: **any deployment path must mirror what training
 did.** evaluate.py already decays correctly; it was only this probe that did not.
+
+## THE EFFICIENCY PICTURE, MEASURED HONESTLY (and a 2x compute saving found)
+The user asked why the run slowed from 1022 to 246 ktok/s. Decomposed it, one growth step at a time (B=8, CH=2048):
+| config | params | FE | ktok/s |
+|--------|--------|----|--------|
+| infant 384x4L DIN8 | 19M | 45 | 373 |
+| + width 1024 | 76M | 45 | 187 (0.50x) |
+| + depth 16L | 202M | 45 | **55 (0.15x)** |
+| + DIN 24 | 202M | 325 | 57 |
+**DEPTH is what costs throughput; the DIN fix was FREE** (55 -> 57, inside noise). I had assumed FE=325 was
+expensive and it is not.
+### CHUNK LENGTH IS A 7.8x LEVER (and my hypothesis about it was backwards, twice)
+I predicted SHORTER chunks would be faster (attention is O(chunk^2)). Measured at T=512 they are much SLOWER
+(512: 330 ktok/s, 64: 60) because kernel-launch overhead and GPU idling dominate, not the quadratic math.
+At LONG context the same lever runs the other way and is huge -- at T=32768:
+| chunk | iterations | ktok/s | peak GiB |
+|-------|-----------|--------|----------|
+| 512 | 64 | 31 | 0.67 |
+| 2048 (what we train with) | 16 | 122 | 1.45 |
+| **4096** | 8 | **242** | 2.56 |
+| 8192 | 4 | 228 | 5.07 |
+**CH=4096 is 2x faster than the CH=2048 we actually train with**, for the same tokens and the same function.
+That is a free doubling of training throughput on the next run.
+### WHERE WE ACTUALLY WIN
+| context | transformer | ours | tf GiB | our GiB |
+|---------|------------|------|--------|---------|
+| 32,768 | 404 | 240 (0.59x) | 15.12 | **2.56** |
+| 131,072 | **OOM** | **242** | OOM | 2.84 |
+| 262,144 | **OOM** | **236** | OOM | 3.02 |
+Our throughput is FLAT with context (240 / 242 / 236) -- the linear property is real. Below ~64k a transformer is
+FASTER than us; above it, it cannot run at all while we continue unchanged on ~6x less memory.
+**HONEST STATEMENT OF THE CLAIM:** we are not faster per token at ordinary context lengths -- at matched size we are
+2.7x slower and 1.02 nats worse. What we have is CONSTANT cost in context length, which becomes decisive only where
+quadratic attention stops fitting. That is a real advantage, but it is narrower than "more efficient than a
+transformer" and it does not excuse the quality gap.
