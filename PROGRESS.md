@@ -1578,3 +1578,30 @@ Loss at 100M tokens: transformer **3.4617**, ours **3.5165** -- we are **+0.055 
 87% of a 0.413-nat gap, which is progress, not victory. And GENERATION QUALITY -- the thing the vision actually
 claims -- has not been compared at all. Running both to 250M tokens now and generating from the same contexts with
 the same decoding, because loss is not the deliverable.
+
+## A 1.8x SPEEDUP IN ONE LINE: taylor()'s gather had a scatter backward
+The user pushed on why training was slow. Profiled a training step and found the answer had nothing to do with
+linear attention: **`indexing_backward` was 39% of every step** (13.12 ms of 33.5 ms) -- the largest single kernel
+in the model, bigger than all the matmuls combined. A transformer of the same shape spends **8.5 ms per step in
+total** and has no such kernel at all.
+CAUSE: `taylor()` built its quadratic terms with fancy indexing, `(x[...,None]*x[...,None,:])[...,iu[0],iu[1]]`.
+The backward of a gather is an ATOMIC SCATTER. Replacing it with a full outer product plus a contiguous reshape
+removes the gather entirely:
+| feature map | fwd+bwd | |
+|-------------|---------|---|
+| gather of the upper triangle (ours) | 1.599 ms | indexing_backward 1.44 ms of it |
+| full outer product + reshape | **0.223 ms** | **7.16x faster**, no scatter |
+FULL MODEL, same shape:
+| DIN | FE | ktok/s | vs before |
+|-----|----|--------|-----------|
+| 16 | 273 | **405** | **1.82x** |
+| 24 | 601 | 399 | 1.80x |
+| 32 | 1057 | 355 | 1.60x |
+DIN=24 now costs almost nothing where it used to cost 30% of throughput.
+COST: the outer product keeps both x_i x_j and x_j x_i, so FE is DIN^2+DIN+1 instead of DIN(DIN+1)/2+DIN+1. The
+duplicates are harmless (the model can weight them identically) but the STATE is larger, so DIN should be chosen
+against the new FE. Correctness re-verified after the change: chunked recurrence still exact to ~1e-15 relative in
+fp64, and step() still matches forward().
+WHAT I HAD ASSUMED: that we were slow because linear attention with a big feature map is inherently expensive. It
+was not -- it was one badly-shaped op whose backward the profiler names outright. I should have profiled before
+theorising about FLOPs.

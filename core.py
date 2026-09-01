@@ -19,15 +19,26 @@ class Config:
         # cannot be both -- so neither is scaled and the head's factor lives here instead. Scaling the head's
         # OUTPUT by 1/c is exactly equivalent to scaling its weights by 1/c.
         s.tie_emb=tie_emb; s.head_scale=head_scale
-        s.iu=torch.triu_indices(DIN,DIN,device=DEV); s.FE=1+DIN+s.iu.shape[1]
+        s.iu=torch.triu_indices(DIN,DIN,device=DEV); s.FE=1+DIN+DIN*DIN   # full outer product (see taylor)
 
 def rmsnorm(x,eps=1e-6):
     n=(x.pow(2).mean(-1,keepdim=True)+eps).sqrt(); return x/n, n
 def rmsnorm_vjp(x,n,dy):
     D_=x.shape[-1]; return dy/n - x*((dy*x).sum(-1,keepdim=True)/(D_*n.pow(3)))
 def taylor(x,cfg):                                            # [...,DIN] -> [...,FE], symmetric 2nd-order
-    qd=(x.unsqueeze(-1)*x.unsqueeze(-2))[...,cfg.iu[0],cfg.iu[1]]
-    return torch.cat([torch.ones(*x.shape[:-1],1,device=x.device,dtype=x.dtype),x,qd],-1)
+    """FULL outer product, NOT a gather of its upper triangle.
+
+    PROFILED: the gather form `(x.unsqueeze(-1)*x.unsqueeze(-2))[...,iu[0],iu[1]]` has a backward that is an ATOMIC
+    SCATTER, and it was **39% of every training step** (13.12 ms of 33.5 ms) -- the single largest kernel in the
+    model, larger than all the matmuls combined. A transformer of the same shape spends 8.5 ms per step TOTAL and
+    has no such kernel at all. Replacing the gather with an outer product + contiguous reshape removes it entirely:
+    1.599 ms -> 0.223 ms for the map, a 7.16x speedup on that op.
+
+    The cost is redundancy: the full outer product carries both x_i x_j and x_j x_i, so FE is DIN^2 + DIN + 1
+    instead of DIN(DIN+1)/2 + DIN + 1. The duplicated features are harmless (the model can weight them
+    identically) and the state grows, so DIN should be chosen accordingly."""
+    o=(x.unsqueeze(-1)*x.unsqueeze(-2)).reshape(*x.shape[:-1],x.shape[-1]*x.shape[-1])
+    return torch.cat([torch.ones(*x.shape[:-1],1,device=x.device,dtype=x.dtype),x,o],-1)
 def tvjp(x,g,cfg):                                            # exact vjp of taylor
     dx=g[...,1:1+cfg.DIN].clone(); gq=g[...,1+cfg.DIN:]
     dx.index_add_(-1,cfg.iu[0],gq*x[...,cfg.iu[1]]); dx.index_add_(-1,cfg.iu[1],gq*x[...,cfg.iu[0]]); return dx
