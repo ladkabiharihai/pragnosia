@@ -96,6 +96,13 @@ class Layer(nn.Module):
             # a per-token rate g_u becomes the pairwise factor exp(L_t - L_s) with L_t = sum_{u<=t} log g_u.
             # CLAMP at 0: the exponent is <=0 only for t>=s, and for t<s it overflows to inf BEFORE the causal
             # mask, where inf*0 = NaN. Those entries are masked away, so clamping changes nothing that is used.
+            # a per-token rate g_u becomes the pairwise factor exp(L_t - L_s) with L_t = sum_{u<=t} log g_u.
+            # CLAMP at 0: the exponent is <=0 only for t>=s, and for t<s it overflows to inf BEFORE the causal
+            # mask, where inf*0 = NaN. Those entries are masked away, so clamping changes nothing that is used.
+            # NOTE: folding this into qf/kf (as GLA/Mamba-2 do) would save ~12 GiB of [B,T,T] tensors, BUT it
+            # also rescales the kf that is WRITTEN INTO THE CARRIED STATE, so the decay gets applied twice across
+            # chunk boundaries -- measured 2.25e-03 relative error on the chunked recurrence. Doing it correctly
+            # requires un-folding kf before the state write; left as the obvious next memory win.
             lg=F.logsigmoid(s.Wg(H)).squeeze(-1)               # [B,T], each <= 0
             L=lg.cumsum(-1)
             A=A*(L.unsqueeze(-1)-L.unsqueeze(-2)).clamp(max=0.0).exp()

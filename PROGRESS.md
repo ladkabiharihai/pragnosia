@@ -1852,3 +1852,27 @@ so it is the live transition that trips it, not the shape.
 FIX: compile failure after a growth is now caught and the run continues EAGER. Eager is ~2x slower; a dead run
 costs far more. The compile is also forced immediately after growth so the failure surfaces at a known point
 instead of mid-step.
+
+## WHY TRAINING USES 29.7 GB -- my 3 GiB estimate was wrong by 10x
+The user asked why a 19M model consumes 30 GB. Measured properly (one chunk alone is **14.08 GiB**):
+| what autograd saves, PER LAYER | B=8, T=4096 |
+|--------------------------------|-------------|
+| A = qf.kf [B,T,T] | 0.25 GiB |
+| A.tril() output | 0.25 |
+| **gate exponent [B,T,T]** | **0.25** |
+| **gate exp() [B,T,T]** | **0.25** |
+| **A * gate [B,T,T]** | **0.25** |
+| qf, kf, num, v, MLP hidden | ~0.14 |
+| **per layer** | **~1.4 GiB** |
+| x 4 layers + logits (2 GiB) | **~7.6 GiB** |
+My estimate counted ONE [B,T,T] tensor per layer. **The gate I added allocates THREE MORE** -- the exponent, its
+exp(), and the product -- each [B,4096,4096], all kept for backward. That is ~12 GiB of the total, purely from
+gating, and I never accounted for it when I enabled it.
+### THE FIX EXISTS BUT BREAKS THE RECURRENCE -- not shipped
+GLA and Mamba-2 fold the gate into q and k: exp(L_t-L_s)*(q_t.k_s) == (exp(L_t)q_t).(exp(-L_s)k_s), so no [B,T,T]
+gate tensor is ever built. Implemented and measured: **14% less peak memory, 29% faster, equivalent to 5.9e-05
+absolute** on the entries the causal mask keeps.
+BUT IT BROKE THE CHUNKED RECURRENCE (2.25e-03 relative, step==forward 1.29e-03): folding rescales the kf that is
+WRITTEN INTO THE CARRIED STATE, so the decay is applied a second time at the next chunk. **Reverted.** Doing it
+correctly means un-folding kf before the state write; recorded in core.py as the next memory win.
+Correctness re-verified after the revert: chunked==full 1.05e-15, step==forward 7.84e-16, both paths.
