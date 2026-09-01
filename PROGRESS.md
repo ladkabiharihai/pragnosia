@@ -1876,3 +1876,35 @@ BUT IT BROKE THE CHUNKED RECURRENCE (2.25e-03 relative, step==forward 1.29e-03):
 WRITTEN INTO THE CARRIED STATE, so the decay is applied a second time at the next chunk. **Reverted.** Doing it
 correctly means un-folding kf before the state write; recorded in core.py as the next memory win.
 Correctness re-verified after the revert: chunked==full 1.05e-15, step==forward 7.84e-16, both paths.
+
+## THE POST-GROWTH CRASH: an inductor BACKWARD bug, plus 9 GiB of avoidable memory
+Run 4 died twice, each time immediately after a SUCCESSFUL growth #1. Two independent causes, both found by
+reproducing the crash in a controlled harness rather than reading the traceback alone.
+### CAUSE 1 -- the guard was checking the wrong thing (twice)
+`CantSplit` is raised while compiling the **BACKWARD** graph, which torch.compile builds LAZILY on the first
+`.backward()`. My first guard warmed up with a forward at B=1 (wrong batch -> compiled a different variant). My
+second used B=8 but still only a FORWARD, so it passed and the real training step died anyway. The warm-up now
+runs forward AND backward for all three call signatures the loop uses.
+### CAUSE 2 -- the bug itself is avoidable, and eager fallback was costing 2x
+Swept inductor's tiling options on the exact failing shape (D=640 NL=8 DIN=12, FE=157):
+| config | result |
+|--------|--------|
+| defaults | FAILS |
+| triton.max_tiles=1 | FAILS |
+| triton.max_tiles=3 | FAILS |
+| **triton.prefer_nd_tiling=True** | **COMPILES** |
+Set in the trainer. The guard remains as a safety net, but the run no longer needs it.
+### AND THE MEMORY FIX THE USER APPROVED (applied now, because it is what made growth fit)
+`return_hidden` + `ce_from_hidden` + `entropy_from_hidden`: the [B,T,32768] logits tensor is never built. The old
+path also did `lg.detach().float()` -- a 4 GiB fp32 copy -- purely so `SaturationSensor.entropy` could subsample
+4096 rows from it. Now only those 4096 rows are projected.
+| shape | full logits | chunked head | saved |
+|-------|------------|--------------|-------|
+| infant 384x4L DIN8 | 25.14 GiB | **15.73** | 37% |
+| after growth #1, 640x8L DIN12 | **38.09 GiB** | **28.75** | 25% |
+Verified EXACT: loss identical to 0.00e+00 in fp64 at every slice count, and **gradients identical to 1.09e-13**
+worst relative across all parameters. It is also slightly FASTER (165 -> 181 ktok/s post-growth).
+**This is why growth crashed.** At 38.09 GiB, with prod holding 49 GB of a 95.8 GB card, there was no headroom
+left to compile the new shape. At 28.75 GiB there is.
+SMOKE TEST through a live growth, with everything applied: loss 9.373 -> 8.489 across the transition, recompiled
+successfully, 18.50 GiB peak, 54M at D=640 NL=8 DIN=12.

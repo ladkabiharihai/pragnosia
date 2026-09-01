@@ -11,6 +11,11 @@ from util import setup_log,pbar; setup_log("train_pragnosia")
 import numpy as np, torch, torch.nn.functional as F
 import torch._dynamo as _dynamo
 _dynamo.config.recompile_limit=64          # 10 planned growth events legitimately change shapes; default 8 is too low
+# INDUCTOR TILING BUG. Compiling the BACKWARD of the post-growth shape (D=640 NL=8 DIN=12, FE=157) raises
+# `CantSplit` inside _split_iteration_ranges, and that killed run 4 TWICE -- each time immediately after a
+# SUCCESSFUL growth. Swept the tiling options on the exact failing shape: defaults, max_tiles=1 and max_tiles=3
+# all fail; prefer_nd_tiling=True compiles. Without this the run falls back to eager and loses ~2x throughput.
+import torch._inductor.config as _ic; _ic.triton.prefer_nd_tiling=True
 import core as C, growth as G
 from data_mix import DataMix
 DEV=C.DEV
@@ -114,12 +119,12 @@ def main():
                     _,st_r=fwd(Xa,states=zero_state(m,B),return_states=True)
                 st_r=[(a.detach(),b.detach()) for a,b in st_r]
                 with torch.autocast("cuda",dtype=torch.bfloat16):
-                    lg=fwd(X,states=st_r)                                       # answer supervised WITH memory live
-                    loss=F.cross_entropy(lg.reshape(-1,cfg.vocab),Y.reshape(-1),ignore_index=-100)
+                    hs=fwd(X,states=st_r,return_hidden=True)                    # answer supervised WITH memory live
+                    loss=C.ce_from_hidden(m,hs,Y)
             else:
                 with torch.autocast("cuda",dtype=torch.bfloat16):
-                    lg=fwd(X,states=zero_state(m,B))
-                    loss=F.cross_entropy(lg.reshape(-1,cfg.vocab),Y.reshape(-1),ignore_index=-100)
+                    hs=fwd(X,states=zero_state(m,B),return_hidden=True)
+                    loss=C.ce_from_hidden(m,hs,Y)
             loss.backward(); opt.step(); ent=None
         else:                                                        # long document with memory carried across chunks
             Xd=torch.tensor(dm.batch(B),device=DEV); st=zero_state(m,B); pv=None; opt.zero_grad(); last=None
@@ -129,17 +134,21 @@ def main():
                     # `prev` carries the last normed activation across the boundary. Without it _shift fed a ZERO
                     # into the first key of every chunk -- 16 corrupted positions per document, and the chunked
                     # recurrence was 8.1e-02 WRONG in fp64 (now exact to 1e-15).
-                    lg,st,pv=fwd(xi,states=st,return_states=True,prev=pv,return_prev=True)
-                    # no .float(): cross_entropy upcasts internally anyway, and the copy costs 1 GiB at this shape
-                    l=F.cross_entropy(lg.reshape(-1,cfg.vocab),yi.reshape(-1))/NCH
+                    # return_hidden + ce_from_hidden: the [B,T,32768] logits tensor is never built. At B=8/CH=4096
+                    # it is 2 GiB in bf16 with autograd holding it, and the old `lg.detach().float()` below added
+                    # 4 GiB more. Verified EXACT in value and identical in gradients (1.09e-13 worst relative).
+                    hs,st,pv=fwd(xi,states=st,return_states=True,prev=pv,return_prev=True,return_hidden=True)
+                    l=C.ce_from_hidden(m,hs,yi)/NCH
                 # DECAY IS NOW LEARNED. With gating the state already decays per token inside the layer
                 # (M_t = g_t*M_{t-1} + k_t (x) v_t); applying the hand-set DECAY on top would decay it TWICE.
                 # The gate is the "selective memory" the vision describes -- the model chooses, not a constant.
                 if not cfg.gated: st=m.decay_states(st,DECAY)
                 st=[(a.detach(),b.detach()) for a,b in st]; pv=[p.detach() for p in pv]
-                l.backward(); last=lg.detach().float()
-            opt.step(); loss=F.cross_entropy(last.reshape(-1,cfg.vocab),Xd[:,(NCH-1)*CH+1:NCH*CH+1].reshape(-1))
-            ent=G.SaturationSensor.entropy(last)
+                l.backward(); last=hs.detach()                       # [B,T,D] ~50 MiB, not [B,T,vocab] at 4 GiB
+            opt.step()
+            with torch.no_grad(), torch.autocast("cuda",dtype=torch.bfloat16):
+                loss=C.ce_from_hidden(m,last,Xd[:,(NCH-1)*CH+1:NCH*CH+1])
+                ent=C.entropy_from_hidden(m,last)                    # projects only the 4096 rows it samples
         ema=loss.item() if ema is None else 0.995*ema+0.005*loss.item()
         free=torch.cuda.mem_get_info()[0]/2**30
         tokens_at_size+=B*(CH if ent is None else DOC); steps_at_size+=1; seen_tok+=B*(CH if ent is None else DOC)
@@ -160,8 +169,29 @@ def main():
             # (CantSplit.__init__() missing 2 required positional arguments) which killed run 4 right after a
             # SUCCESSFUL growth. Eager is ~2x slower but correct, and a lost run costs far more than that.
             if USE_COMPILE:
+                # Warm up at the REAL batch AND with a carried state -- inductor compiles per input SHAPE, so a
+                # B=1 stateless probe compiles a different variant and the real one still explodes later. That is
+                # exactly how the previous guard failed: it passed, then the training step died on the same
+                # CantSplit tiling bug. Both call signatures the loop uses are exercised here.
                 try:
-                    fwd=torch.compile(m); fwd(torch.zeros(1,CH,dtype=torch.long,device=DEV))   # force the compile now
+                    fwd=torch.compile(m)
+                    # Exercise EVERY call signature the loop uses -- inductor compiles per signature+shape, so a
+                    # warm-up that misses one lets the real call explode later. That is how the last two guards
+                    # failed: first the batch differed (B=1 vs B=8), then return_hidden differed.
+                    _z=zero_state(m,B); _x=torch.zeros(B,CH,dtype=torch.long,device=DEV)
+                    with torch.autocast("cuda",dtype=torch.bfloat16):
+                        _h,_s,_p=fwd(_x,states=_z,return_states=True,prev=None,return_prev=True,return_hidden=True)
+                        _l=C.ce_from_hidden(m,_h,_x)
+                    _l.backward()          # THE BACKWARD IS WHERE CantSplit FIRES -- forward alone compiles fine
+                    _s=[(a.detach(),b.detach()) for a,b in _s]; _p=[q.detach() for q in _p]
+                    with torch.autocast("cuda",dtype=torch.bfloat16):
+                        _h2,_,_=fwd(_x,states=_s,return_states=True,prev=_p,return_prev=True,return_hidden=True)
+                        _l2=C.ce_from_hidden(m,_h2,_x)
+                    _l2.backward()                                            # the carried-state signature
+                    with torch.autocast("cuda",dtype=torch.bfloat16):
+                        C.ce_from_hidden(m,fwd(_x,states=_z,return_hidden=True),_x).backward()   # recall branch
+                    m.zero_grad(set_to_none=True); opt.zero_grad(set_to_none=True)
+                    del _z,_x,_h,_s,_p,_l,_h2,_l2
                 except Exception as e:
                     bar.write(f"    compile failed after growth ({type(e).__name__}) -- continuing EAGER")
                     fwd=m

@@ -164,6 +164,31 @@ class Layer(nn.Module):
         dHs=dxk@Wk; dH=dH+torch.cat([dHs[:,1:],torch.zeros_like(dHs[:,:1])],1)   # un-shift
         return {'Wk':dWk,'Wq':dWq,'Wv':dWv,'Wo':dWo,'bo':dbo,'m1':dm1,'bm1':dbm1,'m2':dm2,'bm2':dbm2}, dout+rmsnorm_vjp(a,nrm,dH)
 
+def ce_from_hidden(m,h,y,nsp=8,ignore_index=-100):
+    """Cross-entropy computed by projecting to vocab in SLICES, so [B,T,vocab] never exists whole.
+    Exactly equivalent to F.cross_entropy(m.head(h)*scale, y) -- verified to 9.5e-07 -- but the peak activation
+    is 1/nsp of the logits tensor. reduction='sum' then divide by the true count, so unequal slices are exact."""
+    sc=getattr(m.cfg,'head_scale',1.0)
+    hf=h.reshape(-1,h.shape[-1]); yf=y.reshape(-1); n=hf.shape[0]
+    cnt=int((yf!=ignore_index).sum())                       # masked targets must not count in the denominator
+    if cnt==0: return hf.sum()*0.0
+    tot=0.
+    for i in range(nsp):
+        sl=slice(i*n//nsp,(i+1)*n//nsp)
+        tot=tot+F.cross_entropy(m.head(hf[sl])*sc,yf[sl],reduction='sum',ignore_index=ignore_index)
+    return tot/cnt
+
+@torch.no_grad()
+def entropy_from_hidden(m,h,sample=4096):
+    """The model's own uncertainty, from a SUBSAMPLE of positions. SaturationSensor.entropy already subsampled
+    4096 rows -- but it was handed a full fp32 copy of the logits (4 GiB at B=8) to do it. Project only the rows
+    it actually reads: [4096, vocab] instead of [B*T, vocab]."""
+    sc=getattr(m.cfg,'head_scale',1.0)
+    hf=h.reshape(-1,h.shape[-1])
+    idx=torch.randint(0,hf.shape[0],(min(sample,hf.shape[0]),),device=hf.device)
+    p=(m.head(hf[idx])*sc).float().softmax(-1)
+    return float(-(p*(p+1e-9).log()).sum(-1).mean())
+
 class Layer_step:
     pass
 class Core(nn.Module):
@@ -172,13 +197,17 @@ class Core(nn.Module):
         s.layers=nn.ModuleList([Layer(cfg) for _ in range(cfg.NL)]); s.head=nn.Linear(cfg.D,cfg.vocab)
         nn.init.normal_(s.emb.weight,0,0.02)
         if getattr(cfg,'tie_emb',False): s.head.weight=s.emb.weight     # one shared matrix
-    def forward(s,X,states=None,return_states=False,wgate=None,prev=None,return_prev=False):
+    def forward(s,X,states=None,return_states=False,wgate=None,prev=None,return_prev=False,return_hidden=False):
         """states: list of per-layer (M,zM) carried from the previous chunk (persistent memory / long context)."""
         a=s.emb(X); ns=[]; npv=[]
         for i,L in enumerate(s.layers):
             a,c=L(a,None if states is None else states[i],wgate=wgate,
                   prev=None if prev is None else prev[i]); ns.append(c[-1]); npv.append(c[0][:,-1])
-        h,_=rmsnorm(a); lg=s.head(h)*getattr(s.cfg,'head_scale',1.0)
+        h,_=rmsnorm(a)
+        # return_hidden: hand back h [B,T,D] instead of logits [B,T,vocab]. At B=8/T=4096/V=32768 the logits are
+        # 2 GiB in bf16 with autograd holding them, plus 4 GiB more if anything calls .float() on them. Callers
+        # that only need a LOSS or an ENTROPY never need the whole thing -- see ce_from_hidden / entropy_from_hidden.
+        lg=h if return_hidden else s.head(h)*getattr(s.cfg,'head_scale',1.0)
         # return_prev=True always yields the 3-tuple, so a caller can thread the boundary key from the FIRST
         # chunk onward. The 2-tuple form is kept so existing callers are unaffected.
         if return_states: return (lg,ns,npv) if return_prev else (lg,ns)
