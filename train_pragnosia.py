@@ -82,7 +82,7 @@ def main():
     P=lambda: sum(p.numel() for p in m.parameters())
     print(f"PRAGNOSIA: infant D{cfg.D}x{cfg.NL} ({P()/1e6:.0f}M) -> target D{TARGET_D}x{TARGET_NL}; docs {DOC} chunk {CH} B{B}",flush=True)
     bar=pbar(range(step,STEPS),"pragnosia",total=STEPS-step)
-    ema=None; t0=time.time(); steps_at_size=0; last_grow_step=0
+    ema=None; t0=time.time(); steps_at_size=0; last_grow_step=0; seen_tok=0
     def set_lr(step_in_stage,frac_of_budget):
         """warmup after each grow, then cosine-decay against progress toward this stage's 22 tok/param budget."""
         if step_in_stage<WARM: lr=LR*(step_in_stage+1)/WARM
@@ -125,7 +125,7 @@ def main():
             ent=G.SaturationSensor.entropy(last)
         ema=loss.item() if ema is None else 0.995*ema+0.005*loss.item()
         free=torch.cuda.mem_get_info()[0]/2**30
-        tokens_at_size+=B*(CH if ent is None else DOC); steps_at_size+=1
+        tokens_at_size+=B*(CH if ent is None else DOC); steps_at_size+=1; seen_tok+=B*(CH if ent is None else DOC)
         cur_lr=set_lr(steps_at_size,tokens_at_size/(TOK_PER_PARAM*P()))
         # a grow needs BOTH: the model's own saturation signal AND enough tokens spent at this size (22/param).
         earned = tokens_at_size >= TOK_PER_PARAM*P()
@@ -141,7 +141,10 @@ def main():
             fwd=torch.compile(m) if USE_COMPILE else m           # shapes changed -> recompile once per grow
             bar.write(f"    >>> SELF-GREW #{k} at step {it}: D={m.cfg.D}x{m.cfg.NL}L mlp{m.layers[0].m1.weight.shape[0]} -> {P()/1e6:.0f}M DIN{m.cfg.DIN} (earned {earned_tpp:.0f} tok/param at the old size, free {free:.0f}G)")
         if (it+1)%100==0:
-            tps=B*DOC*(it-step+1)/(time.time()-t0)
+            # COUNT WHAT WE ACTUALLY PROCESSED. This used B*DOC for every iteration, but RECALL_FRAC of them are
+            # short recall batches of B*CH -- at 15% that OVERSTATED throughput by 1.164x (a reported 1022 ktok/s
+            # was really 879). `seen_tok` accumulates the true count at the point each batch is built.
+            tps=seen_tok/(time.time()-t0)
             bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L {P()/1e6:.0f}M {tokens_at_size/P():.0f}tok/param lr={cur_lr:.1e} {tps/1e3:.0f}ktok/s free={free:.0f}G")
         if (it+1)%500==0:
             ck={'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'DIN':m.cfg.DIN,'NL':m.cfg.NL,'step':it+1,'k':k,

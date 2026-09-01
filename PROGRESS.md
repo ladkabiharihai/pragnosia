@@ -1645,3 +1645,27 @@ from "2.7x slower": at matched shape and both compiled we are at 0.84x the trans
 stays flat as context grows while its is quadratic.
 LESSON: I benchmarked eager for a whole session while the production trainer compiles. Every speed number I reported
 before this was understated, and understated MORE for us than for the transformer.
+
+## THE 1000 ktok/s IS REAL -- and the trainer's counter had a 1.16x bug
+The user pointed at train_pragnosia.log showing ~1000 ktok/s. Checked it properly.
+**BUG FOUND in the trainer's own accounting.** Line 144 computed `tps = B*DOC*iterations/elapsed`, assuming every
+iteration processes a full 32768-token document. But RECALL_FRAC=15% of iterations are short recall batches of
+B*CH=16,384 tokens, 6.2% the size:
+```
+true average per iteration = 0.85*262,144 + 0.15*16,384 = 225,280
+the trainer counted        =                              262,144      -> 1.164x OVERSTATED
+```
+So the reported 1022 ktok/s was really **879**. Fixed: `seen_tok` now accumulates the actual tokens of each batch.
+**AND MY BENCHMARKS WERE UNDERSTATING IT.** Measuring the REAL trainer loop -- real data loading, full 32768-token
+document streamed as 16 chunks with carried state, torch.compile on -- gives:
+| model | params | FE | ktok/s |
+|-------|--------|----|--------|
+| infant 384x4L DIN8, ungated (what run 3 ran) | 19M | 73 | **1065** |
+| infant 384x4L DIN8, **gated** | 19M | 73 | **1008** |
+| infant 384x4L DIN12, gated | 19M | 157 | 984 |
+| target 1024x16L DIN16, gated | 202M | 273 | 184 |
+So the infant genuinely runs at ~1000 ktok/s, and **gating costs only 5%** of it. My earlier figure of 518 for the
+same shape came from a single 2048-token step with freshly allocated random tensors -- not the trainer's loop.
+NET OF ALL THE SPEED WORK THIS SESSION: taylor() outer-product fix (1.8x), torch.compile in the comparison (2.1x for
+us vs 1.15x for the transformer), and honest token accounting. At matched shape with both compiled we are at 0.84x
+the transformer's throughput -- not the 2.7x slower I reported for most of this session.
