@@ -1908,3 +1908,25 @@ worst relative across all parameters. It is also slightly FASTER (165 -> 181 kto
 left to compile the new shape. At 28.75 GiB there is.
 SMOKE TEST through a live growth, with everything applied: loss 9.373 -> 8.489 across the transition, recompiled
 successfully, 18.50 GiB peak, 54M at D=640 NL=8 DIN=12.
+
+## RUN 4 SURVIVES GROWTH #1 -- the crash is fixed
+```
+>>> SELF-GREW #1 at step 3070: D=640x8L mlp2560 -> 54M DIN12 (earned 38 tok/param, free 26G)
+    step 3070 -> 3255 at the new shape, 615 ktok/s, 0 errors, prod HTTP 200
+```
+Two previous attempts died at exactly this point. The sensor also waited to **38 tok/param** against a 22 gate --
+the intrinsic signal genuinely deciding, not tripping on the floor.
+Projected peaks for the rest of the plan, extrapolated from two measured points (11.04 GiB at 4 layers, 18.50 at 8
+-> ~1.87 GiB per layer, the [B,T,T] attention term):
+| stage | layers | projected peak |
+|-------|--------|----------------|
+| infant 384x4L | 4 | 11.0 GiB |
+| after growth #1 640x8L | 8 | 18.5 GiB |
+| after growth #2 832x12L | 12 | 26.0 GiB |
+| after growth #3 1024x16L | 16 | 33.5 GiB |
+Against ~45.7 GiB available beside prod, the full plan fits with ~12 GiB spare. **Before the memory fix growth #1
+alone peaked at 38.09 GiB**, so growth #3 would have been impossible on this card.
+KNOWN REMAINING WASTE: the gate still allocates 3 extra [B,T,T] tensors per layer. Folding it into q/k removes
+them, and the algebra works out -- the folded k is EXACTLY the correctly-decayed key the state write needs, so the
+earlier double-decay was just the old `gt` factor being applied on top. Not doing it yet: exp(L_t - L_T) is >= 1
+and overflows for a strongly-forgetting gate over a 4096 chunk, which needs sub-block chunking to do safely.
