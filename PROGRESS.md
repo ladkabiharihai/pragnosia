@@ -1930,3 +1930,32 @@ KNOWN REMAINING WASTE: the gate still allocates 3 extra [B,T,T] tensors per laye
 them, and the algebra works out -- the folded k is EXACTLY the correctly-decayed key the state write needs, so the
 earlier double-decay was just the old `gt` factor being applied on top. Not doing it yet: exp(L_t - L_T) is >= 1
 and overflows for a strongly-forgetting gate over a 4096 chunk, which needs sub-block chunking to do safely.
+
+## "MEMORY DOUBLED AFTER GROWTH THEN CAME BACK" -- explained, and it is benign
+The user spotted a memory spike at growth #1 that then receded. Investigated rather than assumed.
+**IT IS THE GROWTH TRANSIENT.** For a moment the process holds BOTH models at once: old params + old Adam state
+(m and v) + old compiled graph, alongside the new params, new Adam state, the THREE warm-up forward+backward
+passes I added (each building a full autograd graph at B=8/CH=4096), and inductor's compilation workspace. Then the
+old references drop and it settles.
+**NO LEAK.** Reservation is dead flat afterwards -- 34,554 MiB across six samples over 2.5 minutes and 500+ steps,
+and `free=10G` identical at steps 3201 / 3370 / 3541 / 3713.
+| | MiB |
+|---|-----|
+| available beside prod | 46,830 |
+| our reservation, stable | 34,554 |
+| of which LIVE (measured in isolation at 8 layers) | ~18,900 |
+| of which CACHED blocks the allocator is holding | ~15,600 |
+The cached portion is not a leak -- PyTorch reuses those blocks and frees them automatically before it would ever
+OOM. But it eats the headroom the NEXT growth needs to compile in, so `torch.cuda.empty_cache()` is now called
+right after each growth. (Staged in the file; it applies on the next resume, not to the live run.)
+Growth #2 fits regardless: 26.0 GiB live projected at 12 layers vs 46.8 GiB available.
+## THE POST-GROWTH LOSS BUMP IS THE LR SCHEDULE, NOT DAMAGE
+Loss also rose after growth (4.781 -> 4.973) and is recovering. That is the per-stage LR schedule restarting:
+| step | loss | lr |
+|------|------|-----|
+| 3072 (pre-growth) | 4.781 | 6.0e-05 (decayed to the floor) |
+| 3201 | 4.903 | 2.6e-04 (warming up again) |
+| 3598 | 4.973 | 5.9e-04 (peak) |
+| 3992 | **4.802** | 5.7e-04 |
+Loss is back to its PRE-GROWTH level while running at **~10x the learning rate** -- so the model is genuinely
+ahead of where it was, not recovering from damage. Growth itself is function-preserving (verified 5.4e-04).

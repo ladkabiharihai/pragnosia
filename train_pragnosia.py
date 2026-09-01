@@ -164,6 +164,11 @@ def main():
             else: G.grow_depth(m,amt)
             earned_tpp=tokens_at_size/max(1,P_before)            # capture BEFORE resetting (my first edit printed 0)
             opt=torch.optim.Adam(m.parameters(),lr=LR); k+=1; tokens_at_size=0; steps_at_size=0; last_grow_step=it
+            # Return the OLD shape's cached blocks to the driver. At growth the process briefly holds the old
+            # params + old Adam state + old compiled graph alongside the new ones, and the allocator keeps every
+            # freed block: measured 34.5 GB reserved where only ~18.9 GB is live. Harmless (PyTorch frees its
+            # cache before it would ever OOM) but it eats the headroom the NEXT growth needs to compile in.
+            torch.cuda.empty_cache()
             # RECOMPILE, BUT DO NOT DIE IF THE COMPILER CANNOT HANDLE THE NEW SHAPE. Growth changes FE from
             # DIN^2+DIN+1 to a new value, and inductor hit an internal tiling bug on FE=157
             # (CantSplit.__init__() missing 2 required positional arguments) which killed run 4 right after a
