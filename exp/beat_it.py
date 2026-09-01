@@ -16,6 +16,7 @@ setup_log("beat_it")
 import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 import core as C
 from data_mix import DataMix
+torch._dynamo.config.recompile_limit=64
 from tokenizers import Tokenizer
 
 DEV = C.DEV
@@ -72,6 +73,7 @@ def evl(m):
 
 
 def train(m, tag):
+    fwd = torch.compile(m)                 # BOTH sides compiled: eager understated us 2.1x vs its 1.15x
     opt = torch.optim.Adam(m.parameters(), lr=1e-3, betas=(0.9, 0.95))
     warm = 200; t0 = time.time()
     for i in range(STEPS):
@@ -80,7 +82,7 @@ def train(m, tag):
         for g in opt.param_groups: g['lr'] = lr
         X = torch.tensor(dm.batch(B), device=DEV)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            l = F.cross_entropy(m(X[:, :CH]).reshape(-1, V), X[:, 1:CH + 1].reshape(-1))
+            l = F.cross_entropy(fwd(X[:, :CH]).reshape(-1, V), X[:, 1:CH + 1].reshape(-1))
         opt.zero_grad(); l.backward()
         torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0); opt.step()
         if (i + 1) % 4000 == 0:

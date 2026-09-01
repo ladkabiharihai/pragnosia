@@ -1669,3 +1669,29 @@ same shape came from a single 2048-token step with freshly allocated random tens
 NET OF ALL THE SPEED WORK THIS SESSION: taylor() outer-product fix (1.8x), torch.compile in the comparison (2.1x for
 us vs 1.15x for the transformer), and honest token accounting. At matched shape with both compiled we are at 0.84x
 the transformer's throughput -- not the 2.7x slower I reported for most of this session.
+
+## THE TAYLOR MAP IS NOT THE PROBLEM -- it is our biggest ADVANTAGE (hypothesis refuted)
+Five architectural changes had not closed the gap, so I tested the one component no competitive linear-attention
+model uses: the 2nd-order Taylor feature map. Hypothesis: its features are polynomials of only d numbers, so the
+RANK of the retrieval space is bounded by d rather than by FE, and GLA/Mamba-2/RWKV-6 all use simple ELEMENTWISE
+maps with a bigger key dimension instead. Compared at MATCHED FE (= matched state size), all gated + qk-normed:
+| feature map | d_k | FE | loss |
+|-------------|-----|----|------|
+| **taylor dk=24 (ours)** | 24 | 601 | **3.5370** |
+| identity d=601 | 601 | 601 | 6.0531 (**+2.52**) |
+| silu d=601 | 601 | 601 | 5.3636 (**+1.83**) |
+**HYPOTHESIS REFUTED, decisively.** The elementwise maps are 1.8-2.5 nats WORSE at the same state size. The Taylor
+map is the strongest component in our architecture, not the weakness -- 601 polynomial features of 24 numbers beat
+601 independent linear features by a wide margin, because the products encode PAIRWISE interactions that a linear
+map cannot express at all.
+This is worth recording as a positive result: our one genuinely novel design choice is carrying the architecture.
+### WHERE THAT LEAVES THE GAP
+| change | effect on the gap |
+|--------|-------------------|
+| data-dependent gating | **-0.28** (the big one) |
+| qk-norm | -0.017, and faster |
+| dh 24 -> 32 | -0.063 |
+| multi-head | +0.04 (hurts) |
+| elementwise feature map | +1.8 to +2.5 (much worse) |
+Remaining: **+0.16 to +0.20 nats** at 250M tokens, and generation still loops where the transformer does not.
+Speed is now near parity (0.84x compiled, and 1008 ktok/s for the infant in the real loop).

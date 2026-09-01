@@ -21,6 +21,7 @@ setup_log("featuremap")
 import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 import core as C
 from data_mix import DataMix
+torch._dynamo.config.recompile_limit=64
 
 DEV = C.DEV
 V = 32768; CH = 512; B = 16; D = 384; NL = 6
@@ -37,8 +38,7 @@ class Mixer(nn.Module):
     def __init__(s, D, dk, rs, fmap, mult=4):
         super().__init__(); s.rs = rs; s.fmap = fmap; s.dk = dk
         if fmap == 'taylor':
-            s.iu = torch.triu_indices(dk, dk, device=DEV)
-            s.fe = 1 + dk + s.iu.shape[1]
+            s.fe = 1 + dk + dk * dk
         else:
             s.fe = dk
         s.Wk = nn.Linear(D, dk, bias=False); s.Wq = nn.Linear(D, dk, bias=False)
@@ -48,8 +48,8 @@ class Mixer(nn.Module):
 
     def phi(s, x):
         if s.fmap == 'taylor':
-            qd = x[..., s.iu[0]] * x[..., s.iu[1]]
-            return torch.cat([torch.ones(*x.shape[:-1], 1, device=x.device, dtype=x.dtype), x, qd], -1)
+            o = (x.unsqueeze(-1) * x.unsqueeze(-2)).reshape(*x.shape[:-1], s.dk * s.dk)
+            return torch.cat([torch.ones(*x.shape[:-1], 1, device=x.device, dtype=x.dtype), x, o], -1)
         if s.fmap == 'silu':     return F.silu(x)
         if s.fmap == 'elu':      return F.elu(x) + 1.0        # the classic linear-attention map (Katharopoulos)
         return x                                              # identity
@@ -99,6 +99,7 @@ def run(dk, fmap):
     torch.manual_seed(0); np.random.seed(0)
     m = M(dk, fmap).to(DEV)
     torch.manual_seed(1); np.random.seed(1)
+    fwd = torch.compile(m)                        # compiled, like everything else now
     opt = torch.optim.Adam(m.parameters(), lr=1e-3, betas=(0.9, 0.95))
     warm = 200; t0 = time.time()
     for i in range(STEPS):
@@ -107,7 +108,7 @@ def run(dk, fmap):
         for g in opt.param_groups: g['lr'] = lr
         X = torch.tensor(dm.batch(B), device=DEV)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            l = F.cross_entropy(m(X[:, :CH]).reshape(-1, V), X[:, 1:CH + 1].reshape(-1))
+            l = F.cross_entropy(fwd(X[:, :CH]).reshape(-1, V), X[:, 1:CH + 1].reshape(-1))
         opt.zero_grad(); l.backward()
         torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0); opt.step()
     out = evl(m); fe = m.layers[0].fe
@@ -121,10 +122,12 @@ if __name__ == "__main__":
     print(f"FEATURE MAP COMPARISON, all gated + qk-normed. {TOKENS/1e6:.0f}M tokens each.\n"
           f"Reference at this budget: transformer 3.4617, ours-with-taylor 3.5165\n", flush=True)
     print(f"  {'feature map':>22s} {'d_k':>5s} {'FE':>5s} {'params':>8s} {'loss':>8s} {'ktok/s':>8s}", flush=True)
-    for tag, dk, fm in (("taylor d=32 (ours)", 32, 'taylor'),
-                        ("identity d=561", 561, 'identity'),
-                        ("silu d=561", 561, 'silu'),
-                        ("elu+1 d=561", 561, 'elu'),
-                        ("silu d=256", 256, 'silu')):
+    # matched FE (= state size) so the comparison is about the MAP, not capacity:
+    # taylor dk=24 -> FE=601. The elementwise maps get dk=601 directly.
+    for tag, dk, fm in (("taylor dk=24 (ours)", 24, 'taylor'),
+                        ("identity d=601", 601, 'identity'),
+                        ("silu d=601", 601, 'silu'),
+                        ("elu+1 d=601", 601, 'elu'),
+                        ("silu d=384", 384, 'silu')):
         l, fe, P, tps = run(dk, fm)
         print(f"  {tag:>22s} {dk:5d} {fe:5d} {P/1e6:7.1f}M {l:8.4f} {tps/1e3:8.0f}", flush=True)
