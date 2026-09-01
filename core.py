@@ -45,20 +45,50 @@ class Layer(nn.Module):
         s.Wk=nn.Linear(cfg.D,cfg.DIN,bias=False); s.Wq=nn.Linear(cfg.D,cfg.DIN,bias=False)
         s.Wv=nn.Linear(cfg.D,cfg.DV,bias=False); s.Wo=nn.Linear(cfg.DV,cfg.D)
         s.m1=nn.Linear(cfg.D,mult*cfg.D); s.m2=nn.Linear(mult*cfg.D,cfg.D)
+        # DATA-DEPENDENT FORGETTING. Each token computes its OWN forget rate instead of sharing one global decay
+        # constant. MEASURED (exp/bench.py, matched size and tokens vs a transformer at 3.4617): our un-gated mixer
+        # scored 3.8747; adding this gate scores 3.5165 -- it closes 87% of the gap and is worth -0.28 nats alone.
+        # This is what separates Mamba-2 / GLA / RWKV-6 from plain linear attention, and we had the constant version.
+        # It also REPLACES the hand-set DECAY=0.05: the model now decides what to forget, per token, intrinsically.
+        s.gated=getattr(cfg,'gated',False); s.qknorm=getattr(cfg,'qknorm',False)
+        if s.gated:
+            s.Wg=nn.Linear(cfg.D,1)
+            nn.init.zeros_(s.Wg.weight); nn.init.constant_(s.Wg.bias,8.0)   # g=0.9997/token: start by forgetting almost nothing
     def forward(s,a,state=None,wgate=None):
         """`state`=(M,zM): the PERSISTENT fast-weight memory carried from previous chunks. Reading it costs nothing
         extra and is what gives UNBOUNDED context at CONSTANT memory; carrying it during training is what teaches the
         model to use its own memory. The returned new state is detached (no cross-chunk backprop)."""
         cfg=s.cfg; B,T,_=a.shape; H,nrm=rmsnorm(a); Hs=_shift(H)
-        xk=Hs@s.Wk.weight.T; kf=taylor(xk,cfg)                 # writes (shifted keys)
-        xq=H@s.Wq.weight.T;  qf=taylor(xq,cfg)                 # reads
+        xk=Hs@s.Wk.weight.T; xq=H@s.Wq.weight.T
+        if s.qknorm:
+            # taylor() is QUADRATIC in its input, so A = qf.kf grows QUARTICALLY with the projection magnitude
+            # (measured |A|max climbing 17 -> 1.3e4 over 3000 steps, eventually NaN). Unit-RMS bounds it for good,
+            # and is a small win in its own right: -0.017 nats AND faster.
+            xk=xk*torch.rsqrt(xk.pow(2).mean(-1,keepdim=True)+1e-6)
+            xq=xq*torch.rsqrt(xq.pow(2).mean(-1,keepdim=True)+1e-6)
+        kf=taylor(xk,cfg)                                      # writes (shifted keys)
+        qf=taylor(xq,cfg)                                      # reads
         v=H@s.Wv.weight.T
         A=torch.einsum('btf,bsf->bts',qf,kf)                   # retrieval weights beta_{t,s} = qf_t . kf_s
+        if s.gated:
+            # a per-token rate g_u becomes the pairwise factor exp(L_t - L_s) with L_t = sum_{u<=t} log g_u.
+            # CLAMP at 0: the exponent is <=0 only for t>=s, and for t<s it overflows to inf BEFORE the causal
+            # mask, where inf*0 = NaN. Those entries are masked away, so clamping changes nothing that is used.
+            lg=F.logsigmoid(s.Wg(H)).squeeze(-1)               # [B,T], each <= 0
+            L=lg.cumsum(-1)
+            A=A*(L.unsqueeze(-1)-L.unsqueeze(-2)).clamp(max=0.0).exp()
         A=A.tril()                                             # causal: read at t sees writes s<=t
         den=A.sum(-1,keepdim=True); num=torch.einsum('bts,bsd->btd',A,v)
         if state is not None:                                  # + read the persistent store
             M,zM=state
-            num=num+torch.einsum('btf,bfd->btd',qf,M); den=den+torch.einsum('btf,bf->bt',qf,zM).unsqueeze(-1)
+            rd=torch.einsum('btf,bfd->btd',qf,M); rz=torch.einsum('btf,bf->bt',qf,zM).unsqueeze(-1)
+            if s.gated:
+                # everything already in the state was written BEFORE this chunk, so it decays by the full
+                # cumulative gate up to t. Without this the recurrence and the parallel form disagree at every
+                # chunk boundary and generation would not match training.
+                g0=L.exp().unsqueeze(-1)                       # [B,T,1], product of gates from the chunk start
+                rd=rd*g0; rz=rz*g0
+            num=num+rd; den=den+rz
         den=den+1e-5
         r=num/den; o=r@s.Wo.weight.T+s.Wo.bias
         a1=a+s.rs*o
@@ -68,12 +98,22 @@ class Layer(nn.Module):
         # state. Every token writing means N tokens superimpose in a fixed state, so any one fact's share is ~1/N
         # (measured: keeping all writes is actively harmful, -1.10 gain). Gating by salience multiplies the
         # effective span at no extra state cost. wgate=None keeps the old behaviour (write everything).
-        if wgate is None:
+        if s.gated:
+            # write each key with the decay it will have accumulated by the END of the chunk, and shrink the
+            # incoming state by the chunk's total gate -- this is exactly M_T = (prod g) M_0 + sum_t (prod_{u>t} g_u) k_t (x) v_t
+            gt=(L[:,-1:]-L).exp().unsqueeze(-1)                # [B,T,1]: gate from t to the end of the chunk
+            kg=kf*gt
+            newM=torch.einsum('btf,btd->bfd',kg,v).detach(); newz=kg.squeeze(-1).sum(1).detach() if kg.dim()==4 else kg.sum(1).detach()
+            if state is not None:
+                gtot=L[:,-1].exp().view(-1,1,1)
+                newM=state[0]*gtot+newM; newz=state[1]*gtot.squeeze(-1)+newz
+        elif wgate is None:
             newM=torch.einsum('btf,btd->bfd',kf,v).detach(); newz=kf.sum(1).detach()
+            if state is not None: newM=state[0]+newM; newz=state[1]+newz
         else:
             g=wgate.unsqueeze(-1)
             newM=torch.einsum('btf,btd->bfd',kf*g,v).detach(); newz=(kf*g).sum(1).detach()
-        if state is not None: newM=state[0]+newM; newz=state[1]+newz
+            if state is not None: newM=state[0]+newM; newz=state[1]+newz
         return a2, (H,nrm,Hs,xk,kf,xq,qf,v,A,num,den,r,a1,H2,n2,z,g,(newM,newz))
     def local_vjp(s,a,cache,dout):
         cfg=s.cfg; H,nrm,Hs,xk,kf,xq,qf,v,A,num,den,r,a1,H2,n2,z,g,_st=cache

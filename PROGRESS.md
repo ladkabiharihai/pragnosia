@@ -1538,3 +1538,25 @@ though our cost is flat in context while the transformer's is quadratic.
 fixed-size state, still constant cost per token, still carried across chunks. Memory, growth, and consolidation all
 operate on that same state and need no change. The gate REPLACES our hand-set decay=0.05 with a learned per-token
 rate, which is the "selective memory" the vision describes and we had implemented as a constant.
+
+## A PRE-EXISTING BUG IN THE CHUNKED RECURRENCE: the boundary key is dropped
+Porting the gate into core.py required checking that the chunked recurrence matches the full parallel form. It does
+NOT -- and the mismatch is in the EXISTING ungated code, not the gate. In fp64 (so no precision excuse):
+| path | max |logit diff| on the carried chunk | relative |
+|------|------------------------------------|----------|
+| ungated (existing code) | 9.559e-02 | **8.1e-02** |
+| gated (new) | 6.632e-02 | 5.9e-02 |
+A correct recurrence should be ~1e-12 relative in fp64. Localised it:
+- state M after a chunk: **0.000e+00** vs the true prefix sum -- accumulation is exact
+- qf, v: **0.000e+00** -- inputs are exact
+- kf: differs at **exactly one position, index 0, by 6.4e-01** -- every other position is bit-exact
+**CAUSE:** `_shift()` prepends a zero, so the key for the first token of a chunk is built from a ZERO activation
+instead of from the last token of the previous chunk. Training on 32768-token documents in 2048-token chunks means
+16 tokens per document get a wrong key -- 0.05% of positions, but it makes the recurrence formally inexact and it
+grows worse as the chunk shrinks.
+`prefill`/`step` ALREADY solve this for generation by threading `prev` (the previous normed activation) between
+calls; the chunked TRAINING path never used it.
+HONEST NOTE: my first attempted fix -- adding the missing key to the carried state -- did NOT work (2.333e-02 ->
+2.334e-02) because the chunk still computes its own zero key at position 0, so the fix double-counts rather than
+replaces. The correct fix is to pass the previous chunk's last normed activation into `_shift`, exactly as `step`
+does with `prev`. Not yet applied: the benchmark is mid-run and this touches the training path.
