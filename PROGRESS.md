@@ -1753,3 +1753,45 @@ TWO BUGS I INTRODUCED AND CAUGHT: the `st=None; pv=None` edit matched a string t
 referenced before assignment and the first run crashed immediately; and an earlier `pv` detach landed on the wrong
 line. Both found by running rather than trusting the edit, and both fixed with a read-back assertion.
 Now training: infant 19M (tied embeddings), gated, qk-normed, 647 ktok/s, no errors.
+
+## RUN 4 CRASHED AT GROWTH #1 -- three bugs found, all mine, all in the growth path
+```
+RuntimeError: a and b must have same reduction dim, but got [16384, 640] X [384, 1]
+```
+**BUG 1: grow_width never resized the gate projection.** I added `Wg` to the Layer but not to growth, so D went
+384 -> 640 while Wg stayed [1,384]. Fixed: Wg grows like Wk/Wq.
+**BUG 2: grow_din used the OLD FE formula.** `cfg.FE=1+nDIN+iu.shape[1]` (the upper-triangle count) while
+`taylor()` now builds the full outer product, DIN^2. The config silently disagreed with the model.
+**BUG 3: qk-norm made grow_din non-preserving, and my first two fixes for it were wrong.**
+Measured the mechanism instead of theorising: after a 4->8 grow the surviving normed dims were amplified by
+**exactly 1.4142 = sqrt(2)**, giving a 2.3e-01 relative logit change. Cause: qk-norm divides by the RMS over DIN
+dims, so appending ZERO dims lowers the mean square and rsqrt inflates the survivors. My two attempted fixes both
+pre-scaled the WEIGHTS -- useless, because the normalisation they feed divides the scaling straight back out.
+THE REAL FIX: normalise by the **SUM** of squares rather than the mean. A sum is invariant to appended zero dims.
+The scale differs by a constant sqrt(DIN) that the learned Wk/Wq absorb.
+| operation | before | after |
+|-----------|--------|-------|
+| grow_din(+4) | 2.11e-01 | **0.00e+00** |
+| grow_din(+16) | 3.35e-01 | **0.00e+00** |
+| grow_width(+256) | 5.4e-04 | 5.4e-04 |
+| grow_depth(+4) | 0.00e+00 | 0.00e+00 |
+| full 3-event PLAN, worst | 2.11e-01 | **5.40e-04** |
+FULL CORRECTNESS SUITE, all passing: chunked recurrence == full parallel form (8.7e-16 ungated, 1.1e-15 gated),
+step() == forward() (8.0e-16 ungated, 7.8e-16 gated).
+## CHUNK 4096 APPLIED (the 1.9x the user asked about)
+Re-measured on the current architecture (exp/ctx_scale.py, infant shape, compiled):
+| chunk | chunks/doc | ktok/s | peak GiB |
+|-------|-----------|--------|----------|
+| 2048 | 16 | 355 | 1.33 |
+| **4096** | 8 | **671** | 2.39 |
+| 8192 | 4 | 602 | 4.90 |
+| 16384 | 2 | 448 | 11.41 |
+1.9x for the SAME function, and it doubles the backprop horizon since state is detached between chunks.
+AND CONSTANT COST CONFIRMED TO 200k TOKENS (chunk 4096, document length growing):
+| document | chunks | ktok/s | peak GiB |
+|----------|--------|--------|----------|
+| 32,768 | 8 | 665 | 2.39 |
+| 65,536 | 16 | 670 | 2.39 |
+| 131,072 | 32 | 674 | 2.39 |
+| **200,704** | 49 | **675** | **2.39** |
+Throughput and memory perfectly flat across a 6x range. A transformer at 200k would need ~90 GB of KV cache.

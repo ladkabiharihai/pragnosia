@@ -64,6 +64,14 @@ def grow_width(m,add):
             L.Wo=no
             # MLP: m1 READS the stream, m2 WRITES it. The HIDDEN dim must grow with D or the MLP ratio collapses
             # (4x -> 1.5x by the target) and the measured 1.17-nat MLP advantage erodes as the model grows.
+            if getattr(L,'gated',False):
+                # THE GATE PROJECTION MUST GROW TOO. Wg reads the residual stream, so it is a READER and takes /c
+                # like Wk/Wq. Omitting this crashed run 4 at growth #1: D went 384 -> 640 while Wg stayed [1,384]
+                # ("a and b must have same reduction dim, but got [16384, 640] X [384, 1]").
+                ng=nn.Linear(nD,L.Wg.weight.shape[0]).to(DEV)
+                ng.weight[:,:D]=L.Wg.weight/c; ng.weight[:,D:]=0.0    # new dims contribute nothing yet
+                ng.bias.copy_(L.Wg.bias)                              # keep the learned forget rate exactly
+                L.Wg=ng
             hid=L.m1.weight.shape[0]; mult=getattr(cfg,'mlp_mult',4); nhid=mult*nD; addh=nhid-hid
             n1=nn.Linear(nD,nhid).to(DEV)
             n1.weight[:hid,:D]=L.m1.weight/c; n1.weight[:hid,D:]=_new_lin(add,hid,DEV)
@@ -107,16 +115,21 @@ def grow_din(m,add):
     every cross term with them is zero. The added features contribute nothing until trained, and the existing
     retrieval is bit-for-bit unchanged. DIN costs almost no parameters (Wk,Wq are D x DIN); it costs state size
     (FE x DV) and attention compute."""
-    cfg=m.cfg; D=cfg.D; nDIN=cfg.DIN+add
+    cfg=m.cfg; D=cfg.D; oldDIN=cfg.DIN; nDIN=oldDIN+add
     with torch.no_grad():
         for L in m.layers:
             for nm in ('Wk','Wq'):
                 old=getattr(L,nm)
                 new=nn.Linear(D,nDIN,bias=False).to(DEV)
-                new.weight[:cfg.DIN]=old.weight; new.weight[cfg.DIN:]=0.0   # new dims inert -> exactly preserving
+                new.weight[:oldDIN]=old.weight; new.weight[oldDIN:]=0.0     # new dims inert
+                # no rescaling needed: core's qk-norm normalises by the SUM of squares, which is invariant to
+                # appended zero dims. Pre-scaling the weights here was useless anyway -- the normalisation it
+                # feeds divides the scaling straight back out.
                 setattr(L,nm,new)
     cfg.DIN=nDIN
-    cfg.iu=torch.triu_indices(nDIN,nDIN,device=DEV); cfg.FE=1+nDIN+cfg.iu.shape[1]
+    # FE MUST MATCH taylor(). taylor() now builds the FULL outer product (DIN*DIN terms), not the upper triangle,
+    # so FE = 1 + DIN + DIN^2. This line still used the triangular count and silently disagreed with the model.
+    cfg.iu=torch.triu_indices(nDIN,nDIN,device=DEV); cfg.FE=1+nDIN+nDIN*nDIN
     for L in m.layers: L.cfg=cfg
     return nDIN
 

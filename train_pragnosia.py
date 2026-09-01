@@ -14,7 +14,11 @@ _dynamo.config.recompile_limit=64          # 10 planned growth events legitimate
 import core as C, growth as G
 from data_mix import DataMix
 DEV=C.DEV
-DOC=32768; CH=2048; NCH=DOC//CH; B=int(os.environ.get("B","8")); DECAY=0.05  # measured optimum: 511 ktok/s
+# CHUNK 4096, re-measured on the CURRENT architecture (exp/ctx_scale.py): 671 ktok/s vs 355 at CH=2048 --
+# 1.9x for the same function, because 8 large kernel launches beat 16 small ones. It also DOUBLES the backprop
+# horizon, since state is detached between chunks. Beyond 4096 it declines (8192: 602, 16384: 448) as the
+# O(chunk^2) attention cost overtakes the launch saving.
+DOC=32768; CH=4096; NCH=DOC//CH; B=int(os.environ.get("B","8")); DECAY=0.05  # measured optimum: 511 ktok/s
 LR=float(os.environ.get("LR","6e-4")); STEPS=int(os.environ.get("STEPS","100000000"))   # effectively indefinite: run until told to stop (user)
 WARM=int(os.environ.get("WARM","300"))            # re-warm after each grow: new capacity is inert and must be eased in
 LR_MIN_MULT=float(os.environ.get("LR_MIN_MULT","0.1"))   # decay to 10% of peak by the end of a stage's token budget

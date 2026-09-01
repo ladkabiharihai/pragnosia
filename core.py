@@ -80,8 +80,14 @@ class Layer(nn.Module):
             # taylor() is QUADRATIC in its input, so A = qf.kf grows QUARTICALLY with the projection magnitude
             # (measured |A|max climbing 17 -> 1.3e4 over 3000 steps, eventually NaN). Unit-RMS bounds it for good,
             # and is a small win in its own right: -0.017 nats AND faster.
-            xk=xk*torch.rsqrt(xk.pow(2).mean(-1,keepdim=True)+1e-6)
-            xq=xq*torch.rsqrt(xq.pow(2).mean(-1,keepdim=True)+1e-6)
+            # SUM, NOT MEAN. With mean, adding zero dims at a grow_din LOWERS the mean square and rsqrt amplifies
+            # the survivors by sqrt(nDIN/oldDIN) -- measured exactly 1.4142 for a 4->8 grow, giving a 2.3e-01
+            # relative logit change. Any pre-scaling of the weights is undone by the very normalisation it feeds,
+            # so the fix has to live here: normalising by the SUM of squares is invariant to appended zero dims,
+            # which makes grow_din exactly function-preserving. The scale differs from mean-norm by a constant
+            # sqrt(DIN), which the learned Wk/Wq absorb.
+            xk=xk*torch.rsqrt(xk.pow(2).sum(-1,keepdim=True)+1e-6)
+            xq=xq*torch.rsqrt(xq.pow(2).sum(-1,keepdim=True)+1e-6)
         kf=taylor(xk,cfg)                                      # writes (shifted keys)
         qf=taylor(xq,cfg)                                      # reads
         v=H@s.Wv.weight.T
@@ -185,8 +191,8 @@ class Core(nn.Module):
             src=prev[i] if prev is not None else torch.zeros_like(H[:,0])
             xk=src@L.Wk.weight.T; xq=(H[:,0])@L.Wq.weight.T
             if L.qknorm:                                           # MUST match forward() or generation drifts
-                xk=xk*torch.rsqrt(xk.pow(2).mean(-1,keepdim=True)+1e-6)
-                xq=xq*torch.rsqrt(xq.pow(2).mean(-1,keepdim=True)+1e-6)
+                xk=xk*torch.rsqrt(xk.pow(2).sum(-1,keepdim=True)+1e-6)   # SUM: invariant to appended zero dims
+                xq=xq*torch.rsqrt(xq.pow(2).sum(-1,keepdim=True)+1e-6)
             kf=taylor(xk,cfg)                                      # key from the PREVIOUS token (the shift)
             v=(H[:,0])@L.Wv.weight.T
             if L.gated:
