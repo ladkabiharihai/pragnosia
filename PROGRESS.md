@@ -2380,3 +2380,34 @@ The 202M is the awkward point, and it is not a clean test: it predates gating, t
 function-preserving growth and the step() fix. **The clean experiment has never been run: our CURRENT architecture
 at ~100M trained to 70+ tok/param, which is ~7B tokens, about 4 hours at the measured throughput.** That is the
 honest way to settle whether we reach GPT-2-class coherence, rather than another hypothesis.
+
+## VALIDATED BEFORE SPENDING: a 45-minute scaling probe justifies the 4-hour run
+The user declined to commit 4 hours on a hypothesis. Instead of training to the target and hoping, measure the
+TRAJECTORY at two sizes x three token budgets and extrapolate.
+| params | tok/param | tokens | BPB | context-reuse |
+|--------|-----------|--------|-----|---------------|
+| 12.4M | 10 | 124M | 1.4107 | 0.081 |
+| 12.4M | 20 | 248M | 1.3476 | 0.082 |
+| 12.4M | 40 | 496M | 1.2960 | 0.099 |
+| 24.5M | 10 | 245M | 1.2959 | 0.099 |
+| 24.5M | 20 | 491M | 1.2277 | 0.145 |
+| 24.5M | 40 | 981M | 1.1770 | 0.104 |
+**FIT: log(BPB) = 2.686 - 0.1341 log(params) - 0.0653 log(tok/param), rms residual 0.0033** -- an unusually clean
+fit over a 2x range in params and 4x in tokens.
+### THE EXTRAPOLATION THAT DECIDES IT
+| config | predicted BPB | vs GPT-2 (0.9335) |
+|--------|---------------|-------------------|
+| 100M at 20 tok/param | 1.0209 | +0.087 |
+| **100M at 73 tok/param** | **0.9381** | **+0.005 -- PARITY** |
+| 200M at 73 tok/param | 0.8549 | **-0.079, BETTER** |
+| 100M at 200 tok/param | 0.8784 | -0.055 |
+**Our architecture is predicted to reach GPT-2's BPB at GPT-2's parameter count and token budget.** Nothing other
+than scale is required to close the prediction gap. The 4-hour run is justified by measurement, not by hope.
+### AND THE FIT SAYS WHERE THE COMPUTE SHOULD GO
+The exponents are -0.134 on params and -0.065 on tok/param, so **parameters buy ~2.1x more per log-unit than
+overtraining does**. For a fixed token budget, scaling the model beats training a smaller one longer.
+### HONEST CAVEAT ON THE SECOND METRIC
+context-reuse (how much of the generated content words come from the prompt; real text scores 0.258) rose
+0.081 -> 0.082 -> 0.099 -> 0.145 but then fell to 0.104 at the last point. It is **too noisy at 10 probes to
+extrapolate**, and I am not going to read a trend into it. BPB carries the conclusion; context-reuse needs far
+more probes before it can support one.
