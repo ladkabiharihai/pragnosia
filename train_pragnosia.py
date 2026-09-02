@@ -26,7 +26,12 @@ DEV=C.DEV
 # 1.9x for the same function, because 8 large kernel launches beat 16 small ones. It also DOUBLES the backprop
 # horizon, since state is detached between chunks. Beyond 4096 it declines (8192: 602, 16384: 448) as the
 # O(chunk^2) attention cost overtakes the launch saving.
-DOC=32768; CH=4096; NCH=DOC//CH; B=int(os.environ.get("B","6")); DECAY=0.05  # measured optimum: 511 ktok/s
+DOC=32768; CH=2048; NCH=DOC//CH; B=int(os.environ.get("B","6")); DECAY=0.05
+# CHUNK 2048, RE-MEASURED AT THIS CONFIG. 4096 was chosen when FE was 73; FE is now 273 (DIN 8 -> 16) and the
+# intra-chunk term is O(T^2 x FE), so the memory tradeoff moved while the speed one did not:
+#     chunk 4096 B6: 283 ktok/s, 19.31 GiB     chunk 2048 B6: 280 ktok/s,  9.48 GiB     1024 B6: 272, 5.38
+# Identical speed for HALF the memory -- the GPU is no longer launch-bound at this size, so the larger chunk
+# bought nothing. Costs half the backprop horizon (state is detached between chunks), which is the real tradeoff.
 LR=float(os.environ.get("LR","6e-4")); STEPS=int(os.environ.get("STEPS","100000000"))   # effectively indefinite: run until told to stop (user)
 WARM=int(os.environ.get("WARM","300"))            # re-warm after each grow: new capacity is inert and must be eased in
 LR_MIN_MULT=float(os.environ.get("LR_MIN_MULT","0.1"))   # decay to 10% of peak by the end of a stage's token budget

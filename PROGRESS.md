@@ -2120,3 +2120,32 @@ CONSOLIDATE the salient into weights rather than hold everything. Finite-state o
 consolidation." So a needle surviving 64k tokens in the STATE ALONE was never the design. But flag 1's stated
 metric does say "needle accuracy held", so either that claim depends on the consolidation loop being live during
 the measurement, or the metric needs restating. **This is a decision for the user, not one to paper over.**
+
+## SPEED AND VRAM, MEASURED RATHER THAN GUESSED
+The user said 90M was too slow and using too much VRAM. Both checked properly, with the trainer stopped so the
+numbers were clean.
+### VRAM: chunk 4096 was costing 2x memory for nothing
+The chunk was chosen at FE=73; FE is now **273** (DIN 8 -> 16) and the intra-chunk term is O(T^2 x FE):
+| chunk | B | ktok/s | peak GiB |
+|-------|---|--------|----------|
+| 4096 | 6 | 283 | **19.31** |
+| **2048** | 6 | **280** | **9.48** |
+| 1024 | 6 | 272 | 5.38 |
+| 2048 | 12 | 281 | 17.38 |
+**Identical speed for HALF the memory.** The GPU is no longer launch-bound at this size, so the larger chunk bought
+nothing at all. Applied. In the live trainer: **37,800 -> 17,918 MiB reserved, free 12G -> 32G.**
+Cost: half the backprop horizon, since state is detached between chunks. That is the honest tradeoff.
+### SPEED: we are at 0.91x a same-shape transformer, so ~300 ktok/s is what 90M costs here
+| model | params | ktok/s | peak GiB |
+|-------|--------|--------|----------|
+| transformer (flash attention) | 105M | 329 | 7.85 |
+| **ours (gated linear attention)** | **90M** | **299** | 9.48 |
+Batch does not help (B=12 gave 281, same) -- we are compute-bound, not launch- or memory-bound. The profile is
+dominated by cuBLAS matmuls, not by our own kernels; the gate elementwise work is only 3.9%.
+**THE REAL SPEED LEVER, NOT YET TAKEN.** Our intra-chunk attention is O(T^2 x FE) computed NAIVELY -- we
+materialise [B,T,T] and run elementwise ops on it, while the transformer's equivalent is one fused flash kernel
+that never materialises anything. The standard fix is SUB-CHUNKING (what GLA and Mamba-2 do): split the chunk into
+blocks of ~256, use the recurrent state between blocks and the quadratic form only within a block. Estimated at
+B=6/T=2048/FE=273/DV=768 that takes the attention term from ~2.0e14 to ~3.4e13 FLOPs, about **6x fewer**, and cuts
+the [B,T,T] tensors by ~8x. It is a real rewrite of Layer.forward with real correctness risk, so it is recorded as
+the next big win rather than done in passing.
