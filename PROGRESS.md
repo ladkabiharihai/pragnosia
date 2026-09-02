@@ -2083,3 +2083,11 @@ size-independent mechanism or was already proven at 21.6M.
 ONE MORE BUG FIXED: a memory probe died with exit 137 (SIGKILL). Not GPU OOM -- inductor spawns one compile
 worker per CORE, and at 11 layers that exhausted HOST RAM and the kernel killed the process. `compile_threads=8`
 fixes it, and matters more now that the infant is 11 layers rather than 4. Prod stayed up throughout (HTTP 200).
+
+### RUN 5 MEMORY: reservation, not live peak, was the binding constraint
+First launch at B=8 held **47,738 MiB reserved against a 25,774 MiB live peak (1.85x)** and left only 3 GB free --
+growth #2 would have been impossible. The inflation comes from the recall branch (15% of steps) using a different
+shape and call signature, so the allocator keeps two families of blocks.
+Fixed with B=6 plus `torch.cuda.empty_cache()` every 200 steps, which bounds the RESERVATION rather than only the
+live peak: **37,800 MiB held, 13 GB free, stable.** Projected at the 16-layer target: ~28 GB live at B=6.
+Running: 90M, loss 6.717 and falling, 163 ktok/s, prod HTTP 200 throughout.

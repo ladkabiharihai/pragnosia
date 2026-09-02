@@ -26,7 +26,7 @@ DEV=C.DEV
 # 1.9x for the same function, because 8 large kernel launches beat 16 small ones. It also DOUBLES the backprop
 # horizon, since state is detached between chunks. Beyond 4096 it declines (8192: 602, 16384: 448) as the
 # O(chunk^2) attention cost overtakes the launch saving.
-DOC=32768; CH=4096; NCH=DOC//CH; B=int(os.environ.get("B","8")); DECAY=0.05  # measured optimum: 511 ktok/s
+DOC=32768; CH=4096; NCH=DOC//CH; B=int(os.environ.get("B","6")); DECAY=0.05  # measured optimum: 511 ktok/s
 LR=float(os.environ.get("LR","6e-4")); STEPS=int(os.environ.get("STEPS","100000000"))   # effectively indefinite: run until told to stop (user)
 WARM=int(os.environ.get("WARM","300"))            # re-warm after each grow: new capacity is inert and must be eased in
 LR_MIN_MULT=float(os.environ.get("LR_MIN_MULT","0.1"))   # decay to 10% of peak by the end of a stage's token budget
@@ -217,6 +217,7 @@ def main():
             # was really 879). `seen_tok` accumulates the true count at the point each batch is built.
             tps=seen_tok/(time.time()-t0)
             bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} D={m.cfg.D}x{m.cfg.NL}L {P()/1e6:.0f}M {tokens_at_size/P():.0f}tok/param lr={cur_lr:.1e} {tps/1e3:.0f}ktok/s free={free:.0f}G")
+        if (it+1)%200==0: torch.cuda.empty_cache()   # bound the reservation, not just the live peak
         if (it+1)%500==0:
             ck={'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'DIN':m.cfg.DIN,'NL':m.cfg.NL,'step':it+1,'k':k,
                 'tie_emb':m.cfg.tie_emb,'head_scale':m.cfg.head_scale,'gated':m.cfg.gated,'qknorm':m.cfg.qknorm}
