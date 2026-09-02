@@ -2351,3 +2351,32 @@ Infant is 384x8L DIN16 = 25M, growth ladder 25M -> 46M -> 75M. Running at 546 kt
 MY EDIT MISSED THE FIRST TIME and the run started on window2 anyway: the trainer never contained the literal
 `only='window2'` I was replacing -- it reads `CORPUS=os.environ.get("CORPUS","window2")` and passes `only=CORPUS`.
 Caught it because the log printed "[DataMix] 1 corpora" instead of 11. Verify the effect, not the edit.
+
+## DATA A/B AT 24M: the change is a small real win, and MY TEMPLATE HYPOTHESIS WAS WRONG
+Identical shape, tokens, seed and decoding; only the corpus mix differs. Evaluated on FIXED held-out sets, and
+probed from dclm prose so neither arm is prompted from its own bulk.
+| arm | window2 BPB | **dclm BPB (neutral)** | template echo | 4gram-rep | distinct-1 |
+|-----|-------------|------------------------|---------------|-----------|------------|
+| A) window2 only | **1.1227** | 1.5390 | **0%** | 0.10 | 0.58 |
+| B) language 70 / reasoning 30 | 1.1600 | **1.4823** | **0%** | **0.08** | **0.62** |
+**WHAT IS TRUE:** the mix GENERALISES better -- on neutral held-out dclm it wins by 0.057 BPB, and its generation
+is slightly more diverse and less repetitive. A trains on window2 so of course it wins on window2; the neutral set
+is the honest column. The window2-only arm also shows a large generalisation gap (1.12 on its own data vs 1.54 on
+dclm), which is what training on one narrow corpus looks like. **Keep the change.**
+**WHAT IS FALSE -- my own claim, falsified by the controlled test:** I argued that window2's 10.5% synthetic
+boilerplate is what makes our generation meaningless, citing the 202M's *"Question: Who is Mary? Answer: Who is
+Lily? Answer:"* output. **TEMPLATE ECHO IS 0% IN BOTH ARMS.** Neither model spontaneously emits boilerplate when
+continuing ordinary prose. The 202M produced that text because the PROMPT was itself a kinship-QA passage (from
+evaluate.py's recall probe) -- it was continuing the pattern it was handed, not reproducing training data
+unprompted. I presented a plausible story with a real 10.5% measurement behind it and it did not survive the test.
+**AND B'S GENERATION IS STILL MEANINGLESS**, exactly as A's is. The data was not the answer to that question.
+### SO WHAT IS LEFT FOR GENERATION QUALITY
+| model | params | tok/param | meaningful? |
+|-------|--------|-----------|-------------|
+| ours 24M (both data arms) | 24M | 20 | no |
+| ours 202M (run 3) | 202M | 52 | no -- but UNGATED, with the boundary-key bug and a broken step() |
+| GPT-2 | 124M | 73 | **yes** |
+The 202M is the awkward point, and it is not a clean test: it predates gating, the boundary-key fix,
+function-preserving growth and the step() fix. **The clean experiment has never been run: our CURRENT architecture
+at ~100M trained to 70+ tok/param, which is ~7B tokens, about 4 hours at the measured throughput.** That is the
+honest way to settle whether we reach GPT-2-class coherence, rather than another hypothesis.
