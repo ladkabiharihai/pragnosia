@@ -86,7 +86,7 @@ def main():
     # -0.28 nats, it is what separates Mamba-2/GLA/RWKV-6 from plain linear attention, and it improved our own
     # memory gain 18x (+0.0016 -> +0.0286). qk-norm bounds the quartic growth of A=qf.kf: -0.017 nats AND faster.
     cfg.gated=True; cfg.qknorm=True
-    m=C.Core(cfg).to(DEV); k=0
+    m=C.Core(cfg).to(DEV); k=0; sd=None
     if os.path.exists(CKPT):
         sd=torch.load(CKPT,map_location=DEV)
         from util import cfg_from_ckpt
@@ -102,11 +102,16 @@ def main():
     fwd=torch.compile(m) if USE_COMPILE else m
     TOK_PER_PARAM=float(os.environ.get("TOK_PER_PARAM","22"))     # Chinchilla-style floor per stage (user's request)
     sensor=G.SaturationSensor(window=400,t_stat=1.0,min_gap=2500)  # smoothed signal + real spacing
-    tokens_at_size=0
+    # RESTORE THE GROWTH CLOCK. tokens_at_size drives BOTH the earned-growth gate (>= 22 tok/param) and the LR
+    # schedule, but it was initialised to 0 and never checkpointed -- so every resume silently reset the model's
+    # earned progress and pushed growth further away. Same class of bug as the gate starting from zero after a
+    # growth, which the user caught earlier.
+    tokens_at_size=int(sd.get('tokens_at_size',0)) if sd is not None else 0
     P=lambda: sum(p.numel() for p in m.parameters())
     print(f"PRAGNOSIA: infant D{cfg.D}x{cfg.NL} ({P()/1e6:.0f}M) -> target D{TARGET_D}x{TARGET_NL}; docs {DOC} chunk {CH} B{B}",flush=True)
     bar=pbar(range(step,STEPS),"pragnosia",total=STEPS-step)
-    ema=None; t0=time.time(); steps_at_size=0; last_grow_step=0; seen_tok=0
+    ema=None; t0=time.time(); last_grow_step=0; seen_tok=0
+    steps_at_size=int(sd.get('steps_at_size',0)) if sd is not None else 0   # LR schedule position
     def set_lr(step_in_stage,frac_of_budget):
         """warmup after each grow, then cosine-decay against progress toward this stage's 22 tok/param budget."""
         if step_in_stage<WARM: lr=LR*(step_in_stage+1)/WARM
@@ -170,7 +175,8 @@ def main():
             # TRUE PRE-GROWTH SNAPSHOT, taken at the growth instant so before/after is exactly measurable.
             torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'DIN':m.cfg.DIN,'NL':m.cfg.NL,
                         'step':it,'k':k,'tie_emb':m.cfg.tie_emb,'head_scale':m.cfg.head_scale,
-                        'gated':m.cfg.gated,'qknorm':m.cfg.qknorm}, f"{CKPT[:-3]}_before_grow{k+1}.pt")
+                        'gated':m.cfg.gated,'qknorm':m.cfg.qknorm,
+                'tokens_at_size':tokens_at_size,'steps_at_size':steps_at_size}, f"{CKPT[:-3]}_before_grow{k+1}.pt")
             if kind=='wdi':                                                 # width + depth + RETRIEVAL together
                 G.grow_width(m,amt[0]); G.grow_depth(m,amt[1]); G.grow_din(m,amt[2])
             elif kind=='wd': G.grow_width(m,amt[0]); G.grow_depth(m,amt[1])
@@ -225,7 +231,8 @@ def main():
         if (it+1)%200==0: torch.cuda.empty_cache()   # bound the reservation, not just the live peak
         if (it+1)%500==0:
             ck={'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'DIN':m.cfg.DIN,'NL':m.cfg.NL,'step':it+1,'k':k,
-                'tie_emb':m.cfg.tie_emb,'head_scale':m.cfg.head_scale,'gated':m.cfg.gated,'qknorm':m.cfg.qknorm}
+                'tie_emb':m.cfg.tie_emb,'head_scale':m.cfg.head_scale,'gated':m.cfg.gated,'qknorm':m.cfg.qknorm,
+                'tokens_at_size':tokens_at_size,'steps_at_size':steps_at_size}
             torch.save(ck,CKPT)
             # keep the LAST save before each grow and the TWO after it, so growth can be probed after the fact
             if last_grow_step and (it+1)-last_grow_step<=1000: torch.save(ck,f"{CKPT[:-3]}_probe{it+1}.pt")

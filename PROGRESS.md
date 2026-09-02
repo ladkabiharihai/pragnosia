@@ -2184,3 +2184,41 @@ It is a MEMORY lever at LONG chunks, not a speed lever. At 8192 it halves memory
 16384 the full form OOMs while sub-chunking runs in 25.48 GiB. That is **8x the gradient horizon** we gave up when
 moving to CH=2048 -- available now, verified exact, if we decide credit assignment past 2048 tokens is worth ~30%
 throughput.
+
+## 90M TESTED BEFORE RESTARTING -- what has and has not been achieved
+Subject: 90M, step 11000, **1.86B tokens, 20.6 tok/param** (D=768x11L DIN16, gated).
+### ACHIEVED
+| metric | 54M @1.4B | **90M @1.9B** |
+|--------|-----------|---------------|
+| held-out loss | 4.6321 (ppl 103) | **4.0243 (ppl 55.9)** |
+| memory gain | +0.0183 | **+0.0549** (best ever measured) |
+| long-context loss, chunks 0->15 | 4.63 -> 4.57 | **4.02 -> 3.92** (IMPROVES over 32k tokens) |
+**LONG-GENERATION STABILITY IS NOW REAL.** 1200 tokens, 4 documents, against real text:
+| source | 0-200 | 200-400 | 400-600 | 600-800 | 800-1000 | 1000-1200 | d1 | letters |
+|--------|-------|---------|---------|---------|----------|-----------|-----|---------|
+| real text | 0.11 | 0.11 | 0.10 | 0.09 | 0.09 | 0.10 | 0.34 | 0.94 |
+| **ours 90M** | 0.14 | 0.16 | 0.14 | 0.13 | 0.13 | **0.18** | **0.36** | **0.96** |
+Flat across the whole 1200 tokens, essentially at real-text parity. The collapse is gone.
+**COPYING at distance 0 is strong: lift +0.713 nats, positive in 100% of trials** (the 202M managed +0.536 in 79%).
+### NOT ACHIEVED -- and the honest comparison
+**Retrieval horizon is still short**: +0.713 at distance 0 but +0.081 at 20 and ~0 past 200. The gate is NOT the
+cause (learned half-life ~2013 tokens, so decay over 20 tokens is negligible). It tracks STATE SIZE: this model
+has FE=273 while the 202M that held +0.406 at distance 20 has FE=601. Growing DIN 16->20->24 takes FE to 421->601,
+so the growth plan should extend the horizon -- a testable prediction.
+**GPT-2 124M WRITES BETTER TEXT THAN WE DO.** Cerebras-GPT-111M needs an HF token we lack (401), so GPT-2 is the
+closest published yardstick. Surface metrics look comparable:
+| model | params | 4gram-rep | distinct-1 | letters |
+|-------|--------|-----------|------------|---------|
+| real text (our tok) | - | 0.15 | 0.39 | 0.93 |
+| **ours** | 90M | 0.18 | 0.41 | 0.96 |
+| real text (gpt2 tok) | - | 0.19 | 0.33 | 0.93 |
+| **GPT-2** | 124M | **0.05** | 0.43 | 0.96 |
+But the SAMPLES are not comparable, and metrics do not show it. GPT-2 stays on topic and means something:
+*"...I will give you a list of some of my favorite examples in Buck's backstory. Spitz didn't just betray his
+humanity and"* -- it picked up Buck and Spitz from the Call of the Wild context. Ours is fluent but semantically
+empty: *"the partnership, Manchester Empire and the Royal, the Greatmap to the Pastown right to the
+raccauschechalkong-Dialog"*. **We are behind on generation quality.** Caveat, not excuse: GPT-2 saw ~9B tokens of
+curated WebText to our 2.16B, so it has 4x the tokens and 1.4x the parameters.
+**WHAT GPT-2 CANNOT DO AT ALL:** it is hard-capped at 1024 tokens TOTAL and CRASHED when asked to generate 1200
+after a 1024-token prompt. We do that, and read to 1M at flat cost. The comparison above had to be re-run with a
+300-token prompt purely to fit inside GPT-2's limit.
