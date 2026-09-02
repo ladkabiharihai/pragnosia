@@ -2411,3 +2411,36 @@ context-reuse (how much of the generated content words come from the prompt; rea
 0.081 -> 0.082 -> 0.099 -> 0.145 but then fell to 0.104 at the last point. It is **too noisy at 10 probes to
 extrapolate**, and I am not going to read a trend into it. BPB carries the conclusion; context-reuse needs far
 more probes before it can support one.
+
+## GROWING 46M -> 200M: THE ARITHMETIC (asked before committing the compute)
+Ladder with the 22 tok/param earned-growth gate at every stage, throughput fitted from measurement
+(878k@12M, 631k@24M, 266k@90M -> ~params^-0.55):
+| stage | params | tokens to earn growth | ktok/s | hours |
+|-------|--------|----------------------|--------|-------|
+| D512x11L DIN20 | 46M | 1.01B | 390 | 0.7 |
+| D640x13L DIN24 | 75M | 1.64B | 298 | 1.5 |
+| D768x15L DIN28 | 114M | 2.52B | 236 | 3.0 |
+| D896x16L DIN32 | 159M | 3.49B | 197 | 4.9 |
+| D1024x16L DIN36 | 203M | 4.46B | 172 | 7.2 |
+| **TOTAL to reach 203M** | | **13.12B** | | **17.3 h** |
+**THE CATCH: tok/param RESETS at every growth.** On arrival at 203M the model has only the 22 tok/param it earned
+in the final stage, not the 13.12B cumulative. To reach 40 tok/param at 203M costs **+3.65B tokens / +5.9 hours**.
+| route to 203M at 40 tok/param | tokens | hours |
+|-------------------------------|--------|-------|
+| **grow 46M -> 203M, then train** | **16.77B** | **23.2** |
+| **train 203M from scratch** | **8.10B** | **13.1** |
+| difference | **+8.66B** | **+10.1 h** |
+**Growth costs roughly 2x the tokens and 10 extra hours for the same endpoint**, because every intermediate stage
+must earn its 22 tok/param and those tokens do not count toward the final model's budget. And this is the
+OPTIMISTIC case: the saturation sensor has historically waited past the gate (23, 26, 30, 38 tok/param observed),
+so the real cost is higher.
+### WHAT I COULD NOT MEASURE CLEANLY, AND WILL NOT CLAIM
+Whether growth also costs QUALITY. Two attempts, both confounded, both discarded:
+1. Comparing grown models to the fit -- the fit was measured on the NEW mix eval and the grown models on window2.
+   Different eval sets; the +0.43 "growth penalty" it produced was an artifact.
+2. Re-measuring on the matched eval set -- but both grown models sit at 1.8 and 4.8 tok/param because the counter
+   resets at growth, far outside the 10-40 range the fit covers, and both were caught mid-recovery right after
+   growing. The +0.43/+0.53 gaps there are not evidence of anything.
+The clean test is cheap and has not been run: let run 6 reach ~20 tok/param at 46M on the SAME data and eval as
+the fit (0.92B tokens, ~40 min) and see whether it lands on the predicted 1.2441. That also validates whether the
+fit -- built only on 12M and 24M -- can be trusted 8x out at 200M, which my recommendation currently assumes.
