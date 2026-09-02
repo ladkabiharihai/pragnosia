@@ -106,7 +106,18 @@ def main():
     # schedule, but it was initialised to 0 and never checkpointed -- so every resume silently reset the model's
     # earned progress and pushed growth further away. Same class of bug as the gate starting from zero after a
     # growth, which the user caught earlier.
-    tokens_at_size=int(sd.get('tokens_at_size',0)) if sd is not None else 0
+    if sd is None:
+        tokens_at_size=0
+    elif 'tokens_at_size' in sd:
+        tokens_at_size=int(sd['tokens_at_size'])
+    else:
+        # SELF-HEAL an older checkpoint written before this was saved. Before any growth, tokens-at-size IS
+        # tokens-since-birth, so it can be reconstructed from the step count; without this the very restart that
+        # ADDS the fix would reset the clock one last time. Only safe while k==0; after a growth the step count
+        # no longer maps to tokens at the current size, so fall back to 0 rather than overcount.
+        tokens_at_size=int(step*((1-RECALL_FRAC)*B*DOC+RECALL_FRAC*B*CH)) if k==0 else 0
+        print(f"  reconstructed growth clock from step {step}: {tokens_at_size/1e9:.2f}B tokens "
+              f"= {tokens_at_size/sum(p.numel() for p in m.parameters()):.1f} tok/param",flush=True)
     P=lambda: sum(p.numel() for p in m.parameters())
     print(f"PRAGNOSIA: infant D{cfg.D}x{cfg.NL} ({P()/1e6:.0f}M) -> target D{TARGET_D}x{TARGET_NL}; docs {DOC} chunk {CH} B{B}",flush=True)
     bar=pbar(range(step,STEPS),"pragnosia",total=STEPS-step)

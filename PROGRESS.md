@@ -2261,3 +2261,34 @@ budget is not yet spent".
 the trainer displayed 14 tok/param where the true figure was 19.4. The earned-growth gate tests that value, so
 each resume pushed growth further away. Both it and `steps_at_size` (which positions the LR schedule) are now
 saved and restored.
+
+## "AT 20 CHINCHILLA GENERATION SHOULD MEAN SOMETHING" -- tested, and the premise is what is wrong
+The user argued that meaningless generation at 20 tok/param means something is broken. Two hypotheses, and they
+demand opposite responses: our architecture is broken, OR 20 Chinchilla is simply not enough for coherence.
+**CONTROLLED TEST: a TRANSFORMER trained on OUR data at EXACTLY 20 tok/param** (same tokenizer, same corpus, same
+decoding, both compiled):
+```
+TRANSFORMER 24.0M params, 480M tokens (20 tok/param): loss 5.7174, ppl 304, BPB 2.1556
+  "Hmm that with the sle to men, our degree of the\nThe. The existence is technology of the once of
+   the a commongers, the enormous, but theuries battle- The number of an attitude:"
+  "presving into a heritage, the bodyS of thearies in the company attack of\nWe would in and direct
+   leap. the f up the culture the trim generations targeted include the ground."
+```
+**Just as meaningless as ours, and WORSE in BPB (2.1556 vs our 90M's 1.4619).** So the architecture is not broken.
+### THE ACTUAL EXPLANATION: GPT-2 IS NOT A 20-CHINCHILLA MODEL
+| model | params | tokens | tok/param | vs Chinchilla |
+|-------|--------|--------|-----------|---------------|
+| GPT-2 | 124M | ~9B | **~73** | **3.6x** |
+| ours | 90M | 1.86B | 20.6 | 1.0x |
+Chinchilla-optimality minimises LOSS PER FLOP. It says nothing about emergent capabilities like coherent
+long-form generation, which need far more tokens than compute-optimal. This is why Llama and every modern small
+model deliberately OVERTRAIN to 100-1000+ tok/param. Comparing a 20-Chinchilla model to GPT-2 and concluding
+something is broken compares against a model trained 3.6x longer.
+### WHAT WOULD SETTLE IT
+To match GPT-2's tokens-per-parameter at 90M: **6.6B tokens**, which at the measured 266 ktok/s is **~6.9 hours**.
+That is the honest test of whether our generation becomes meaningful, and it is cheap enough to just run.
+### TWO OF MY OWN HYPOTHESES WERE WRONG HERE, both falsified rather than argued
+- "write_scale=0 destroys meaning by denying the model memory of its own output" -- FALSE. At write_scale=1.0 the
+  text is equally meaningless (rep 0.22 vs 0.16), so the generation procedure is not the cause.
+- "our model is fine and only generation is broken" -- FALSE. BPB 1.4619 vs GPT-2's 0.9335 is a real prediction
+  gap, not an artifact of decoding.
