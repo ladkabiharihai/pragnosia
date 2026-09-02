@@ -2324,3 +2324,30 @@ window2 43.7% | dclm 33.0% | finemath 5.7% | hermes/opencode/openmath/tulu3 3.4%
 Switching would cut synthetic-template exposure from 10.5% to ~4.6% and add 33% curated web text plus math, code
 and instruction data. The window2-only constraint was right while the architecture was the variable; it is now the
 binding constraint on quality.
+
+## THE MATCHED 20-CHINCHILLA COMPARISON COMPLETED -- and we win by a wide margin
+Both trained on the SAME data, SAME tokens/param, same decoding, both compiled:
+| model | params | tokens | loss | ppl | BPB |
+|-------|--------|--------|------|-----|-----|
+| transformer | 24.0M | 480M | 5.7174 | 304.1 | 2.1556 |
+| **ours** | **21.6M** | **431M** | **3.4227** | **30.7** | **1.2905** |
+**-2.29 nats with FEWER parameters and FEWER tokens.** Consistent with the earlier context sweep (-0.016 at 512
+context, -0.571 at 2048, -1.100 at 8192): this ran at 2048, where our advantage is real and growing.
+Neither model writes meaningful text at 20 Chinchilla, which is what settled the earlier question.
+## RUN 6: 24M INFANT ON A LANGUAGE-FIRST CURRICULUM
+The user's call: check the data change at small scale before spending scale on it, and teach LANGUAGE first with a
+deliberate 30% reasoning share. Added `lang_frac` to DataMix -- sqrt-size weighting WITHIN each group, then scaled
+to the target split:
+| corpus | share |
+|--------|-------|
+| window2 | 39.9% |
+| dclm | 30.1% |
+| finemath | 7.3% |
+| hermes / opencode / openmath / tulu3 | 4.4% each |
+| evolcode / glaive / numina | 1.5% each |
+| magicoder | 0.7% |
+Language 70% / reasoning 30%, and **synthetic-template exposure drops 10.5% -> 4.2%**.
+Infant is 384x8L DIN16 = 25M, growth ladder 25M -> 46M -> 75M. Running at 546 ktok/s.
+MY EDIT MISSED THE FIRST TIME and the run started on window2 anyway: the trainer never contained the literal
+`only='window2'` I was replacing -- it reads `CORPUS=os.environ.get("CORPUS","window2")` and passes `only=CORPUS`.
+Caught it because the log printed "[DataMix] 1 corpora" instead of 11. Verify the effect, not the edit.

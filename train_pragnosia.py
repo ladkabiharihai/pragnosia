@@ -26,6 +26,14 @@ DEV=C.DEV
 # 1.9x for the same function, because 8 large kernel launches beat 16 small ones. It also DOUBLES the backprop
 # horizon, since state is detached between chunks. Beyond 4096 it declines (8192: 602, 16384: 448) as the
 # O(chunk^2) attention cost overtakes the launch saving.
+LANG_FRAC=float(os.environ.get("LANG_FRAC","0.70"))
+# CURRICULUM: teach LANGUAGE first, with a deliberate 30% reasoning share (user's call). Previously the trainer
+# used lang_frac=LANG_FRAC, a single corpus that is 10.5% synthetic kinship-QA/sequence boilerplate -- verbatim the
+# CURRICULUM: teach LANGUAGE first, with a deliberate 30% reasoning share. Previously the trainer used
+# only='window2' -- a single corpus that is 10.5% synthetic kinship-QA/sequence boilerplate, which is verbatim the
+# degenerate text our models produce ("Question: Who is Mary? Answer: Who is Lily? Answer:"). The split drops
+# window2 to 39.9% and adds 30.1% curated dclm, cutting template exposure to 4.2%, while finemath/openmath/
+# opencode/hermes/tulu3 supply the reasoning share.
 DOC=32768; CH=2048; NCH=DOC//CH; B=int(os.environ.get("B","6")); DECAY=0.05
 # CHUNK 2048, RE-MEASURED AT THIS CONFIG. 4096 was chosen when FE was 73; FE is now 273 (DIN 8 -> 16) and the
 # intra-chunk term is O(T^2 x FE), so the memory tradeoff moved while the speed one did not:
@@ -35,10 +43,10 @@ DOC=32768; CH=2048; NCH=DOC//CH; B=int(os.environ.get("B","6")); DECAY=0.05
 LR=float(os.environ.get("LR","6e-4")); STEPS=int(os.environ.get("STEPS","100000000"))   # effectively indefinite: run until told to stop (user)
 WARM=int(os.environ.get("WARM","300"))            # re-warm after each grow: new capacity is inert and must be eased in
 LR_MIN_MULT=float(os.environ.get("LR_MIN_MULT","0.1"))   # decay to 10% of peak by the end of a stage's token budget
-D0,NL0,DIN0=768,11,16          # infant = 90.4M. Was 384x4L/DIN8 = 19M; the vision's claims are all either
+D0,NL0,DIN0=384,8,16          # infant = 90.4M. Was 384x4L/DIN8 = 19M; the vision's claims are all either
                                # size-independent mechanisms or were already proven at 21.6M, so starting below
                                # 60M only spent time in a regime that proves nothing.
-TARGET_D,TARGET_NL=1024,16                              # ~235M at the end
+TARGET_D,TARGET_NL=640,13                              # ~235M at the end
 RECALL_FRAC=0.15; VRAM_MIN=8.0                          # leave headroom for prod
 CKPT="/mnt/kv_cache/pragnosia_data/pragnosia.pt"
 # GROWTH PLAN: THREE large events, not ten small ones. MEASURED (exp/growth_fix_final.py, identical final size
@@ -55,9 +63,10 @@ CKPT="/mnt/kv_cache/pragnosia_data/pragnosia.pt"
 # DIN 8->32 is worth 0.133 nats at D=384 and 0.196 at D=768, i.e. the penalty GROWS with width, exactly the regime
 # the 235M model plateaued in. DIN costs almost no parameters (Wk,Wq are D x DIN); it costs state and attention
 # compute, and at DIN=24 the state is still only 1.3 MiB per layer, so constant-memory context is unaffected.
-PLAN=[('wdi',(128,3,4)),('wdi',(128,2,4))]   # 768x11L/DIN16 90M -> 896x14L/20 142M -> 1024x16L/24 202M
-CORPUS=os.environ.get("CORPUS","window2")                    # window2 only: educational text, 170B tokens, least repetitive
-dm=DataMix(ctx=DOC+1,verbose=True,only=CORPUS)
+PLAN=[('wdi',(128,3,4)),('wdi',(128,2,4))]   # 384x8L/DIN16 24M -> 512x11L/20 46M -> 640x13L/24 75M
+# LANG_FRAC replaces the old CORPUS="window2" single-corpus restriction. Set CORPUS to force one corpus back.
+CORPUS=os.environ.get("CORPUS","") or None
+dm=DataMix(ctx=DOC+1,verbose=True,only=CORPUS,lang_frac=None if CORPUS else LANG_FRAC)
 RD=RV=None
 _rp="/mnt/kv_cache/pragnosia_data/recall_32k.bin"; _ra="/mnt/kv_cache/pragnosia_data/recall_32k_ans.npy"
 if os.path.exists(_rp) and os.path.exists(_ra):

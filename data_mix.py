@@ -13,8 +13,15 @@ FLOOR={"finemath":0.04,"openmath":0.03,"opencode":0.03,"recall":0.05,"tulu3":0.0
 # CAP the intrinsically repetitive corpora. Lowering their FLOORS did nothing (24.8% -> 24.7%) because the sqrt(size)
 # base weight already exceeded the floors -- the floors were never the binding constraint. An explicit cap is.
 CAP={"finemath":0.05,"openmath":0.03,"numina":0.01,"opencode":0.03,"evolcode":0.01,"magicoder":0.005}
+# CURRICULUM GROUPS. `lang_frac` fixes the split between natural-language text and reasoning/instruction data, so
+# the language phase can be language-led with a deliberate reasoning share rather than whatever sqrt(size) implies.
+# It also DILUTES window2's synthetic content: window2 is 10.5% kinship-QA and sequence-completion boilerplate
+# (measured over 400 random windows; dclm is 0.0%), which is verbatim the degenerate output our models produce.
+# Splitting the language share with dclm cuts that exposure roughly in half.
+LANGUAGE=("window2","dclm")
+REASONING=("finemath","openmath","opencode","numina","evolcode","glaive","magicoder","hermes","tulu3")
 class DataMix:
-    def __init__(s, ctx=64, min_tok=2_000_000, exclude=("recall",), verbose=True, only=None):
+    def __init__(s, ctx=64, min_tok=2_000_000, exclude=("recall",), verbose=True, only=None, lang_frac=None):
         s.ctx=ctx; s.bins=[]; s.names=[]; sizes=[]
         for f in sorted(glob.glob(f"{DATADIR}/*_32k.bin")):
             nm=re.sub(r'_32k\.bin$','',os.path.basename(f))
@@ -30,9 +37,20 @@ class DataMix:
                 if k in nm: w[i]=max(w[i],fl)
             for k,cp in CAP.items():
                 if k in nm: w[i]=min(w[i],cp)
-        s.w=w/w.sum(); s.sizes=sizes
+        if lang_frac is not None:
+            li=[i for i,n in enumerate(s.names) if any(k in n for k in LANGUAGE)]
+            ri=[i for i,n in enumerate(s.names) if any(k in n for k in REASONING)]
+            assert li and ri, "lang_frac needs both groups present"
+            un=set(range(len(s.names)))-set(li)-set(ri)
+            assert not un, f"uncategorised corpora would get weight 0: {[s.names[i] for i in un]}"
+            nw=np.zeros_like(w)
+            nw[li]=w[li]/w[li].sum()*lang_frac            # sqrt-size split WITHIN each group, then scaled
+            nw[ri]=w[ri]/w[ri].sum()*(1.0-lang_frac)
+            w=nw
+        s.w=w/w.sum(); s.sizes=sizes; s.lang_frac=lang_frac
         if verbose:
-            print(f"[DataMix] {len(s.names)} corpora, {sizes.sum()/1e9:.0f}B tok total, ctx={ctx}",flush=True)
+            lf="" if lang_frac is None else f", language {lang_frac:.0%} / reasoning {1-lang_frac:.0%}"
+            print(f"[DataMix] {len(s.names)} corpora, {sizes.sum()/1e9:.0f}B tok total, ctx={ctx}{lf}",flush=True)
             for nm,ww,sz in sorted(zip(s.names,s.w,sizes),key=lambda x:-x[1]):
                 print(f"    {nm:12s} {sz/1e9:6.1f}B  sample-w={ww*100:4.1f}%",flush=True)
     def batch(s, B):
