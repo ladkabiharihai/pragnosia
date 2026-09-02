@@ -2149,3 +2149,38 @@ blocks of ~256, use the recurrent state between blocks and the quadratic form on
 B=6/T=2048/FE=273/DV=768 that takes the attention term from ~2.0e14 to ~3.4e13 FLOPs, about **6x fewer**, and cuts
 the [B,T,T] tensors by ~8x. It is a real rewrite of Layer.forward with real correctness risk, so it is recorded as
 the next big win rather than done in passing.
+
+## THE SUB-CHUNKING LEVER: PULLED, VERIFIED EXACT, AND IT DOES NOT PAY AS A SPEED FIX
+Implemented `_sub_mix` -- the GLA/Mamba-2 chunked formulation -- as an opt-in `cfg.subchunk` path, with the
+original quadratic form kept intact as `_full_mix`.
+### IT IS MATHEMATICALLY EXACT
+| check | result |
+|-------|--------|
+| forward vs full form, 12 combinations (gated x carried-state x block 64/128/256) | **~1.1e-15** |
+| returned state (M, z) | ~1.4e-15 |
+| chunked recurrence still exact | 0.00e+00 / 9.9e-16 |
+| step() == forward() | 8.7e-16 / 5.7e-16 |
+| **gradients, every parameter** | **5.9e-15 / 9.6e-15** |
+Numerically safe by construction: every exponent is taken RELATIVE TO A BLOCK BOUNDARY and is therefore <= 0,
+which is exactly why this works where folding the gate globally did not (that gave exp(L_t - L_T) >= 1).
+### BUT THE PAYOFF IS NOT THERE -- my FLOP estimate named the wrong binding constraint
+Measured (eager; torch.compile UNROLLS the block loop and took >21 min to compile at nb=8, itself disqualifying):
+| chunk | subchunk | ms/step | peak GiB | tok/s |
+|-------|----------|---------|----------|-------|
+| 2048 | full | 84 | 4.75 | **49k** |
+| 2048 | 256 | 166 | 4.29 | **25k** |
+| 8192 | full | 462 | 27.56 | 35k |
+| 8192 | 256 | 626 | **13.36** | 26k |
+| 16384 | full | **OOM** | - | - |
+| 16384 | 256 | 1350 | **25.48** | 24k |
+**At our actual chunk (2048) it is 2x SLOWER for no memory saving.** I predicted ~6x fewer FLOPs and that was
+arithmetically right but irrelevant: the section is not FLOP-bound. Splitting into blocks replaces a few large
+matmuls with many small ones that underutilise the H100, and it ADDS an O(T x FE x DV) inter-block read/write that
+the full form pays only once per chunk. With FE=273 and T=2048 the ratio T/FE is only 7.5 -- far too small for the
+T^2 term to dominate.
+**NOT SHIPPED AS DEFAULT.** `cfg.subchunk` stays 0. Shipping it would have made training 2x slower.
+### WHAT IT IS ACTUALLY GOOD FOR: buying back the backprop horizon
+It is a MEMORY lever at LONG chunks, not a speed lever. At 8192 it halves memory (27.56 -> 13.36 GiB), and at
+16384 the full form OOMs while sub-chunking runs in 25.48 GiB. That is **8x the gradient horizon** we gave up when
+moving to CH=2048 -- available now, verified exact, if we decide credit assignment past 2048 tokens is worth ~30%
+throughput.

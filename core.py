@@ -47,6 +47,54 @@ def _shift(x):                                                # key source is th
 
 def dgelu(x):                                                 # exact derivative of the erf GELU
     return 0.5*(1+torch.erf(x/1.4142135623730951))+x*torch.exp(-0.5*x*x)/2.5066282746310002
+def _sub_mix(qf,kf,v,L,state,b):
+    """SUB-CHUNKED LINEAR ATTENTION (the GLA/Mamba-2 formulation), mathematically identical to the full quadratic
+    form but O(T x b x FE) instead of O(T^2 x FE), and it never materialises [B,T,T].
+
+    Split the chunk into blocks of b. Carry a running (M,z) BETWEEN blocks and use the quadratic form only WITHIN
+    one. A read at t of a key at s needs exp(L_t - L_s); splitting at a block boundary p gives
+        exp(L_t - L_s) = exp(L_t - L_p) * exp(L_p - L_s)
+    so the left factor is computed locally and the right one is already folded into what M holds. Every exponent
+    is then RELATIVE TO A BLOCK BOUNDARY and therefore <= 0 -- which is exactly why this is numerically safe where
+    folding the gate into qf/kf globally was not (that produced exp(L_t - L_T) >= 1, which overflows for a
+    strongly-forgetting gate; measured as the 2.25e-03 error that killed the earlier attempt).
+
+    The running M is NOT detached inside the loop: gradients must flow from a later block back through M to an
+    earlier one, exactly as they do through the full A. Only the returned state is detached.
+    """
+    B,T,FE=qf.shape; DV=v.shape[-1]; nb=T//b
+    qb=qf.view(B,nb,b,FE); kb=kf.view(B,nb,b,FE); vb=v.view(B,nb,b,DV)
+    if L is not None:
+        Lb=L.view(B,nb,b)
+        last=Lb[:,:,-1]
+        Lstart=torch.cat([torch.zeros(B,1,device=L.device,dtype=L.dtype),last[:,:-1]],1)
+        Lc=Lb-Lstart.unsqueeze(-1)                      # <= 0 within every block
+    if state is None:
+        M=qf.new_zeros(B,FE,DV); z=qf.new_zeros(B,FE)
+    else:
+        M,z=state
+    ns=[]; ds=[]
+    for i in range(nb):
+        q=qb[:,i]; k=kb[:,i]; vv=vb[:,i]
+        A=torch.einsum('btf,bsf->bts',q,k)
+        if L is not None:
+            lc=Lc[:,i]
+            A=A*(lc.unsqueeze(-1)-lc.unsqueeze(-2)).clamp(max=0.0).exp()
+        A=A.tril()
+        num=torch.einsum('bts,bsd->btd',A,vv); den=A.sum(-1,keepdim=True)
+        rd=torch.einsum('btf,bfd->btd',q,M); rz=torch.einsum('btf,bf->bt',q,z).unsqueeze(-1)
+        if L is not None:
+            g0=lc.exp().unsqueeze(-1); rd=rd*g0; rz=rz*g0
+        ns.append(num+rd); ds.append(den+rz)
+        if L is not None:
+            ge=(lc[:,-1:]-lc).exp().unsqueeze(-1)       # decay each key to the END of this block
+            kg=k*ge; tot=lc[:,-1].exp().view(B,1,1)
+            M=M*tot+torch.einsum('btf,btd->bfd',kg,vv); z=z*tot.squeeze(-1)+kg.sum(1)
+        else:
+            M=M+torch.einsum('btf,btd->bfd',k,vv); z=z+k.sum(1)
+    return torch.cat(ns,1),torch.cat(ds,1),(M.detach(),z.detach())
+
+
 class Layer(nn.Module):
     """Recurrent mixer + FEEDFORWARD (MLP), both residual and pre-normed -- a full block.
     Measured: adding the MLP is worth 1.17 nats at matched total parameters (attention-only 5.61 vs with-MLP 4.44),
@@ -91,6 +139,25 @@ class Layer(nn.Module):
         kf=taylor(xk,cfg)                                      # writes (shifted keys)
         qf=taylor(xq,cfg)                                      # reads
         v=H@s.Wv.weight.T
+        # gate cumulant, needed by BOTH paths
+        L=F.logsigmoid(s.Wg(H)).squeeze(-1).cumsum(-1) if s.gated else None
+        sub=getattr(cfg,'subchunk',0)
+        if sub and T%sub==0 and wgate is None:
+            # SUB-CHUNKED PATH: same function, O(T x sub x FE) instead of O(T^2 x FE), and no [B,T,T] tensor.
+            num,den,(newM,newz)=_sub_mix(qf,kf,v,L,state,sub)
+            A=None
+        else:
+            A,num,den,newM,newz=s._full_mix(qf,kf,v,L,state,wgate)
+        den=den+1e-5
+        r=num/den; o=r@s.Wo.weight.T+s.Wo.bias
+        a1=a+s.rs*o
+        H2,n2=rmsnorm(a1); z=H2@s.m1.weight.T+s.m1.bias; g=F.gelu(z)
+        a2=a1+s.rs*(g@s.m2.weight.T+s.m2.bias)
+        return a2, (H,nrm,Hs,xk,kf,xq,qf,v,A,num,den,r,a1,H2,n2,z,g,(newM,newz))
+
+    def _full_mix(s,qf,kf,v,L,state,wgate):
+        """the original quadratic form, kept intact as the reference path and the fallback"""
+        cfg=s.cfg
         A=torch.einsum('btf,bsf->bts',qf,kf)                   # retrieval weights beta_{t,s} = qf_t . kf_s
         if s.gated:
             # a per-token rate g_u becomes the pairwise factor exp(L_t - L_s) with L_t = sum_{u<=t} log g_u.
@@ -103,8 +170,6 @@ class Layer(nn.Module):
             # also rescales the kf that is WRITTEN INTO THE CARRIED STATE, so the decay gets applied twice across
             # chunk boundaries -- measured 2.25e-03 relative error on the chunked recurrence. Doing it correctly
             # requires un-folding kf before the state write; left as the obvious next memory win.
-            lg=F.logsigmoid(s.Wg(H)).squeeze(-1)               # [B,T], each <= 0
-            L=lg.cumsum(-1)
             A=A*(L.unsqueeze(-1)-L.unsqueeze(-2)).clamp(max=0.0).exp()
         A=A.tril()                                             # causal: read at t sees writes s<=t
         den=A.sum(-1,keepdim=True); num=torch.einsum('bts,bsd->btd',A,v)
@@ -118,11 +183,6 @@ class Layer(nn.Module):
                 g0=L.exp().unsqueeze(-1)                       # [B,T,1], product of gates from the chunk start
                 rd=rd*g0; rz=rz*g0
             num=num+rd; den=den+rz
-        den=den+1e-5
-        r=num/den; o=r@s.Wo.weight.T+s.Wo.bias
-        a1=a+s.rs*o
-        H2,n2=rmsnorm(a1); z=H2@s.m1.weight.T+s.m1.bias; g=F.gelu(z)
-        a2=a1+s.rs*(g@s.m2.weight.T+s.m2.bias)
         # SELECTIVE WRITING (VISION propose gate): `wgate` [B,T] weights each token's write into the PERSISTENT
         # state. Every token writing means N tokens superimpose in a fixed state, so any one fact's share is ~1/N
         # (measured: keeping all writes is actively harmful, -1.10 gain). Gating by salience multiplies the
@@ -140,10 +200,10 @@ class Layer(nn.Module):
             newM=torch.einsum('btf,btd->bfd',kf,v).detach(); newz=kf.sum(1).detach()
             if state is not None: newM=state[0]+newM; newz=state[1]+newz
         else:
-            g=wgate.unsqueeze(-1)
-            newM=torch.einsum('btf,btd->bfd',kf*g,v).detach(); newz=(kf*g).sum(1).detach()
+            gw=wgate.unsqueeze(-1)
+            newM=torch.einsum('btf,btd->bfd',kf*gw,v).detach(); newz=(kf*gw).sum(1).detach()
             if state is not None: newM=state[0]+newM; newz=state[1]+newz
-        return a2, (H,nrm,Hs,xk,kf,xq,qf,v,A,num,den,r,a1,H2,n2,z,g,(newM,newz))
+        return A,num,den,newM,newz
     def local_vjp(s,a,cache,dout):
         cfg=s.cfg; H,nrm,Hs,xk,kf,xq,qf,v,A,num,den,r,a1,H2,n2,z,g,_st=cache
         Wk,Wq,Wv,Wo=(s.Wk.weight,s.Wq.weight,s.Wv.weight,s.Wo.weight)
