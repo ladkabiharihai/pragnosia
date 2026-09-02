@@ -46,7 +46,7 @@ LR_MIN_MULT=float(os.environ.get("LR_MIN_MULT","0.1"))   # decay to 10% of peak 
 D0,NL0,DIN0=384,8,16          # infant = 90.4M. Was 384x4L/DIN8 = 19M; the vision's claims are all either
                                # size-independent mechanisms or were already proven at 21.6M, so starting below
                                # 60M only spent time in a regime that proves nothing.
-TARGET_D,TARGET_NL=640,13                              # ~235M at the end
+TARGET_D,TARGET_NL=1024,16   # display/reporting only; res_scale is pinned at birth                              # ~235M at the end
 RECALL_FRAC=0.15; VRAM_MIN=8.0                          # leave headroom for prod
 CKPT="/mnt/kv_cache/pragnosia_data/pragnosia.pt"
 # GROWTH PLAN: THREE large events, not ten small ones. MEASURED (exp/growth_fix_final.py, identical final size
@@ -63,7 +63,12 @@ CKPT="/mnt/kv_cache/pragnosia_data/pragnosia.pt"
 # DIN 8->32 is worth 0.133 nats at D=384 and 0.196 at D=768, i.e. the penalty GROWS with width, exactly the regime
 # the 235M model plateaued in. DIN costs almost no parameters (Wk,Wq are D x DIN); it costs state and attention
 # compute, and at DIN=24 the state is still only 1.3 MiB per layer, so constant-memory context is unaffected.
-PLAN=[('wdi',(128,3,4)),('wdi',(128,2,4))]   # 384x8L/DIN16 24M -> 512x11L/20 46M -> 640x13L/24 75M
+# LADDER TO 203M. Growing costs 13.12B tokens / 17.3 h and ARRIVES with 64.8 tok/param cumulative -- 3.8 hours
+# CHEAPER than training 203M from scratch on the same tokens (21.2 h), because early tokens run on a small fast
+# model (390 ktok/s) rather than the big slow one (172 ktok/s). Predicted BPB brackets 0.86 (tokens transfer) to
+# 0.92 (they do not); both beat GPT-2's 0.9335.
+PLAN=[('wdi',(128,3,4)),('wdi',(128,2,4)),('wdi',(128,2,4)),('wdi',(128,1,4)),('wdi',(128,0,4))]
+#     24M -> 46M -> 75M -> 114M -> 159M -> 203M   (D384x8L/DIN16 -> D1024x16L/DIN36)
 # LANG_FRAC replaces the old CORPUS="window2" single-corpus restriction. Set CORPUS to force one corpus back.
 CORPUS=os.environ.get("CORPUS","") or None
 dm=DataMix(ctx=DOC+1,verbose=True,only=CORPUS,lang_frac=None if CORPUS else LANG_FRAC)
@@ -99,7 +104,10 @@ def main():
     if os.path.exists(CKPT):
         sd=torch.load(CKPT,map_location=DEV)
         from util import cfg_from_ckpt
-        cfg=cfg_from_ckpt(sd,T=CH,res_scale=TARGET_NL**-0.5)
+        # res_scale is a CONSTANT MULTIPLIER ON EVERY RESIDUAL BRANCH. It was re-derived from TARGET_NL on every
+        # resume, so extending the growth plan would have silently changed the trained function (13**-0.5 = 0.277
+        # vs 16**-0.5 = 0.250, a 10% change everywhere). Restore what the model was BORN with.
+        cfg=cfg_from_ckpt(sd,T=CH,res_scale=sd.get('res_scale',TARGET_NL**-0.5))
         cfg.tie_emb=sd.get('tie_emb',False); cfg.head_scale=sd.get('head_scale',1.0)
         cfg.gated=sd.get('gated',False); cfg.qknorm=sd.get('qknorm',False)
         m=C.Core(cfg).to(DEV); m.load_state_dict(sd['model']); step=sd['step']; k=sd['k']
@@ -195,7 +203,7 @@ def main():
             # TRUE PRE-GROWTH SNAPSHOT, taken at the growth instant so before/after is exactly measurable.
             torch.save({'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'DIN':m.cfg.DIN,'NL':m.cfg.NL,
                         'step':it,'k':k,'tie_emb':m.cfg.tie_emb,'head_scale':m.cfg.head_scale,
-                        'gated':m.cfg.gated,'qknorm':m.cfg.qknorm,
+                        'gated':m.cfg.gated,'qknorm':m.cfg.qknorm,'res_scale':m.cfg.res_scale,
                 'tokens_at_size':tokens_at_size,'steps_at_size':steps_at_size}, f"{CKPT[:-3]}_before_grow{k+1}.pt")
             if kind=='wdi':                                                 # width + depth + RETRIEVAL together
                 G.grow_width(m,amt[0]); G.grow_depth(m,amt[1]); G.grow_din(m,amt[2])
@@ -251,7 +259,7 @@ def main():
         if (it+1)%200==0: torch.cuda.empty_cache()   # bound the reservation, not just the live peak
         if (it+1)%500==0:
             ck={'model':m.state_dict(),'D':m.cfg.D,'DV':m.cfg.DV,'DIN':m.cfg.DIN,'NL':m.cfg.NL,'step':it+1,'k':k,
-                'tie_emb':m.cfg.tie_emb,'head_scale':m.cfg.head_scale,'gated':m.cfg.gated,'qknorm':m.cfg.qknorm,
+                'tie_emb':m.cfg.tie_emb,'head_scale':m.cfg.head_scale,'gated':m.cfg.gated,'qknorm':m.cfg.qknorm,'res_scale':m.cfg.res_scale,
                 'tokens_at_size':tokens_at_size,'steps_at_size':steps_at_size}
             torch.save(ck,CKPT)
             # keep the LAST save before each grow and the TWO after it, so growth can be probed after the fact

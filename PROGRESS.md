@@ -2465,3 +2465,15 @@ grown path had already seen 64.8, so it compared unequal things and got the sign
 **Both ends of the bracket beat GPT-2.** The truth sits between, and our own prior measurement puts it nearer the
 good end: a single growth pays for itself by ~0.7 tok/param, though four growths trailed one large growth at
 identical final size (4.3483 vs 4.2732), so a five-stage ladder gives up something real.
+
+## RUN 6 SET TO RUN THE FULL LADDER TO 203M
+PLAN extended to five growths: 24M -> 46M -> 75M -> 114M -> 159M -> 203M (D384x8L/DIN16 -> D1024x16L/DIN36).
+Currently at 46M with one growth done.
+**A HAZARD CLOSED FIRST.** `res_scale` -- a constant multiplier on EVERY residual branch -- was re-derived from
+TARGET_NL on every resume rather than stored. Extending the plan meant changing TARGET_NL from 13 to 16, which
+would have silently changed the trained function everywhere (13^-0.5 = 0.277 vs 16^-0.5 = 0.250, a 10% shift) at
+the next resume, with nothing in the logs to show it. It is now written into the checkpoint and restored from
+there; TARGET_NL is display-only. Same class as the tokens_at_size reset -- state the model depends on being
+recomputed from a config value instead of carried with the weights.
+Expected: **13.12B tokens, 17.3 hours, arriving at 64.8 tok/param cumulative**, predicted BPB 0.86-0.92 against
+GPT-2's 0.9335.
