@@ -2053,3 +2053,33 @@ than the control on both metrics. Recorded as a NEGATIVE result rather than retr
 tokens at 4gram-rep 0.01 and letters 0.96 -- better than real text on repetition. The model retains the entire
 primed context; it only stops adding its own output. A careful 12-generation-per-setting sweep is choosing the
 value, since the first single-document sweep gave contradictory readings between runs.
+
+## write_scale SETTLED, AND RUN 5 STARTED AT 90M
+### CHOOSING write_scale: 12 generations of 1200 tokens per setting (the single-document sweep was noise)
+| write_scale | 4gram-rep | letters | distinct-1 | tail-rep |
+|-------------|-----------|---------|------------|----------|
+| REAL TEXT | 0.14 +-0.19 | 0.93 +-0.06 | 0.37 +-0.16 | 0.14 |
+| 1.00 | 0.44 +-0.27 | 0.85 +-0.21 | 0.21 +-0.13 | 0.59 |
+| 0.50 | 0.42 +-0.22 | 0.91 +-0.10 | 0.21 +-0.11 | 0.61 |
+| 0.25 | 0.33 +-0.24 | 0.93 +-0.08 | 0.25 +-0.12 | 0.51 |
+| 0.10 | 0.23 +-0.22 | 0.94 +-0.07 | 0.29 +-0.12 | 0.40 |
+| 0.05 | 0.36 +-0.24 | 0.96 +-0.03 | 0.25 +-0.13 | 0.50 |
+| **0.00** | **0.03 +-0.05** | **0.95 +-0.01** | **0.49 +-0.04** | **0.01** |
+**It is effectively BINARY** -- every intermediate value still degenerates, and 0.0 also has 5x LESS variance.
+Any self-writing at all eventually dominates the read, because the model's own output is far more self-similar
+than real text and its keys align in the state. `Core.generate()` now defaults to `write_scale=0.0`.
+At 1.0 the tail reads 'century century centuryospel coin century century centuryth century Persian century...';
+at 0.0 it reads '...100ship of the Ura-5.5th century region in the model, and population of the final time to...'.
+**This does not block training.** It is a generation-time setting; the training loop is unchanged. The full PRIMED
+state is retained, so everything the model READ is still available -- only its own output is withheld.
+### RUN 5: 90M INFANT
+| | run 4 | run 5 |
+|---|-------|-------|
+| infant | 384x4L DIN8 = 19M | **768x11L DIN16 = 90M** |
+| plan | 3 growths -> 202M | **2 growths: 90M -> 142M -> 202M** |
+| measured | 743 ktok/s, 11.0 GiB | **294 ktok/s, 25.17 GiB** |
+Starting below 60M only spent time in a regime that proves nothing: every vision claim is either a
+size-independent mechanism or was already proven at 21.6M.
+ONE MORE BUG FIXED: a memory probe died with exit 137 (SIGKILL). Not GPU OOM -- inductor spawns one compile
+worker per CORE, and at 11 layers that exhausted HOST RAM and the kernel killed the process. `compile_threads=8`
+fixes it, and matters more now that the infant is 11 layers rather than 4. Prod stayed up throughout (HTTP 200).

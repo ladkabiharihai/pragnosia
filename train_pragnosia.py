@@ -16,6 +16,9 @@ _dynamo.config.recompile_limit=64          # 10 planned growth events legitimate
 # SUCCESSFUL growth. Swept the tiling options on the exact failing shape: defaults, max_tiles=1 and max_tiles=3
 # all fail; prefer_nd_tiling=True compiles. Without this the run falls back to eager and loses ~2x throughput.
 import torch._inductor.config as _ic; _ic.triton.prefer_nd_tiling=True
+# Cap inductor's compile workers. The default spawns one per core; at 11+ layers that exhausted HOST RAM and the
+# OOM killer took the process (exit 137) during a memory probe. 8 workers compile fine and leave prod alone.
+_ic.compile_threads=8
 import core as C, growth as G
 from data_mix import DataMix
 DEV=C.DEV
@@ -27,7 +30,9 @@ DOC=32768; CH=4096; NCH=DOC//CH; B=int(os.environ.get("B","8")); DECAY=0.05  # m
 LR=float(os.environ.get("LR","6e-4")); STEPS=int(os.environ.get("STEPS","100000000"))   # effectively indefinite: run until told to stop (user)
 WARM=int(os.environ.get("WARM","300"))            # re-warm after each grow: new capacity is inert and must be eased in
 LR_MIN_MULT=float(os.environ.get("LR_MIN_MULT","0.1"))   # decay to 10% of peak by the end of a stage's token budget
-D0,NL0=384,4                                            # infant
+D0,NL0,DIN0=768,11,16          # infant = 90.4M. Was 384x4L/DIN8 = 19M; the vision's claims are all either
+                               # size-independent mechanisms or were already proven at 21.6M, so starting below
+                               # 60M only spent time in a regime that proves nothing.
 TARGET_D,TARGET_NL=1024,16                              # ~235M at the end
 RECALL_FRAC=0.15; VRAM_MIN=8.0                          # leave headroom for prod
 CKPT="/mnt/kv_cache/pragnosia_data/pragnosia.pt"
@@ -45,7 +50,7 @@ CKPT="/mnt/kv_cache/pragnosia_data/pragnosia.pt"
 # DIN 8->32 is worth 0.133 nats at D=384 and 0.196 at D=768, i.e. the penalty GROWS with width, exactly the regime
 # the 235M model plateaued in. DIN costs almost no parameters (Wk,Wq are D x DIN); it costs state and attention
 # compute, and at DIN=24 the state is still only 1.3 MiB per layer, so constant-memory context is unaffected.
-PLAN=[('wdi',(256,4,4)),('wdi',(192,4,4)),('wdi',(192,4,8))]   # 384x4L/DIN8 -> 640x8L/12 -> 832x12L/16 -> 1024x16L/24
+PLAN=[('wdi',(128,3,4)),('wdi',(128,2,4))]   # 768x11L/DIN16 90M -> 896x14L/20 142M -> 1024x16L/24 202M
 CORPUS=os.environ.get("CORPUS","window2")                    # window2 only: educational text, 170B tokens, least repetitive
 dm=DataMix(ctx=DOC+1,verbose=True,only=CORPUS)
 RD=RV=None
@@ -71,7 +76,7 @@ def main():
     # TIED EMBEDDINGS: one matrix for input and output. At vocab 32768 / D=1024 this saves 33.5M parameters (14%
     # of a 235M model) and MEASURES BETTER: -0.108 nats at 37% fewer params (exp/tied_emb.py). Growth keeps the tie
     # via cfg.head_scale and is loss-neutral in practice (+0.0001 across a growth event vs untied -0.0000).
-    cfg=C.Config(D=D0,DIN=8,DV=D0,NL=NL0,T=CH,res_scale=TARGET_NL**-0.5,tie_emb=True)
+    cfg=C.Config(D=D0,DIN=DIN0,DV=D0,NL=NL0,T=CH,res_scale=TARGET_NL**-0.5,tie_emb=True)
     # THE TWO MEASURED WINS. Gating replaces the hand-set DECAY with a LEARNED per-token forget rate: worth
     # -0.28 nats, it is what separates Mamba-2/GLA/RWKV-6 from plain linear attention, and it improved our own
     # memory gain 18x (+0.0016 -> +0.0286). qk-norm bounds the quartic growth of A=qf.kf: -0.017 nats AND faster.

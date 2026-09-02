@@ -251,7 +251,19 @@ class Core(nn.Module):
             ns.append((M,z)); npv.append(H[:,0])
         h,_=rmsnorm(a); return s.head(h)[:,0]*getattr(s.cfg,'head_scale',1.0), ns, npv
     @torch.no_grad()
-    def generate(s,ids,n=40,temp=1.0,states=None,top_p=1.0,greedy=False,write_scale=1.0):
+    def generate(s,ids,n=40,temp=1.0,states=None,top_p=1.0,greedy=False,write_scale=0.0):
+        """write_scale DEFAULTS TO 0: generated tokens are NOT written back into the recurrent state.
+        Measured over 12 generations of 1200 tokens each (54M, step 5500), against real text at 4gram-rep 0.14:
+            write_scale 1.00 -> rep 0.44 +-0.27, tail 0.59   ('century century century century ...')
+            write_scale 0.50 -> rep 0.42 +-0.22, tail 0.61
+            write_scale 0.25 -> rep 0.33 +-0.24, tail 0.51
+            write_scale 0.10 -> rep 0.23 +-0.22, tail 0.40
+            write_scale 0.00 -> rep 0.03 +-0.05, tail 0.01   <- stable, and 5x LESS variance
+        It is effectively binary: any self-writing at all eventually dominates the read, because the model's own
+        output is far more self-similar than real text and its keys align. The full PRIMED state is untouched, so
+        everything the model READ is still available -- only its own output is withheld.
+        Confirmed STRUCTURAL, not a capacity problem: a 202M model on 5.4B tokens degenerates identically, and so
+        do UNGATED models. Training-side repair (scheduled sampling) was tried and made it worse; see PROGRESS.md."""
         """CORRECT generation. Use this instead of calling prefill/step by hand.
 
         THE BUG THIS EXISTS TO PREVENT: every call site wrote `prefill(x)` then `cur=x[:,-1:]` and stepped, which
