@@ -2222,3 +2222,42 @@ curated WebText to our 2.16B, so it has 4x the tokens and 1.4x the parameters.
 **WHAT GPT-2 CANNOT DO AT ALL:** it is hard-capped at 1024 tokens TOTAL and CRASHED when asked to generate 1200
 after a 1024-token prompt. We do that, and read to 1M at flat cost. The comparison above had to be re-run with a
 300-token prompt purely to fit inside GPT-2's limit.
+
+## WHAT THE 90M MODEL HAS ACTUALLY ACHIEVED (tested before restarting, at the user's instruction)
+Subject: 90M, step 11000, **1.86B tokens = 20.6 tok/param**.
+### REAL GAINS, versus the 54M it replaced
+| metric | 54M @ 1.4B | **90M @ 1.86B** |
+|--------|-----------|-----------------|
+| held-out loss | 4.6321 (ppl 103) | **4.0243 (ppl 55.9)** |
+| memory gain | +0.0183 | **+0.0549** (best ever, 3x) |
+| long-context loss over 32k | - | **4.02 -> 3.92** (IMPROVES with context) |
+| generation, in-distribution | - | d1 0.90, rep 0.00 vs real text 0.82 / 0.01 |
+Long-generation stability also improved materially: at 54M no write_scale above 0 was usable; at 90M
+**write_scale=0.05 matches real text on every metric** (rep 0.14 vs 0.14, letters 0.96 vs 0.93, d1 0.37 vs 0.37).
+Needle retrieval at distance 0 is now **+0.713 nats in 100% of trials** (202M scored +0.536 in 79%).
+### AND THE HONEST FAILURE: surface metrics say we are competitive, READING THE TEXT says we are not
+| model | 4gram-rep | letters | distinct-1 |
+|-------|-----------|---------|------------|
+| real text | 0.13 | 0.92 | 0.45 |
+| **ours 90M (21 tok/param)** | **0.10** | **0.96** | **0.50** |
+| GPT-2 124M (75 tok/param) | 0.16 | 0.92 | 0.59 |
+On every metric we look at least as good as GPT-2. The text says otherwise:
+```
+OURS : ' it was told a way the frogs wouldnting her very fewbe says, and finally created the workers, and a
+         guard, near them, and the council of NFrainianmarweredlypatio Tamilfor example, and a police of ...'
+GPT-2: ' a deal with the shelter where he lives, to pledge himself to the sled team if they will take him to
+         the shelter. Because of that promise, Buck soon emerges from the swamp, he re-enters the forest ...'
+```
+GPT-2 tracks the SUBJECT (Buck, from the Call of the Wild passage it was given) and writes meaningful sentences.
+Ours writes locally-plausible word salad with junk tokens. **distinct-1 and 4gram-rep flatter us precisely BECAUSE
+the nonsense is varied** -- the same trap as the digit-spam finding, and worth stating plainly rather than
+reporting the favourable table.
+**THE LIKELIEST CAUSE IS TOKENS, AND IT IS QUANTIFIABLE.** GPT-2 saw ~75 tok/param; we are at 21. Matching its
+budget means ~6.8B tokens for a 90M model, about **7 hours at 270 ktok/s**. Until then a semantic comparison
+against GPT-2 is not a fair test, and the right read of today's result is "the substrate is sound, the training
+budget is not yet spent".
+### BUG FOUND WHILE ANSWERING "how many tok/param do we have"
+`tokens_at_size` was initialised to 0 and never checkpointed, so **every resume silently reset the growth clock**:
+the trainer displayed 14 tok/param where the true figure was 19.4. The earned-growth gate tests that value, so
+each resume pushed growth further away. Both it and `steps_at_size` (which positions the LR schedule) are now
+saved and restored.
