@@ -2444,3 +2444,24 @@ Whether growth also costs QUALITY. Two attempts, both confounded, both discarded
 The clean test is cheap and has not been run: let run 6 reach ~20 tok/param at 46M on the SAME data and eval as
 the fit (0.92B tokens, ~40 min) and see whether it lands on the predicted 1.2441. That also validates whether the
 fit -- built only on 12M and 24M -- can be trusted 8x out at 200M, which my recommendation currently assumes.
+
+### CORRECTION -- the user was right, and it reverses the conclusion
+I claimed the model "lands at 203M with only 22 tok/param". That counts the LAST STAGE ONLY and discards every
+token the lineage saw. Growth is FUNCTION-PRESERVING (verified to 5.4e-04), so those earlier tokens trained the
+weights that became the larger model. The right denominator is the final parameter count:
+| | tokens | cumulative tok/param at 203M | hours |
+|---|--------|------------------------------|-------|
+| **grow 46M -> 203M** | **13.12B** | **64.8** | **17.3** |
+| train 203M from scratch, same tokens | 13.12B | 64.8 | 21.2 |
+**GROWTH IS 3.8 HOURS CHEAPER**, not 10 hours more expensive. The early tokens run on a small fast model
+(390 ktok/s) instead of the big slow one (172 ktok/s) -- which is precisely what progressive growth is for. My
+earlier table compared "grown to 40 tok/param in the final stage" against "from scratch at 40 tok/param" while the
+grown path had already seen 64.8, so it compared unequal things and got the sign wrong.
+**PREDICTED QUALITY AT 203M, bracketing the transfer question:**
+| assumption | tok/param used | predicted BPB | vs GPT-2 (0.9335) |
+|------------|----------------|---------------|-------------------|
+| earlier tokens transfer FULLY | 64.8 | **0.8596** | **-0.074** |
+| they transfer NOT AT ALL | 22 | **0.9224** | **-0.011** |
+**Both ends of the bracket beat GPT-2.** The truth sits between, and our own prior measurement puts it nearer the
+good end: a single growth pays for itself by ~0.7 tok/param, though four growths trailed one large growth at
+identical final size (4.3483 vs 4.2732), so a five-stage ladder gives up something real.
