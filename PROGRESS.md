@@ -2091,3 +2091,32 @@ shape and call signature, so the allocator keeps two families of blocks.
 Fixed with B=6 plus `torch.cuda.empty_cache()` every 200 steps, which bounds the RESERVATION rather than only the
 live peak: **37,800 MiB held, 13 GB free, stable.** Projected at the 16-layer target: ~28 GB live at B=6.
 Running: 90M, loss 6.717 and falling, 163 ktok/s, prod HTTP 200 throughout.
+
+## VISION AUDIT: FLAG 1 IS HALF DEMONSTRATED -- the cost half is proven, the ACCURACY half is not
+Flag 1 is "constant memory/compute **AND needle/long-doc accuracy HELD** as context grows 100 -> 1M". Only the
+cost half had ever been measured. Built a proper needle test to measure the other half.
+**FIRST ATTEMPT WAS CONFOUNDED, and its control caught it.** Scoring the true name against DISTRACTOR names mixes
+retrieval with token-frequency priors: rare names score low no matter what. The giveaway was a uniform -1.5 nat
+margin at EVERY distance *including 0*, where the fact is the immediately preceding sentence. That reads as "no
+retrieval at all" and would have been the wrong conclusion.
+**PAIRED DESIGN (compare the same token to itself, fact present vs a different name planted -- every prior
+cancels), 202M / 4.0B tokens:**
+| distance | lift (nats) | positive in |
+|----------|-------------|-------------|
+| 0 | **+0.536** | 79% |
+| 20 | **+0.406** | 79% |
+| 200 | +0.115 | 79% |
+| 1000 | +0.009 | 79% |
+| 4000 | +0.002 | 54% |
+| 16000 | +0.001 | 42% |
+| 64000 | -0.001 | 50% |
+**Retrieval is REAL but its horizon is ~200-1000 tokens, not 1M.** The lift falls 4.7x from distance 0 to 200 and
+another 12x by 1000, reaching zero well before the cost curve stops being flat.
+CAUSE: superposition interference in a fixed-capacity associative memory. M holds FE x DV numbers; every token
+written superimposes on every other, so retrieval SNR decays with the number of writes. Nothing to do with the
+gate -- this model is ungated -- and not fixed by scale.
+**THE VISION ANTICIPATES THIS.** §2: "The state is finite, so it keeps the gist and forgets the trivial: it must
+CONSOLIDATE the salient into weights rather than hold everything. Finite-state over infinite-context FORCES
+consolidation." So a needle surviving 64k tokens in the STATE ALONE was never the design. But flag 1's stated
+metric does say "needle accuracy held", so either that claim depends on the consolidation loop being live during
+the measurement, or the metric needs restating. **This is a decision for the user, not one to paper over.**
