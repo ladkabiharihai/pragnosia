@@ -2292,3 +2292,35 @@ That is the honest test of whether our generation becomes meaningful, and it is 
   text is equally meaningless (rep 0.22 vs 0.16), so the generation procedure is not the cause.
 - "our model is fine and only generation is broken" -- FALSE. BPB 1.4619 vs GPT-2's 0.9335 is a real prediction
   gap, not an artifact of decoding.
+
+## WHY GENERATION IS MEANINGLESS: IT IS THE DATA, NOT THE TOKENS AND NOT THE ARCHITECTURE
+The user rejected my "needs more tokens" explanation by pointing at a model we already have that IS trained past
+20 Chinchilla. They were right, and checking it broke my explanation:
+| model | params | tokens | tok/param | BPB |
+|-------|--------|--------|-----------|-----|
+| ours 90M gated | 90M | 1.86B | 20.6 | **1.4619** |
+| **ours 202M ungated** | 202M | **10.59B** | **52 (2.6x Chinchilla)** | **1.5985 (WORSE)** |
+| GPT-2 | 124M | ~9B | ~73 | 0.9335 |
+**2.2x the parameters and 5.7x the tokens produced a WORSE BPB.** More tokens is demonstrably not the answer.
+(Part of that gap is that the 202M is UNGATED, worth ~0.10 BPB, but it does not survive as an explanation for the
+generation quality.)
+### THE ACTUAL CAUSE: window2 IS 10.5% SYNTHETIC TEMPLATE DATA
+We train on `only='window2'` -- one slice, set early with "and only use window2 for now" while the architecture
+was being debugged. Sampling 400 random windows per corpus:
+| corpus | B tokens | template hits | 4gram-rep |
+|--------|----------|---------------|-----------|
+| **window2 (what we train on)** | 169.7 | **10.5%** | **0.09** |
+| dclm (curated web) | 96.8 | **0.0%** | 0.03 |
+| finemath | 10.0 | 0.8% | 0.15 |
+| recall (synthetic by design) | 0.3 | 31.5% | 0.06 |
+A tenth of every batch is kinship-QA and sequence boilerplate:
+*"John is the father of Linda. Anna is the mother of Iris... Question: Who is Linda to Iris? Answer: Linda is
+Iris's niece. Find the next number: 1, 4, 5, 9, ? Answer: 14. Anna is the mother of William..."*
+**That is verbatim the failure mode our 202M produces**: *"Question: Who is Mary? Answer: Who is Lily? Answer: Who
+is Sara? Answer:..."* -- it is not degenerating, it is reproducing 10% of its training distribution. window2 is
+also 3x more repetitive than curated web text (0.09 vs 0.03).
+### THE FULL MIX WE ARE NOT USING (290B tokens, 11 corpora)
+window2 43.7% | dclm 33.0% | finemath 5.7% | hermes/opencode/openmath/tulu3 3.4% each | evolcode/glaive/numina 1.1%
+Switching would cut synthetic-template exposure from 10.5% to ~4.6% and add 33% curated web text plus math, code
+and instruction data. The window2-only constraint was right while the architecture was the variable; it is now the
+binding constraint on quality.
