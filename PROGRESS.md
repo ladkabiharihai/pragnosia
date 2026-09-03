@@ -2710,3 +2710,29 @@ to remember precisely, and the vision already says so: "Finite-state over infini
 | 0f value/goal system | **UNDESIGNED** | the vision says so itself |
 **Honest shape of it: the EFFICIENCY and GROWTH half of the vision is proven on the current architecture; the
 CONTINUAL-LEARNING half is proven only on the old one and has to be re-earned.**
+
+## DELTA-RULE BAKE-OFF: NEGATIVE at this scale, and the first run was invalid
+Ran against the shipped accumulate rule at 11.1M / 12 tok/param, matched in everything else, judged on recall.
+| arm | BPB | repeated-passage | induction |
+|-----|-----|------------------|-----------|
+| A) accumulate (shipped) | 1.5771 | **47%** | 0% |
+| B) accumulate, DIN 32 (more capacity) | 1.6410 | **23%** | 0% |
+| C) delta rule | 1.5873 | **43%** | 0% |
+**MORE CAPACITY IS DEFINITIVELY NOT THE ANSWER** -- the bigger state (FE 601 -> 1057) was much WORSE, 23% vs 47%.
+That is worth keeping: it rules out the cheapest hypothesis.
+**THE DELTA RULE SHOWS NO BENEFIT HERE** -- 43% vs 47%, and 4 points at n=60 probes is inside the noise band.
+### THE FIRST RUN OF THIS TEST WAS INVALID AND I ALMOST REPORTED IT
+The initial probe used a 64-token passage, so the whole 127-token sequence padded into ONE 128-token block. My
+delta is applied at BLOCK granularity -- it removes what the state knew BEFORE the block -- so a repeat living
+inside a single block never touches the mechanism at all. That 43%-vs-42% was **a null by construction**, not
+evidence. Fixed by lengthening the passage to 192 tokens (383 total, three blocks) so the first occurrence and
+the repeat sit in different blocks. The corrected result is still null, but now it is a real measurement.
+### WHAT THIS DOES AND DOES NOT SETTLE
+It does NOT refute DeltaNet. Two limits are mine, not the method's:
+- **induction is 0% in BOTH arms** -- these 11M models have not formed the circuit at all, so there is nothing for
+  a sharper write rule to sharpen. The test is likely underpowered by scale; the 53%/98% gap was measured at 202M.
+- **block granularity is a weak approximation.** True DeltaNet removes the prediction for EVERY token before
+  writing it; mine does so once per 128-token block.
+Settling it properly needs per-token delta at a scale where induction exists. That is expensive, and with the
+budget left I would rather spend it on the fronts that are cheap and have clear priors. **Recorded as a negative
+result and parked, not as a refutation.**
