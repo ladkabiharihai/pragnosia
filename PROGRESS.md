@@ -2477,3 +2477,37 @@ there; TARGET_NL is display-only. Same class as the tokens_at_size reset -- stat
 recomputed from a config value instead of carried with the weights.
 Expected: **13.12B tokens, 17.3 hours, arriving at 64.8 tok/param cumulative**, predicted BPB 0.86-0.92 against
 GPT-2's 0.9335.
+
+## LADDER COMPLETE AT 203M -- AND THE RESULT IS BAD. THE TRAINER IS THE PROBLEM, NOT GROWTH OR SCALE.
+All five growths fired, each earning 22.9-25.7 tok/param, arriving at 203M in ~16 h (predicted 17.3). But:
+| checkpoint | params | tok/param @ size | BPB |
+|-----------|--------|------------------|-----|
+| before_grow1 | 25M | 25.7 | 1.7175 |
+| before_grow2 | 46M | 23.7 | 1.5210 |
+| before_grow3 | 75M | 23.8 | 1.4435 |
+| before_grow4 | 114M | 22.9 | 1.3917 |
+| before_grow5 | 159M | 23.0 | 1.3320 |
+| **LIVE, post-growth #5** | **203M** | 9.3 | **1.3970** |
+| **reference: 24.5M FROM SCRATCH @ 40** | **24.5M** | 40 | **1.1770** |
+**THE 203M GROWN MODEL IS WORSE THAN A 24.5M FROM-SCRATCH MODEL.** My predicted bracket was 0.86-0.98; measured
+1.397. The extrapolation failed by a wide margin and I should not have trusted an 8x reach from 12M/24M.
+### IT IS NOT GROWTH, AND IT IS NOT THE EVAL
+The INFANT gives it away, before any growth happened:
+| same shape, same data, same eval | tok/param | BPB |
+|----------------------------------|-----------|-----|
+| run 6 infant (the TRAINER's loop) | **25.7** | **1.7175** |
+| scaling probe (a PLAIN loop) | 20.0 | **1.2277** |
+**Same architecture, same corpus mix, same eval set, MORE tokens for the trainer's model -- and it is 0.49 BPB
+WORSE.** Growth then improves it monotonically (1.72 -> 1.33) but from a badly handicapped starting point.
+Checked the obvious defence and it fails: the trainer trains WITH memory carried across a 32768-token document, so
+a no-state eval could be unfair. Giving it the carried state makes it **worse**, not better (1.4864 vs 1.4063).
+### WHAT THE TRAINER DOES THAT THE PLAIN LOOP DOES NOT
+1. **15% of steps are RECALL batches** -- answer-masked synthetic QA on short sequences, a narrow task taking a
+   seventh of all gradient steps
+2. **state carried across 16 chunks** of a 32768-token document, so the objective is not the eval's objective
+3. per-stage LR schedule restarting at every growth, rather than one cosine over the run
+4. B=6 vs B=8
+This is the single most important thing found: **every architecture and scaling conclusion drawn from a TRAINER
+run is suspect**, while the bench/probe results (which used the plain loop) are not. The ablation is cheap --
+RECALL_FRAC is already an environment variable, so the recall hypothesis can be tested by rerunning the infant
+with it at 0.
