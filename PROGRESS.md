@@ -2558,3 +2558,20 @@ What it deliberately does NOT do, each with the measured reason:
 Running at 183 ktok/s sharing the H100 with prod, so **ETA ~13.7 hours**, not the 9.5 estimated on solo
 throughput. BPB is logged every 4000 steps against GPT-2's 0.9335 so the trajectory is visible long before the end
 -- if it is not tracking toward parity by a few B tokens, the run can be killed rather than run to completion.
+
+## SWITCHED TO GROWING THE 124M -- the user asked why we were not, and the numbers agreed with them
+| route to 124.8M on 9.11B tokens | hours |
+|---------------------------------|-------|
+| fixed 124M (what I had started) | 13.8 |
+| **grow 35M -> 65M -> 125M** | **10.1** |
+Growth is FASTER for the same tokens and the same endpoint, because early tokens run on a small fast model
+(458 ktok/s at 35M vs 183 at 125M), and it is what VISION 1 actually requires. My reason for excluding it --
+isolating the architecture measurement -- was protecting a number at the cost of the deliverable. The 203M ladder
+failure was already traced to the TRAINER, not to growth: that infant was 0.50 BPB behind before it ever grew.
+`train124g.py`: the clean plain loop plus growth, and nothing else from the old trainer. Growth timing is the
+SaturationSensor (VISION 0a -- the model decides when), gated by an earned 22 tok/param floor.
+**A BUG CAUGHT BEFORE IT FIRED.** I wrote `sensor.saturated(ema)`; the real API is `observe(entropy, step,
+tokens_seen)` and its signal is the model's own predictive ENTROPY, not the loss EMA. That would have raised
+AttributeError at 0.77B tokens, roughly 30 minutes in, and killed the run. Caught it by grepping for the method
+rather than trusting that the run starting meant the code was right -- the call site is only reached once the
+token gate opens.
