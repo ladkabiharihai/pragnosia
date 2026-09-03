@@ -82,8 +82,14 @@ def main():
     if os.path.exists(CKPT):
         sd = torch.load(CKPT, map_location=DEV)
         k = sd.get('k', 0)
-        for kk in range(k):                    # rebuild the grown shape before loading weights
+        # RESUME IS SAFE WITHOUT READING head_scale, and deliberately so: replaying the growths below rebuilds it,
+        # because grow_width divides cfg.head_scale by c on every width growth. That is why the run has been
+        # correct all along even though the SAVED field was hardcoded to 1.0 (now fixed at both save sites).
+        # The stale field only ever hurt EXTERNAL loaders that trust it -- an eval reading 1.0 instead of the
+        # true 0.7338 reported BPB 1.1550 where the live model scores 1.0698.
+        for kk in range(k):                    # rebuild the grown shape AND the accumulated head_scale
             kind, amt = PLAN[kk]; G.grow_width(m, amt[0]); G.grow_depth(m, amt[1]); G.grow_din(m, amt[2])
+        assert abs(m.cfg.head_scale - (D / sd['D']) ** 0.5) < 1e-6, "head_scale did not telescope as expected"
         m.load_state_dict(sd['model'])
         opt = torch.optim.Adam(m.parameters(), lr=LR, betas=(0.9, 0.95)); opt.load_state_dict(sd['opt'])
         step = sd['step']; tokens_at_size = sd.get('tokens_at_size', 0)
@@ -117,7 +123,7 @@ def main():
         if k < len(PLAN) and sensor.observe(ent, it, tokens_at_size if earned_ok else 0) and earned_ok:
             kind, amt = PLAN[k]; earned = tokens_at_size / P()
             torch.save({'model': m.state_dict(), 'step': it + 1, 'k': k, 'D': m.cfg.D, 'NL': m.cfg.NL,
-                        'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': m.cfg.head_scale,
+                        'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': m.cfg.head_scale, 'D0': D,
                         'gated': True, 'qknorm': True, 'res_scale': m.cfg.res_scale},
                        f"{CKPT[:-3]}_before_grow{k+1}.pt")
             G.grow_width(m, amt[0]); G.grow_depth(m, amt[1]); G.grow_din(m, amt[2])
@@ -141,7 +147,7 @@ def main():
                                 f"{done/(time.time()-t0)/1e3:.0f}ktok/s {(it+1)*B*CH/1e9:.2f}B free={free:.0f}G")
         if (it + 1) % SAVE_EVERY == 0:
             torch.save({'model': m.state_dict(), 'opt': opt.state_dict(), 'step': it + 1,
-                        'D': m.cfg.D, 'NL': m.cfg.NL, 'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': 1.0,
+                        'D': m.cfg.D, 'NL': m.cfg.NL, 'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': m.cfg.head_scale, 'D0': D,
                         'gated': True, 'qknorm': True, 'res_scale': m.cfg.res_scale,
                         'k': k, 'tokens_at_size': tokens_at_size}, CKPT)
         if (it + 1) % EVAL_EVERY == 0:
@@ -149,7 +155,7 @@ def main():
             bar.write(f"    step {it+1} | {(it+1)*B*CH/1e9:.2f}B tokens | {(it+1)*B*CH/P_FINAL:.1f} tok/param "
                       f"| BPB {b:.4f} | GPT-2 0.9335 | {'AHEAD' if b < 0.9335 else 'behind'}")
     torch.save({'model': m.state_dict(), 'opt': opt.state_dict(), 'step': STEPS,
-                'D': m.cfg.D, 'NL': m.cfg.NL, 'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': 1.0,
+                'D': m.cfg.D, 'NL': m.cfg.NL, 'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': m.cfg.head_scale, 'D0': D,
                 'gated': True, 'qknorm': True, 'res_scale': m.cfg.res_scale,
                         'k': k, 'tokens_at_size': tokens_at_size}, CKPT)
     print(f"\nDONE: {STEPS*B*CH/1e9:.2f}B tokens, final BPB {bpb(m, m.cfg):.4f}  (GPT-2 0.9335)", flush=True)

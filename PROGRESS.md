@@ -2736,3 +2736,21 @@ It does NOT refute DeltaNet. Two limits are mine, not the method's:
 Settling it properly needs per-token delta at a scale where induction exists. That is expensive, and with the
 budget left I would rather spend it on the fronts that are cheap and have clear priors. **Recorded as a negative
 result and parked, not as a refutation.**
+
+## CHECKPOINT BUG: head_scale was recorded as 1.0 while the live model had 0.7338
+Checking the latest snapshot, my eval reported BPB **1.1550** where the trainer's own log said **1.0698** at the
+same step. Chased it rather than picking one.
+`grow_width` divides `cfg.head_scale` by c=sqrt(nD/D) at every width growth, but two of the three save sites in
+train124g.py hardcoded `'head_scale': 1.0` (inherited from train124.py, where the model never grew and 1.0 was
+always right). After two growths the true value is sqrt(448/832) = **0.7338**. Setting it reproduces the trainer's
+1.0698 to four decimals, confirming the diagnosis exactly.
+**I FIRST SAID A RESUME WOULD SILENTLY LOAD A DEGRADED MODEL. THAT WAS WRONG.** The resume path replays the
+growths, and grow_width rebuilds head_scale as it goes -- it never reads the stored field. The run has been
+correct throughout. The stale field only ever hurt EXTERNAL loaders that trust it.
+Fixed three ways: both save sites now write `m.cfg.head_scale`; `D0` is recorded so the value is reconstructable;
+and `cfg_from_ckpt` recomputes it when a checkpoint claims growths happened but still says exactly 1.0. Added an
+assert on the resume path that head_scale telescopes to sqrt(D0/D), so future drift fails loudly.
+**WHICH OF MY REPORTED NUMBERS THIS TOUCHES.** Anything measured through `cfg_from_ckpt` on a grown checkpoint --
+the 65M faculty sweep, the generation checks, the AUC 0.878 -- ran with head_scale 1.0 instead of the true value,
+so their logits were scaled ~1.17x too sharp. BPB figures quoted from the TRAINER's own log are unaffected. The
+direction of the error is small but real, and the affected probes are worth re-running rather than trusted.

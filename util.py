@@ -70,6 +70,12 @@ def cfg_from_ckpt(sd,T=2048,res_scale=16**-0.5):
     # gated/qknorm MUST be restored too: without them Core builds no Wg and load_state_dict fails on the
     # unexpected layers.N.Wg keys. Fall back to INFERRING from the weights so checkpoints written before these
     # flags were persisted still load.
+    # head_scale: with tied embeddings grow_width divides it by c=sqrt(nD/D) at every width growth, so the
+    # accumulated value telescopes to sqrt(D0/D). Some checkpoints recorded a hardcoded 1.0 while the live model
+    # had 0.7338 -- reading the stale field reported BPB 1.1550 for a model that actually scores 1.0698. If the
+    # checkpoint says a growth happened but head_scale is still exactly 1.0, the field is stale: recompute it.
+    if sd.get('k',0)>0 and abs(cfg.head_scale-1.0)<1e-12 and 'D0' in sd:
+        cfg.head_scale=(sd['D0']/sd['D'])**0.5
     cfg.gated=sd.get('gated', any(k.endswith('Wg.weight') for k in sd['model']))
     cfg.qknorm=sd.get('qknorm', cfg.gated)
     return cfg
