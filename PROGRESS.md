@@ -2619,3 +2619,26 @@ that's whatever I'll have to do."*
 Default changed to 0.25. I set 0.0 based on a model from the OLD trainer, where any self-writing collapsed into
 word loops; on the clean run the failure is the exact opposite. The optimum is model-dependent and the docstring
 now says to re-measure rather than assume.
+
+## FACULTY MEASUREMENT ON THE LIVE 65M (0.95B tokens) -- zero scaffolding, raw forward/generate only
+| faculty | measurement | verdict |
+|---------|-------------|---------|
+| language prediction | BPB 1.18 and falling | working |
+| coherent local speech | 4gram-rep 0.03 vs real text 0.02 | **at parity** |
+| working memory (carried state) | +0.0238 nats | working, small |
+| in-context retrieval, distance 0 | **+2.738 nats, 100% of trials** | **strong** |
+| ... distance 50 | +1.375 nats, 100% | strong |
+| ... distance 500 | +0.094 nats, 94% | weak but real |
+| ... distance 2000 | +0.001 nats, 50% | gone |
+| copying a novel random sequence | **0%** | absent |
+| induction ([A][B]...[A]->[B]) | **0%** | absent |
+| factual preference (true vs false) | 60% of 5 pairs (chance 50%) | not significant |
+**RETRIEVAL IMPROVED ENORMOUSLY vs the old trainer's models.** The 90M on the old trainer managed +0.713 nats at
+distance 0 and +0.081 by distance 20. This 65M gets **+2.738 at distance 0 and still +1.375 at distance 50**, with
+a usable horizon out to ~500 tokens. Same architecture, clean training loop.
+**THE DISSOCIATION WORTH NOTING:** it retrieves facts from natural-language context strongly, but scores 0% on
+copying and induction over RANDOM tokens. Those are symbolic-manipulation circuits that emerge later in training;
+their absence at 0.95B tokens is expected, not broken. Worth re-measuring at the endpoint -- if induction is still
+0% at 9B tokens, that IS a finding.
+The memory gain is small (+0.024) because this run deliberately trains WITHOUT carried state (it costs +0.126 BPB).
+That is what the planned end-of-run fine-tune is for; the faculty works even untrained-for.
