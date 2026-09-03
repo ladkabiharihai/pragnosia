@@ -2754,3 +2754,40 @@ assert on the resume path that head_scale telescopes to sqrt(D0/D), so future dr
 the 65M faculty sweep, the generation checks, the AUC 0.878 -- ran with head_scale 1.0 instead of the true value,
 so their logits were scaled ~1.17x too sharp. BPB figures quoted from the TRAINER's own log are unaffected. The
 direction of the error is small but real, and the affected probes are worth re-running rather than trusted.
+
+## FLAG 1 AT 1M, MEASURED ON THE LIVE 125M: cost holds, ACCURACY AND GENERATION BOTH FAIL AT ~2000 TOKENS
+### A) NEEDLE TO 1M CONTEXT
+| context | lift (nats) | positive in | read time |
+|---------|-------------|-------------|-----------|
+| 0 | **+2.379** | 100% | 0.1s |
+| 200 | **+0.371** | 100% | 0.1s |
+| 2000 | +0.031 | 67% | 0.1s |
+| 20000 | -0.013 | 33% | 0.5s |
+| 200000 | -0.013 | 42% | 4.9s |
+| 1000000 | +0.009 | 50% (chance) | **24.6s** |
+**Reading 1M tokens works** -- 24.6 seconds at constant memory, which no transformer of this size can do at all.
+**Retaining anything does not.** The needle is strong to 200 tokens, marginal at 2000, and at chance beyond.
+### B) GENERATION TO 1M -- IT BREAKS AT ~2000 TOKENS, EITHER WAY
+4-gram repetition per 1000-token window over 6000 generated tokens:
+| write_scale | 0k | 1k | 2k | 3k | 4k | 5k |
+|-------------|----|----|----|----|----|----|
+| 0.00 | 0.10 | 0.18 | 0.06 | 0.01 | 0.00 | 0.00 |
+| 0.10 | 0.03 | 0.39 | 0.59 | 0.83 | 0.81 | 0.74 |
+| **0.25 (current default)** | 0.02 | 0.71 | **0.99** | **1.00** | 0.99 | 0.99 |
+| 0.50 | 0.02 | 0.19 | 0.36 | 0.31 | 0.68 | 0.98 |
+| 1.00 | 0.28 | 0.95 | 0.95 | 0.97 | 0.68 | 0.88 |
+**MY write_scale=0.25 DEFAULT IS WRONG FOR LONG GENERATION.** I chose it from a 1200-token measurement; it is
+clean at 1200 and locks into *"of the game of the game of the game..."* by token 2000.
+**AND write_scale=0 IS NOT THE ANSWER EITHER**, though repetition alone says it is (0.00, letters 0.96,
+word-like 0.94 -- all healthy). The text at token 5000 is word salad: *"future on hill what like it auckling zero
+it all the way sign that a past for Intervand domestic I entire in dayning a conquesting..."* Real words, no
+loops, no grammar. **Repetition cannot distinguish a phrase loop from high-entropy drift, and I nearly reported
+0.00 as a success.**
+### ONE NUMBER GOVERNS BOTH
+Retrieval dies at ~2000 tokens. Generation breaks at ~2000 tokens. **The fixed state's effective horizon is
+~2000 tokens**, and that single limit caps flag 1's accuracy half AND long-form coherence:
+- self-writes ON -> the state fills with self-similar output, forms an attractor, loops
+- self-writes OFF -> the state is frozen at the prompt, so 5000 tokens in it has no memory of what it wrote, drifts
+**This makes the superposition problem the binding constraint on the vision's headline claim, not a side issue.**
+The delta-rule negative was measured at 11M with a block-granularity approximation on models whose induction was
+0% -- far too weak a test to close a question that now gates flag 1. It deserves a real attempt at scale.
