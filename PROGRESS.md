@@ -2511,3 +2511,32 @@ This is the single most important thing found: **every architecture and scaling 
 run is suspect**, while the bench/probe results (which used the plain loop) are not. The ablation is cheap --
 RECALL_FRAC is already an environment variable, so the recall hypothesis can be tested by rerunning the infant
 with it at 0.
+
+## THE TRAINER IS THE PROBLEM. DECISION: STOP USING IT FOR THE MAIN RUN.
+The 159M's generation is NOT good -- locally grammatical fragments with no meaning, plus degenerate newline runs.
+Metrics look fine (distinct-1 0.66 vs real text 0.62, 4gram-rep 0.05 vs 0.02), which is precisely why they cannot
+be trusted alone here. **Answer to "should we train 203M further": no.**
+### ABLATION OF THE 0.50 BPB TRAINER HANDICAP (same shape, data and eval throughout)
+| feature isolated | BPB | cost vs plain loop |
+|------------------|-----|--------------------|
+| plain loop (baseline) | 1.2179 | - |
+| + 15% recall batches | 1.2321 | +0.014 |
+| + carried state, 32k docs | 1.3437 | **+0.126** |
+| + both | 1.4135 | +0.196 |
+| LR 6e-4 instead of 1e-3 | 1.2226 | +0.004 |
+| res_scale 0.250 instead of 0.354 | 1.2086 | -0.015 (better) |
+| **the actual trainer** | **1.7175** | **+0.500** |
+**I FOUND +0.196 OF +0.500 AND I HAVE NOT FOUND THE REST.** Ruled out: learning rate, res_scale (also confirmed
+res_scale at EVAL time is irrelevant -- 1.7175 / 1.7166 / 1.7296 across three values, so the missing-res_scale
+hazard in the early checkpoints did not corrupt these measurements). ~0.30 BPB remains somewhere in the trainer.
+### THE DECISION
+Continuing to hunt that 0.30 is not the best use of the remaining time, because **the plain loop does not have it**.
+1. **Do not train 203M further.** It carries the handicap and its generation is not usable.
+2. **Retire the custom trainer loop for the main run.** Train with the plain loop, which is measured-good.
+3. **Move carried-state training to a short fine-tune at the END**, not throughout: it costs +0.126 BPB for the
+   whole run to buy a measured +0.055 memory gain. Paying that only at the end keeps both the base quality and the
+   memory faculty.
+4. **One clean run** at the largest size the remaining time affords.
+The architecture is not in question -- in clean plain-loop comparisons it beats a transformer by 2.29 nats at
+matched size/tokens/data, and by 1.100 at 8192 context. Every bad number in this project traces to the trainer,
+not the model.
