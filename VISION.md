@@ -119,6 +119,44 @@ where temporal credit is exact), with real layer-depth as well.
   context, efficiency. Research priority follows asymmetric bets: prefer experiments that can resolve a major
   uncertainty cheaply (the de-risk sequence in PROGRESS.md is the model for this).
 
+### 0g. SELF-CORRECTION: the model must notice its own errors and fix them, permanently
+Pragnosia should not only learn continually, it should CORRECT ITSELF -- notice that something it believes or
+produced is wrong, and change so that it is no longer wrong. This is what separates a system that accumulates
+experience from one that merely accumulates data, and it is a first-class goal, not a nice-to-have.
+
+**WHAT IS ALREADY MEASURED (65M, live run, no scaffolding):**
+- The model KNOWS WHEN IT IS ABOUT TO BE WRONG. Predictive entropy 1.061 when its argmax is right versus 3.328
+  when wrong; its own confidence predicts its own correctness with **AUC 0.878** at 45.4% next-token accuracy.
+  That error signal is INTRINSIC -- it comes from the model's own output distribution, with no external judge and
+  no hand-written rule, which is what 0a demands.
+
+**WHAT SELF-CORRECTION REQUIRES, AND WHERE WE STAND:**
+| requirement | status |
+|-------------|--------|
+| 1. detect that something is wrong | **HAVE IT** -- AUC 0.878 |
+| 2. know what the RIGHT answer was | **MISSING from the model alone** |
+| 3. make the change DURABLE (weights, not just state) | have it -- local plasticity + consolidation |
+| 4. do not amplify your own errors | requires (2) |
+
+**THE HONEST CONSTRAINT, stated so it is not rediscovered later.** Uncertainty says "I do not know"; it never says
+what to say instead. No amount of self-inspection supplies (2), and a model trained on its own unverified output
+amplifies its own errors -- model collapse. So SELF-CORRECTION DURING GENERATION, with no ground truth available,
+is NOT the mechanism and must not be built as one. What generation-time self-writing buys is loop escape, not
+learning: at write_scale 0 the model cannot see its own output and degenerates into single-token runs; at 0.25 it
+can, and repetition returns to real-text parity (0.03 vs 0.02). That is memory, not judgement.
+
+**THEREFORE self-correction IS propose -> VERIFY -> consolidate (§3), and the verify step is load-bearing.** The
+corpus check supplies the answer the model cannot generate for itself and gates the durable write -- the
+three-factor / neuromodulated pattern of 0f. Under 0a this is BODY, not scaffolding: the intelligence decides what
+is surprising, what to propose, and what to keep; the environment supplies evidence, the way a person uses books.
+
+**AND IT IS STRUCTURAL FOR US, NOT OPTIONAL.** Measured against GPT-2 on the same test: our 202M matches it on
+in-context induction over random tokens (28% vs 22%), but on EXACT recall of a repeated real passage GPT-2 scores
+98% and we score 53%. That is the price of a fixed-size state -- writes superimpose, so verbatim retrieval decays.
+A transformer can lean on its KV cache to remember precisely; **we cannot, so precise memory has to live in the
+WEIGHTS.** Consolidation is how this architecture remembers exactly, which is the same conclusion §2 reaches from
+first principles: "Finite-state over infinite-context FORCES consolidation."
+
 ## 1. The goal (the whole point)
 - **Grows itself, from infant, like a child.** Self-growth is central. A fixed model would defy the goal.
 - **Faculties intrinsic to the model**, not scaffolding. Provable at small scale.
@@ -126,6 +164,7 @@ where temporal credit is exact), with real layer-depth as well.
   per resource. Small size and a fixed-size state are FEATURES here, not handicaps.
 - **Continual learning**: learns new facts, skills, and emergent behavior, during BOTH training AND inference, forever.
 - **Context from 100 tokens to unbounded / streaming**, served at constant memory.
+- **Self-correcting**: notices its own errors and fixes them permanently, not just within a context (0g).
 - **Capable, and worthy of the name.**
 
 ## 1b. North-star claims and success metrics (what "best in the world" means, falsifiable)
