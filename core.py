@@ -311,9 +311,21 @@ class Core(nn.Module):
             ns.append((M,z)); npv.append(H[:,0])
         h,_=rmsnorm(a); return s.head(h)[:,0]*getattr(s.cfg,'head_scale',1.0), ns, npv
     @torch.no_grad()
-    def generate(s,ids,n=40,temp=1.0,states=None,top_p=1.0,greedy=False,write_scale=0.0):
+    def generate(s,ids,n=40,temp=1.0,states=None,top_p=1.0,greedy=False,write_scale=0.25):
         """write_scale DEFAULTS TO 0: generated tokens are NOT written back into the recurrent state.
-        Measured over 12 generations of 1200 tokens each (54M, step 5500), against real text at 4gram-rep 0.14:
+        DEFAULT CHANGED 0.0 -> 0.25. The 0.0 default was measured on a model from the OLD trainer, where ANY
+        self-writing collapsed into word loops. On the clean run it is the opposite: 0.0 means the model cannot
+        SEE its own output -- each step has only the current token plus a frozen prompt state -- so once it emits a
+        newline, "current token = newline" predicts another, and it loops by construction. Measured at 65M on the
+        clean run, 6 documents:
+            write_scale 0.00 -> 4gram-rep 0.24, longest newline run 28.3   (real text: 0.02)
+            write_scale 0.25 -> 4gram-rep 0.03, longest newline run  0.0   <- essentially real-text parity
+            write_scale 0.50 -> 4gram-rep 0.15, longest newline run  8.7
+            write_scale 1.00 -> 4gram-rep 0.14, longest newline run  5.7
+        The optimum is model-dependent, so re-measure it rather than assuming; this default is the measured best
+        on the current architecture.
+
+        Earlier measurement, 12 generations of 1200 tokens each (54M, OLD trainer), real text at 4gram-rep 0.14:
             write_scale 1.00 -> rep 0.44 +-0.27, tail 0.59   ('century century century century ...')
             write_scale 0.50 -> rep 0.42 +-0.22, tail 0.61
             write_scale 0.25 -> rep 0.33 +-0.24, tail 0.51

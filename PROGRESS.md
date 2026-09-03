@@ -2595,3 +2595,27 @@ when it needed more capacity, from its own predictive entropy, with no schedule.
 1.4464 -> 1.3477 -> 1.2886 -> 1.2618 -> 1.2389 -> 1.2205 -> 1.2064 -> 1.2000 -> 1.1895 -> 1.1805 -> **1.1768**
 Still +0.2433 from GPT-2's 0.9335, but only **5.8 of 73 tok/param** spent and the model has just tripled its
 remaining capacity. The scaling fit predicts **0.9102 at the endpoint -- 0.0233 AHEAD of GPT-2.**
+
+## GENERATION AT 65M IS COHERENT -- and my write_scale=0 default was causing the degeneration
+The user asked to check generation without stopping the run. Snapshotted the live checkpoint (65M, 0.85B tokens)
+and it looked BAD: 4gram-rep 0.24 against real text's 0.02, driven by runs of 28+ newlines.
+**THE CAUSE WAS MY OWN DEFAULT.** `generate()` defaulted to `write_scale=0`, which means the model cannot see its
+own output -- each step has only the current token plus a frozen prompt state. Once it emits a newline, "current
+token = newline" predicts another, and it loops **by construction**. There is exactly ONE pure-newline token in
+the vocabulary, so this is single-token degeneration with no escape.
+| write_scale | distinct-1 | 4gram-rep | letters | longest newline run |
+|-------------|-----------|-----------|---------|---------------------|
+| REAL TEXT | 0.62 | **0.02** | 0.93 | - |
+| 0.00 (old default) | 0.48 | 0.24 | 0.91 | **28.3** |
+| **0.25** | **0.58** | **0.03** | **0.94** | **0.0** |
+| 0.50 | 0.48 | 0.15 | 0.93 | 8.7 |
+| 1.00 | 0.47 | 0.14 | 0.94 | 5.7 |
+**At 0.25 the model is at real-text parity on repetition and letters, with no newline runs at all**, and the text
+is readable English that follows its context:
+*"ated price point.\n\nI've been to this point and haven't been given a lot of time now. And, as I said before, the
+fact that the game is going to be an interesting segment of the world, the mega isn't going to move fast, and
+that's whatever I'll have to do."*
+**This is the first coherent generation in the project** -- at 65M, 0.85B tokens, 35 minutes in.
+Default changed to 0.25. I set 0.0 based on a model from the OLD trainer, where any self-writing collapsed into
+word loops; on the clean run the failure is the exact opposite. The optimum is model-dependent and the docstring
+now says to re-measure rather than assume.
