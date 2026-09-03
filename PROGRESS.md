@@ -2688,3 +2688,25 @@ and exact retrieval degrades. **We buy constant-cost unbounded context and we pa
 This matters for the roadmap: because exact recall from the STATE is weak, moving salient facts into the WEIGHTS
 (propose -> verify -> consolidate) is not an optional extra faculty for us. It is how this architecture is supposed
 to remember precisely, and the vision already says so: "Finite-state over infinite-context FORCES consolidation."
+
+## FULL VISION AUDIT (everything below is measured on the CURRENT architecture unless marked otherwise)
+| vision claim | status | evidence |
+|--------------|--------|----------|
+| **0b2 efficiency, constant cost, unbounded context** | **PROVEN** | flat to 1M tokens: 303 ktok/s, 2.40 GiB training; 5.83 ms/tok, 1.12 GiB generating |
+| **0b2 beats a transformer** | **PROVEN** | -2.29 nats at matched 20 Chinchilla; -1.100 at 8192 context; 0.91x its throughput |
+| **1 grows from infant, intrinsically** | **PROVEN** | 5 function-preserving events (5.4e-04), sensor fires on the model's own entropy at an earned 22 tok/param |
+| **0a zero decision-scaffolding** | **STRONG** | growth timing, forget rate, retrieval and the error signal are all learned or sensed; hand-set DECAY is gone |
+| **0g self-correction: detect** | **MEASURED** | AUC 0.878, entropy 1.061 right vs 3.328 wrong |
+| coherent generation | **NEW, WORKING** | 4gram-rep 0.03 vs real text 0.02 at 65M |
+| induction (random tokens) | **WORKING at scale** | 28% at 202M vs GPT-2's 22% |
+| **1b flag 1: needle accuracy HELD** | **HALF** | cost proven to 1M; retrieval +2.738 at distance 0 but ~0 by 2000. Horizon ~500 tokens |
+| **exact/verbatim recall** | **WEAK** | 53% vs GPT-2's 98% on a repeated passage -- the fixed-state tradeoff |
+| **1b flag 2: continual learning at inference** | **UNVERIFIED HERE** | +4.24 nats/fact and poisoning-rejection were proven on the OLD (ungated, pre-fix) architecture |
+| 0b persistent identity / self-model | **UNVERIFIED HERE** | live.py + body.pt exist, last touched Aug 30, old architecture |
+| 3 propose -> verify -> consolidate | **NOT WIRED** | all three pieces exist and were individually proven; never connected on this model |
+| 0d growth schedule (geometric/Fibonacci) | **UNTESTED** | parked as a first-class experiment; we use fixed increments |
+| 0f memory pollution test | **NOT DONE** | named in the vision as a test to add |
+| 0f intrinsic curriculum (flow) | **UNTESTED** | |
+| 0f value/goal system | **UNDESIGNED** | the vision says so itself |
+**Honest shape of it: the EFFICIENCY and GROWTH half of the vision is proven on the current architecture; the
+CONTINUAL-LEARNING half is proven only on the old one and has to be re-earned.**
