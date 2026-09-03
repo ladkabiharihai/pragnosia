@@ -2668,3 +2668,23 @@ the write (0f). That is not scaffolding under 0a -- it is the BODY/environment, 
 So: self-correction during generation is NOT self-improvement, and would not become it on its own. But the
 measured uncertainty signal is exactly the gate the propose step needs, and it is now confirmed to work on this
 architecture at 65M.
+
+## INDUCTION: THE ARCHITECTURE DOES FORM IT -- 0% at 1B tokens was genuinely "too early"
+Tested across every checkpoint, with **GPT-2 as a control to validate the test itself**:
+| model | induction (random tokens) | induction (repeated real text) |
+|-------|--------------------------|-------------------------------|
+| ours LIVE 65M, 1.0B tokens | **0%** | 45% |
+| ours 159M run6 | **0%** | 45% |
+| **ours 202M run3, 52 tok/param** | **28%** | 53% |
+| **GPT-2 124M (CONTROL)** | **22%** | **98%** |
+GPT-2 scores 22% and 98%, so the test works. And **our 202M at 52 tok/param beats GPT-2 on the random-token
+induction test (28% vs 22%)** -- the architecture forms induction heads, it just needs the tokens. My "if it is
+still 0% at 9B that IS a finding" was answerable immediately from checkpoints already on disk.
+### BUT THE REAL GAP IS EXACT COPYING: 53% vs GPT-2's 98%
+On a REPEATED REAL PASSAGE -- show it once, replay it, predict the continuation -- GPT-2 is essentially perfect
+and we manage half. That is not a training-budget gap; it is the architecture's central tradeoff. GPT-2 keeps every
+token exactly in its KV cache. We compress everything into a fixed-size associative store, where writes superimpose
+and exact retrieval degrades. **We buy constant-cost unbounded context and we pay for it in verbatim recall.**
+This matters for the roadmap: because exact recall from the STATE is weak, moving salient facts into the WEIGHTS
+(propose -> verify -> consolidate) is not an optional extra faculty for us. It is how this architecture is supposed
+to remember precisely, and the vision already says so: "Finite-state over infinite-context FORCES consolidation."
