@@ -2791,3 +2791,20 @@ Retrieval dies at ~2000 tokens. Generation breaks at ~2000 tokens. **The fixed s
 **This makes the superposition problem the binding constraint on the vision's headline claim, not a side issue.**
 The delta-rule negative was measured at 11M with a block-granularity approximation on models whose induction was
 0% -- far too weak a test to close a question that now gates flag 1. It deserves a real attempt at scale.
+
+## THE ~2000-TOKEN HORIZON IS ARCHITECTURAL, NOT A TRAINING ARTIFACT
+I suspected I had cut carried-state training on a bad basis -- I measured its COST (+0.126 BPB) and never what it
+BUYS, and the obvious candidate was exactly the retention horizon. Tested it properly: same model, same tokens,
+same data, one arm on 2048-token windows and one on 16384-token documents with state threaded.
+| arm | BPB | gate half-life | d=0 | d=200 | d=2000 | d=8000 |
+|-----|-----|----------------|-----|-------|--------|--------|
+| A) windows, no carried state | **1.2318** | 1856 tok | **+2.498** | **+0.270** | -0.003 | +0.005 |
+| B) carried state, 16k documents | 1.3311 | 1928 tok | +1.854 | +0.131 | -0.002 | +0.001 |
+**CARRIED-STATE TRAINING IS WORSE ON BOTH AXES.** It costs 0.099 BPB (matching the earlier +0.126) and the needle
+is weaker at EVERY distance, not stronger. The gate half-life barely moves (1928 vs 1856).
+**So cutting it from the base run was right after all** -- I went looking for my own mistake, and the measurement
+says the original decision holds. Worth having checked rather than assumed either way.
+**THE MORE IMPORTANT RESULT: the horizon is not the training context.** Training on documents 8x longer, with the
+state carried across 16 chunks, produced the SAME dead-by-2000 needle and the same forget rate. The ~2000-token
+limit is a property of the mechanism -- superposition in a fixed-size associative store -- and no curriculum
+change reaches it. That closes off the cheap fix and puts state capacity back as the single thing gating flag 1.
