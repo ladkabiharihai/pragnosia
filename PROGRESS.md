@@ -2642,3 +2642,29 @@ their absence at 0.95B tokens is expected, not broken. Worth re-measuring at the
 0% at 9B tokens, that IS a finding.
 The memory gain is small (+0.024) because this run deliberately trains WITHOUT carried state (it costs +0.126 BPB).
 That is what the planned end-of-run fine-tune is for; the faculty works even untrained-for.
+
+## DOES THE MODEL KNOW WHEN IT IS ABOUT TO BE WRONG? Yes -- AUC 0.878
+Self-correction needs an ERROR SIGNAL. Seeing your own output is not one; it is context, not judgement. So the
+real question is whether the model's OWN uncertainty predicts its OWN mistakes. Measured on held-out text at the
+live 65M:
+| | entropy | confidence |
+|---|---------|------------|
+| when the model is RIGHT | 1.061 | 0.773 |
+| when the model is WRONG | 3.328 | 0.341 |
+| **separation** | **+2.268 nats** | **-0.432** |
+**AUC of its own confidence predicting its own correctness: 0.878** (0.5 useless, 1.0 perfect), at 45.4%
+next-token accuracy. That is a strong, INTRINSIC error signal -- it comes from the model's own output
+distribution, with no external judge and no scaffolding.
+### WHAT THIS DOES AND DOES NOT BUY
+A self-improving continual learner needs four things. We now have three:
+1. **detect that something is wrong** -- AUC 0.878. **HAVE IT.**
+2. **know what the RIGHT answer was** -- **MISSING.** Uncertainty says "I do not know"; it never says what to say
+   instead. No amount of self-inspection supplies this.
+3. **make a durable change** -- local plasticity + consolidation, proven in isolation. Have it.
+4. **not amplify your own errors** -- training on self-generated text without an external check is model collapse.
+Item 2 is the whole reason VISION 3 is propose -> **VERIFY** -> consolidate rather than propose -> consolidate.
+The corpus check supplies the answer the model cannot generate for itself, and it is the neuromodulator that gates
+the write (0f). That is not scaffolding under 0a -- it is the BODY/environment, the way a human uses books.
+So: self-correction during generation is NOT self-improvement, and would not become it on its own. But the
+measured uncertainty signal is exactly the gate the propose step needs, and it is now confirmed to work on this
+architecture at 65M.
