@@ -2540,3 +2540,21 @@ Continuing to hunt that 0.30 is not the best use of the remaining time, because 
 The architecture is not in question -- in clean plain-loop comparisons it beats a transformer by 2.29 nats at
 matched size/tokens/data, and by 1.100 at 8192 context. Every bad number in this project traces to the trainer,
 not the model.
+
+## PRAGNOSIA-124: matched to GPT-2 in BOTH parameters and tokens
+`train124.py` -- a clean run on the loop that is measured good, replacing train_pragnosia.py for this purpose.
+| | GPT-2 small | ours |
+|---|-------------|------|
+| params | 124M | **124.8M** (D832x14L DIN24) |
+| tokens | ~9B | **9.11B** (73 tok/param) |
+| BPB on our eval | **0.9335** | to be measured |
+What it deliberately does NOT do, each with the measured reason:
+- **no carried state during training** -- costs +0.126 BPB; moved to a short fine-tune at the end so the memory
+  faculty is still trained, but the price is paid once rather than across all 9B tokens
+- **no recall batches** -- +0.014 BPB, and a narrow synthetic task
+- **single cosine at LR 1e-3**, no per-stage restarts
+- **no growth** -- it works (5 clean function-preserving events measured) but it is a separate claim, and mixing it
+  in would confound the one number this run exists to produce
+Running at 183 ktok/s sharing the H100 with prod, so **ETA ~13.7 hours**, not the 9.5 estimated on solo
+throughput. BPB is logged every 4000 steps against GPT-2's 0.9335 so the trajectory is visible long before the end
+-- if it is not tracking toward parity by a few B tokens, the run can be killed rather than run to completion.
