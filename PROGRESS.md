@@ -2842,3 +2842,32 @@ important open question the review surfaced**, because induction is the mechanis
 plainly better: *"In the six-yard box, with his back to quarterback facing the goal line, Apple decides to use his
 hands and force the defender close to the sideline."* Ours is fluent and on-topic but less coherent. Metric parity
 is not quality parity, and the samples say so.
+
+## THE INDUCTION REGRESSION: real, robust, and NOT explained by gating
+The finished 125M scores 0% induction where the old 202M scores 28%. Chased it.
+### THE 202M's INDUCTION IS REAL -- verified across 4 seeds x 150 trials
+| sequence length | seed 2 | seed 11 | seed 42 | seed 101 | mean |
+|-----------------|--------|---------|---------|----------|------|
+| 64 | 37% | 27% | 36% | 30% | **32.7%** |
+| 128 | 25% | 17% | 14% | 19% | **18.7%** |
+| 256 | 11% | 5% | 7% | 10% | 8.2% |
+| 512 | 1% | 1% | 1% | 2% | 1.3% |
+Chance is 0.003%, so this is unambiguously a real circuit, decaying with distance as induction does.
+### CHECKPOINTS POINTED AT GATING -- AND THE CONTROLLED TEST REFUTED IT
+Every gated checkpoint scores 0% (90M/2.1B, 142M/2.4B, 125M/9.1B) and only the ungated one has the circuit, which
+looked decisive. Data was ruled out (run5 is window2 + gated and still 0%) and tokens too (run6 has 9.1B against
+run3's 10.6B). So I tested gating directly at matched size, data, tokens and seed:
+| arm | BPB | induction L128 | L256 |
+|-----|-----|----------------|------|
+| GATED | **1.1520** | **0%** | 0% |
+| UNGATED | 1.4102 | **0%** | 0% |
+**BOTH ZERO. My hypothesis is refuted** -- and gating is confirmed worth 0.26 BPB, which is why it is in the model.
+**BUT THIS TEST IS UNDERPOWERED AND I WILL NOT CLAIM IT CLEARS GATING.** Neither arm formed the circuit at 35M and
+1.05B tokens, and you cannot detect that something suppresses a phenomenon in a regime where the phenomenon does
+not occur. This is the same flaw as the delta-rule bake-off: **a null where the effect cannot appear is not
+evidence.** Recording it as such rather than as an exoneration.
+### WHAT IS ACTUALLY KNOWN
+run3 (202M, 10.6B, ungated, window2, old trainer) has induction; run6 (125M, 9.1B, gated, mix, clean loop) does
+not. Five things differ and the cheap tests cannot separate them. Settling it needs the gated/ungated pair at a
+scale where induction forms -- around 200M and 10B tokens, roughly 12 hours per arm.
+**Worth knowing before that spend: induction is the mechanism behind in-context learning, so flag 2 rests on it.**
