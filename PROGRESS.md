@@ -2808,3 +2808,37 @@ says the original decision holds. Worth having checked rather than assumed eithe
 state carried across 16 chunks, produced the SAME dead-by-2000 needle and the same forget rate. The ~2000-token
 limit is a property of the mechanism -- superposition in a fixed-size associative store -- and no curriculum
 change reaches it. That closes off the cheap fix and puts state capacity back as the single thing gating flag 1.
+
+## PRAGNOSIA-124 FINAL REVIEW -- the finished model, 124.8M / 9.11B tokens / 73 tok/param / 2 earned growths
+### WHERE IT MATCHES OR BEATS GPT-2 124M
+| | ours | GPT-2 124M |
+|---|------|------------|
+| **bits per byte** | **0.9460** | 0.9335 (+0.0125, **1.3% behind**) |
+| perplexity | 11.7 | - |
+| next-token accuracy | 52.5% | - |
+| generation, 160 tok: distinct-1 / rep / letters | **0.64 / 0.01 / 0.95** | 0.67 / 0.01 / 0.94 |
+| real-text reference | 0.62 / 0.02 / 0.92 | |
+| **read 1M tokens** | **8.1s, 3.68 GiB** | **impossible -- capped at 1024** |
+Memory is FLAT from 2048 to 1M tokens: 3.46 -> 3.68 GiB. Self-knowledge AUC **0.891**. Working memory +0.0204 nats.
+Retrieval +2.719 at distance 0, +1.466 at 50, +0.430 at 200.
+### WHERE IT IS BEHIND, MEASURED NOT GUESSED
+**INDUCTION IS 0% AT EVERY LENGTH** and GPT-2 gets 22% / 18% / 4% at 128 / 256 / 512 on the identical test:
+| sequence length | ours | GPT-2 |
+|-----------------|------|-------|
+| 128 | **0%** | 22% |
+| 256 | **0%** | 18% |
+| 512 | **0%** | 4% |
+**AND THIS IS A REGRESSION.** The OLD 202M -- window2-only, ungated, old trainer -- scored **28%** on this test,
+better than GPT-2. The finished 125M scores 0%. Something between those two runs removed the circuit: candidates
+are the 70/30 data mix, gating, or size, and I cannot separate them without more runs. **This is the most
+important open question the review surfaced**, because induction is the mechanism behind in-context learning.
+**RETRIEVAL HORIZON ~200-1000 TOKENS.** Strong to 200, at chance by 1000-4000, negative beyond.
+**LONG GENERATION DEGRADES BY ~3000-4000 TOKENS**, better than the ~2000 measured mid-training but far from 1M:
+| write_scale | 0-1000 | 2000-3000 | 4000-5000 |
+|-------------|--------|-----------|-----------|
+| 0.00 | rep 0.04, word-like 0.90 | 0.06 / 0.86 | 0.09 / **0.74** (number salad) |
+| 0.25 | rep 0.04, word-like 0.89 | **0.03 / 0.91** | **0.49** / 0.81 |
+**AND READING BEATS METRICS.** On identical prompts the metrics say parity, but GPT-2's football continuation is
+plainly better: *"In the six-yard box, with his back to quarterback facing the goal line, Apple decides to use his
+hands and force the defender close to the sideline."* Ours is fluent and on-topic but less coherent. Metric parity
+is not quality parity, and the samples say so.
