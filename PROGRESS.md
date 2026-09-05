@@ -2894,3 +2894,23 @@ and peaks at 0.52 GiB before halving it. Casting on the CPU and then moving peak
 transient is what OOMs you, not the steady state.
 `serve4g.py` is the serving path. **This is the vision's efficiency claim made concrete**: a model that reads a
 million tokens of context on hardware that cannot hold a 124M transformer's KV cache past a few thousand.
+
+## FLAG 2 RE-EARNED ON THE FINISHED 124M -- verified continual learning at inference
+Proven previously only on the OLD architecture, before gating, the boundary-key fix and the step() correction.
+Re-run on the model we actually have:
+| test | result | control |
+|------|--------|---------|
+| **acquisition** | **+4.221 nats** on the target fact | an UNRELATED fact moved **+0.004** -- clean, so this is learning and not drift |
+| **retention** | **94%** of the gain survives learning 3 more facts | all four facts held: -2.54, -0.72, -1.11, -0.20 |
+| **catastrophic forgetting** | BPB **0.9549 -> 0.9604 (+0.0055)** | held; 7 seconds for four facts |
+| **poisoning** | "capital of France is Tokyo" **REJECTED**, "water is made of iron and gold" **HELD** | neither reached the weights |
+**+4.221 nats matches the old architecture's +4.24 almost exactly**, so the faculty survived every change since.
+The control is what makes the acquisition number mean something: without it, a rise on the target fact could just
+be drift from any weight update.
+### ONE HONEST LIMIT THE TEST EXPOSED
+The verifier also **REJECTED our own planted fact** ("the vault at Threadneedle is guarded by Okonkwo"), correctly
+-- it is invented and not in the corpus. But that generalises: **the corpus check can only confirm what the corpus
+already contains.** It protects against poisoning exactly as designed, and by the same mechanism it cannot admit
+genuinely NEW information -- today's news, a user's private fact, anything post-dating the corpus.
+That is a real boundary on flag 2 as currently built, not a bug. Admitting new-but-true information needs a
+different evidence source than a static corpus, and the vision does not yet say what that is.
