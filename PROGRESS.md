@@ -2957,3 +2957,27 @@ repeats it. Soft retrieval averages over many keys, which is bad for finding a n
 - **soft** -> weak needle retrieval, generation stays varied
 **DECISION: do not sharpen. T=1.0 is correct given the priority.** The needle result alone would have shipped a
 change that makes the thing being optimised for measurably worse -- rep 0.42 -> 0.97 at 3-4k tokens.
+
+## LONG-GENERATION COHERENCE: SOLVED TO 20,000 TOKENS
+The stated priority is generation quality and coherence, so that is what the fix was judged on.
+**THE PROBLEM.** Generated tokens accumulate in a fixed-size state. The model's own output is far more
+self-similar than real text, so it eventually dominates the read, becomes an attractor, and the text loops.
+Constant write_scale only trades the two failure modes: 0.25 loops by ~3k, 0.0 drifts into word salad.
+**THE FIX.** Every N tokens, blend the state back toward the PROMPT's state. Recent output still informs
+generation; the model's own voice never accumulates enough to take over. Swept period 250/500/1000 and blend
+0.25/0.5/0.75 -- **1000 and 0.5 won**, better than the 500/0.5 I picked by hand first.
+| generated tokens | 0-4k | 4-8k | 8-12k | 12-16k | 16-20k |
+|------------------|------|------|-------|--------|--------|
+| **refresh OFF** | 0.19 | 0.82 | **0.97** | - | - |
+| **refresh ON** | **0.04** | **0.07** | **0.05** | **0.11** | **0.10** |
+| real text | 0.05 | | | | |
+**Flat across 20,000 tokens at real-text repetition**, word-likeness 0.88-0.94 against real text's 0.97. And it
+stays ON TOPIC: 19,000 tokens after a prompt about 720p vs 1080p it is still writing
+*"they have an awesome price point for 720p which is pretty high a price the way it is to purchase a 3-kilobit,
+full-fledged 720p"*. Verified through the shipped `generate()` path with defaults, not a special harness.
+Shipped as `refresh_every=1000, refresh_blend=0.5`; set `refresh_every=0` to disable.
+### THE TENSION THIS SITS INSIDE, STATED PLAINLY
+Sharpening retrieval (temperature on the qk-norm) TRIPLES needle lift and DESTROYS generation -- rep 0.42 -> 0.97
+at 3-4k. The same peaked read that finds a needle is an attractor when generating. **Sharp retrieval and coherent
+generation pull in opposite directions**, and that is a dial the deployment sets, not a bug to fix. Given the
+priority, it sits at soft (T=1.0), and refresh recovers the long-range coherence without touching it.
