@@ -78,4 +78,9 @@ def cfg_from_ckpt(sd,T=2048,res_scale=16**-0.5):
         cfg.head_scale=(sd['D0']/sd['D'])**0.5
     cfg.gated=sd.get('gated', any(k.endswith('Wg.weight') for k in sd['model']))
     cfg.qknorm=sd.get('qknorm', cfg.gated)
+    # READ SHARPNESS, same rule: infer from the weights rather than trust a flag that may not have been written.
+    # Getting this wrong is silent in the worst way -- the model loads, and every retrieval is at the wrong
+    # sharpness. That is exactly how the stale head_scale above went unnoticed.
+    cfg.qk_token_scale=sd.get('qk_token_scale', any(k.endswith('Wqs.weight') for k in w))
+    cfg.qk_learn_scale=sd.get('qk_learn_scale', any(k.endswith('qk_ls') for k in w))
     return cfg

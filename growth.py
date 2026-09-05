@@ -72,6 +72,13 @@ def grow_width(m,add):
                 ng.weight[:,:D]=L.Wg.weight/c; ng.weight[:,D:]=0.0    # new dims contribute nothing yet
                 ng.bias.copy_(L.Wg.bias)                              # keep the learned forget rate exactly
                 L.Wg=ng
+            if getattr(L,'qk_tok',False):
+                # READ SHARPNESS reads the residual stream too, so it is a READER and takes /c with new dims at
+                # zero -- the same shape of bug that crashed run 4 when Wg was missed here.
+                nq=nn.Linear(nD,1).to(DEV)
+                nq.weight[:,:D]=L.Wqs.weight/c; nq.weight[:,D:]=0.0
+                nq.bias.copy_(L.Wqs.bias)                             # keep the learned sharpness exactly
+                L.Wqs=nq
             hid=L.m1.weight.shape[0]; mult=getattr(cfg,'mlp_mult',4); nhid=mult*nD; addh=nhid-hid
             n1=nn.Linear(nD,nhid).to(DEV)
             n1.weight[:hid,:D]=L.m1.weight/c; n1.weight[:hid,D:]=_new_lin(add,hid,DEV)
