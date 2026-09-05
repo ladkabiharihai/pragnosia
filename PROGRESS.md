@@ -2914,3 +2914,27 @@ already contains.** It protects against poisoning exactly as designed, and by th
 genuinely NEW information -- today's news, a user's private fact, anything post-dating the corpus.
 That is a real boundary on flag 2 as currently built, not a bug. Admitting new-but-true information needs a
 different evidence source than a static corpus, and the vision does not yet say what that is.
+
+## SHARPENING THE RETRIEVAL: the first thing that has actually moved the horizon
+**THE MECHANISM, finally written down properly.** Retrieval is r = SUM_s A_ts v_s / SUM_s A_ts -- a weighted
+AVERAGE normalised by the sum of weights. With one strong match and N weak ones the result is
+(strong*v_target + SUM_N weak*v_other) / (strong + SUM_N weak), and once N is large the sum of weak terms swamps
+the match however good it is. **That is the ~1000-token horizon, and it explains why a BIGGER STATE made things
+worse: more capacity does not make the sum of noise smaller.**
+qk-norm forces |xq|=|xk|=1, so A = 1 + (xq.xk) + (xq.xk)^2. Scaling the normed projections by a temperature T
+first gives A = 1 + T^2(xq.xk) + T^4(xq.xk)^2; as T grows the quartic term dominates and squaring a cosine
+similarity SHARPENS it, while the denominator cancels the overall scale. One parameter, tested at inference:
+| temperature | BPB | d=0 | d=200 | d=1000 |
+|-------------|-----|-----|-------|--------|
+| **1.00 (as trained)** | **0.9549** | +2.668 | **+0.410** | +0.006 |
+| 1.25 | 0.9642 (+0.009) | +3.314 | **+1.203 (3x)** | +0.045 |
+| 1.50 | 1.0080 (+0.053) | +3.609 | **+2.266 (5.5x)** | +0.152 |
+| **2.00** | 1.1828 (+0.228) | **+3.873** | **+3.258 (8x)** | **+0.241** |
+| 3.00 | 1.4840 | +1.583 | +1.476 | +0.085 |
+**At T=1.25 the BPB cost is +0.009 and retrieval at 200 tokens TRIPLES.** At T=2.0 it is 8x better, at a BPB cost
+the model would not have to pay if it were TRAINED at that temperature -- it was trained at T=1, so every number
+above is off-distribution. The peak at T=2 and decline at T=3 is the expected shape: sharpen too far and the
+match itself is suppressed.
+**THIS IS THE ARCHITECTURAL FIX WORTH TESTING PROPERLY: train with a sharper feature map.** Everything tried
+before -- delta rule, bigger state, carried-state training, longer training contexts, gate ablation -- left the
+horizon untouched. This moved it 8x at inference alone.
