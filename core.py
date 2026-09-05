@@ -113,6 +113,22 @@ class Layer(nn.Module):
         if s.gated:
             s.Wg=nn.Linear(cfg.D,1)
             nn.init.zeros_(s.Wg.weight); nn.init.constant_(s.Wg.bias,8.0)   # g=0.9997/token: start by forgetting almost nothing
+        # READ SHARPNESS. taylor() of a UNIT-NORM vector makes the retrieval weight a polynomial in the cosine
+        # alone: A = qf.kf = 1 + c + c^2 with c = cos(q,k) in [-1,1]. So a PERFECT key match scores 3 and an
+        # orthogonal one scores 1 -- the selectivity of this kernel is HARD-CAPPED AT 3:1, no matter what Wq/Wk
+        # learn. At L=256 the right key therefore gets 3/(3+255) = 1.2% of the read and is drowned by the other
+        # 255. That is a closed-form explanation for induction sitting at exactly 0%, and it is a property of
+        # qk-norm, not of gating: softmax attention has no such ceiling because exp() is unbounded.
+        # Scaling the normalised vectors by s gives A = 1 + s^2 c + s^4 c^2, ratio (1+s^2+s^4):1 -- s=3 is 91:1.
+        # LEARNED PER LAYER, so the model chooses its own sharpness and can keep some layers soft for generation
+        # and make others sharp for retrieval, which is how transformers get specialised induction heads.
+        # Stability is unaffected: the DIRECTION is still normalised, so |A| is bounded by 1+s^2+s^4 with s a
+        # single learned scalar, and the sum-of-squares norm keeps grow_din exactly function-preserving.
+        s.qk_learn=getattr(cfg,'qk_learn_scale',False)
+        if s.qk_learn: s.qk_ls=nn.Parameter(torch.zeros(1))
+    def qk_s(s):
+        if s.qk_learn: return s.qk_ls.clamp(-2.,2.).exp()   # s in [0.14, 7.4]; bounds |A| at ~3000
+        return getattr(s.cfg,'qk_scale',1.0)
     def forward(s,a,state=None,wgate=None,prev=None):
         """`state`=(M,zM): the PERSISTENT fast-weight memory carried from previous chunks. Reading it costs nothing
         extra and is what gives UNBOUNDED context at CONSTANT memory; carrying it during training is what teaches the
@@ -134,8 +150,8 @@ class Layer(nn.Module):
             # so the fix has to live here: normalising by the SUM of squares is invariant to appended zero dims,
             # which makes grow_din exactly function-preserving. The scale differs from mean-norm by a constant
             # sqrt(DIN), which the learned Wk/Wq absorb.
-            xk=xk*torch.rsqrt(xk.pow(2).sum(-1,keepdim=True)+1e-6)
-            xq=xq*torch.rsqrt(xq.pow(2).sum(-1,keepdim=True)+1e-6)
+            xk=xk*torch.rsqrt(xk.pow(2).sum(-1,keepdim=True)+1e-6)*s.qk_s()
+            xq=xq*torch.rsqrt(xq.pow(2).sum(-1,keepdim=True)+1e-6)*s.qk_s()
         kf=taylor(xk,cfg)                                      # writes (shifted keys)
         qf=taylor(xq,cfg)                                      # reads
         v=H@s.Wv.weight.T
@@ -287,8 +303,8 @@ class Core(nn.Module):
             src=prev[i] if prev is not None else torch.zeros_like(H[:,0])
             xk=src@L.Wk.weight.T; xq=(H[:,0])@L.Wq.weight.T
             if L.qknorm:                                           # MUST match forward() or generation drifts
-                xk=xk*torch.rsqrt(xk.pow(2).sum(-1,keepdim=True)+1e-6)   # SUM: invariant to appended zero dims
-                xq=xq*torch.rsqrt(xq.pow(2).sum(-1,keepdim=True)+1e-6)
+                xk=xk*torch.rsqrt(xk.pow(2).sum(-1,keepdim=True)+1e-6)*L.qk_s()   # SUM: invariant to appended zero dims
+                xq=xq*torch.rsqrt(xq.pow(2).sum(-1,keepdim=True)+1e-6)*L.qk_s()
             kf=taylor(xk,cfg)                                      # key from the PREVIOUS token (the shift)
             v=(H[:,0])@L.Wv.weight.T
             if L.gated:

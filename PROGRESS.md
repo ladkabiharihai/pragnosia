@@ -2981,3 +2981,49 @@ Sharpening retrieval (temperature on the qk-norm) TRIPLES needle lift and DESTRO
 at 3-4k. The same peaked read that finds a needle is an attractor when generating. **Sharp retrieval and coherent
 generation pull in opposite directions**, and that is a dial the deployment sets, not a bug to fix. Given the
 priority, it sits at soft (T=1.0), and refresh recovers the long-range coherence without touching it.
+
+## INDUCTION AT 0% HAS A CLOSED-FORM CAUSE, AND IT IS NOT A REGRESSION
+I recorded induction as a REGRESSION from the old 202M's 28% and said I could not separate data mix, gating and
+size as the cause. **That framing was wrong.** The cause is none of those, it is derivable rather than empirical,
+and the circuit was never lost.
+### THE ALGEBRA
+qk-norm makes `|xq| = |xk| = 1`. `taylor()` builds `[1, x, x(x)x]`, so the retrieval weight is a polynomial in the
+cosine ALONE:
+```
+A = qf . kf = 1 + c + c^2 ,  c = cos(q,k) in [-1,1]
+perfect match c=1 -> A = 3      orthogonal c=0 -> A = 1
+```
+**Selectivity is hard-capped at 3:1 no matter what Wq/Wk learn.** At L=256 the correct key gets `3/(3+255)` =
+**1.2%** of the read and is drowned by the other 255. Softmax attention has no such ceiling because `exp()` is
+unbounded. This is a property of **qk-norm**, which I added for numerical stability and for making `grow_din`
+function-preserving, and whose retrieval cost I never checked.
+### THE MEASUREMENT THAT CONFIRMS IT
+Inside the finished 124M at an induction position, `A_max/A_median` per layer averages **2.08x against the 3.00x
+ceiling** -- the layers are already pressed flat against the cap. Scaling the normalised q,k by `s` at INFERENCE
+gives `A = 1 + s^2 c + s^4 c^2`, ratio `(1+s^2+s^4):1`. On the **same weights**, changing nothing else:
+| read scale s | ceiling | induction L=64 | L=128 | L=256 | BPB | needle d200 | gen rep 4-8k |
+|---|---|---|---|---|---|---|---|
+| **1.0 (shipped)** | 3:1 | **0%** | **0%** | **0%** | **0.9549** | +0.282 | **0.04** |
+| 1.5 | 8:1 | 18% | 5% | 0% | 1.0080 | +1.907 | 0.53 |
+| **2.0** | 21:1 | **21%** | **9%** | 1% | 1.1828 | **+2.540** | 0.43 |
+| 2.5 | 46:1 | 14% | 10% | 3% | 1.3622 | +1.929 | 0.49 |
+| *GPT-2 124M* | *unbounded* | *22%* | *18%* | *4%* | *0.9335* | | |
+**The induction circuit is present in the shipped weights.** It scores 0% only because the kernel cannot express a
+read sharp enough to use it. At s=2 the same checkpoint reaches GPT-2's L=64 number.
+### WHAT THIS CORRECTS
+- Not a regression, and not a data/size/token effect. The old 202M scored 28% because it predates qk-norm.
+- The gating hypothesis is now dead on mechanism, not on a null. I ran a gated-vs-ungated test at 35M, got 0%
+  in both arms, and correctly recorded it as UNDERPOWERED. It was worse than underpowered: **both arms had
+  qk-norm on**, so the ceiling was in both and induction could not have appeared in either. The design was
+  incapable of answering the question, which is the same flaw as the delta-rule bake-off.
+- The ~200-1000 token retrieval horizon is partly this too: needle lift at d=200 goes **+0.282 -> +2.540**, 9x,
+  from lifting the ceiling alone. Some of what I attributed to superposition capacity is read selectivity.
+### THE FIX BEING TESTED
+Sharpening at inference is **not** the fix: it costs +0.23 BPB and takes generation repetition 0.04 -> 0.43,
+because weights trained at s=1 are being run out of distribution. So `s` is now a **learned scalar per layer**
+(`cfg.qk_learn_scale`, init s=1 so it starts as an exact copy of the current model). The model chooses its own
+sharpness and can hold some layers soft for generation while making others sharp for retrieval -- how transformers
+end up with specialised induction heads. Stability and growth are untouched: the DIRECTION is still normalised, so
+|A| stays bounded by `1+s^2+s^4` with s clamped to [0.14, 7.4], and the sum-of-squares norm keeps `grow_din`
+exactly function-preserving. Controlled A/B at 35M running (`exp/readscale.py`), judged on induction AND BPB AND
+retrieval AND generation together, since a fix that buys induction by wrecking generation is not a fix.
