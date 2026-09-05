@@ -79,14 +79,17 @@ def bpb(m,cfg):
     m.train(); return nats/(np.log(2)*nb)
 
 def rep(ids,k=4):
+    # GUARD, added after this returned a plausible 1.00 for every arm. Core.generate returns (ids, state); a call
+    # site that forgets to unpack hands this a 2-element list, which yields no k-grams and scores exactly 1.00 --
+    # indistinguishable from a model that has collapsed into a loop. Silence is the failure mode worth killing.
+    assert len(ids)>=4*k, f"rep() got {len(ids)} tokens -- did the caller forget to unpack generate()'s tuple?"
     g=[tuple(ids[i:i+k]) for i in range(len(ids)-k+1)]; return 1-len(set(g))/max(1,len(g))
 
 @torch.no_grad()
 def gen_rep(m):
     """long generation through the SHIPPED path, refresh on, so this is the coherence we actually ship"""
     m.eval(); torch.manual_seed(0)
-    o=m.generate(torch.tensor([PROMPT],device=DEV),n=6000,temp=0.9,top_p=0.95)
-    o=o[0].tolist() if torch.is_tensor(o) else list(o)
+    o,_=m.generate(torch.tensor([PROMPT],device=DEV),n=6000,temp=0.9,top_p=0.95)
     m.train(); return rep(o[:3000]),rep(o[3000:6000])
 
 def run(tag,learn,tokwise=False):
