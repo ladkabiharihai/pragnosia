@@ -3042,3 +3042,29 @@ at d=0, 2.6x at d=200**. Un-gated holds a hair more past d=1000, which is what n
 sit under the 3:1 ceiling and neither COULD form a usable circuit. I recorded the earlier version of this test as
 underpowered; the truth is the design could not answer the question at all. The gating hypothesis for induction is
 dead on mechanism, not on this null. Gating stays.
+
+## THE SECOND CEILING: SELECTIVITY SATURATES AT DIN:1, AND AT s=1 DIN BUYS NOTHING
+Sharpening amplifies the signal, but it amplifies the noise from non-matching keys too. Unit-norm DIN-dim vectors
+give a random pair `cos ~ 1/sqrt(DIN)`, so `A_noise ~ 1 + s^2/sqrt(DIN) + s^4/DIN` against `A_match = 1+s^2+s^4`.
+Both are dominated by their `s^4` term as s grows, and the ratio tends to **DIN:1**. Simulated against that
+prediction, matched key's share of the read at L=256:
+| DIN | s=1 | s=2 | s=4 | s=10 | predicted `DIN/(DIN+255)` |
+|---|---|---|---|---|---|
+| 16 | 1.1% | 3.9% | 6.0% | 6.0% | 5.9% |
+| **24 (shipped)** | **1.1%** | 4.7% | 8.4% | **8.7%** | **8.6%** |
+| 32 | 1.1% | 5.2% | 10.7% | 11.4% | 11.1% |
+| 64 | 1.1% | 6.2% | 17.7% | 20.1% | 20.1% |
+| 128 | 1.2% | 6.8% | 26.3% | 33.6% | 33.4% |
+Two design laws fall out, and they are quantitative:
+1. **Selectivity saturates at DIN:1.** Past s~4 more sharpness buys nothing at any DIN. This is the reason my
+   inference sweep peaked at s=2 and got WORSE at s>=3: the signal had already saturated while the
+   out-of-distribution damage kept climbing. It also explains why sharpening the 124M fixed induction at L=64
+   (24/(24+63) = 28% share, plenty) but not at L=256 (8.6% share, not enough).
+2. **At the shipped s=1, DIN buys ZERO retrieval selectivity** -- 1.0% at DIN=8 and 1.2% at DIN=128. The state
+   pays `FE = 1+DIN+DIN^2` for DIN, so the 124M carries FE=601 per layer for DIN=24 and gets 3:1 back where
+   24:1 was available. **The DIN capacity we already bought is entirely unused**, and grow_din has been
+   widening a dimension that could not affect the read.
+So sharpness is the first-order fix and it is nearly free (NL scalars, or NL*D for the per-token version); DIN is
+where the ceiling then sits, and raising it is affordable -- state is `FE x DV x NL`, so DIN 24->32 takes the 124M
+from 28 MiB to 49 MiB and DIN 64 to 194 MiB, all inside the 4 GiB budget. Sequence: settle sharpness on the arms
+now running, then test DIN at the winning sharpness, because measuring DIN at s=1 would measure nothing.
