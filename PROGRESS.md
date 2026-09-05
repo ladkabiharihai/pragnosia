@@ -3027,3 +3027,18 @@ end up with specialised induction heads. Stability and growth are untouched: the
 |A| stays bounded by `1+s^2+s^4` with s clamped to [0.14, 7.4], and the sum-of-squares norm keeps `grow_din`
 exactly function-preserving. Controlled A/B at 35M running (`exp/readscale.py`), judged on induction AND BPB AND
 retrieval AND generation together, since a fix that buys induction by wrecking generation is not a fix.
+
+## GATING: SETTLED, AND KEPT
+The gated-vs-ungated pair finished. Identical 35M models at 30 tok/param, same data, tokens and seed, differing
+only in the gate.
+| | BPB | induction | needle d0 | d200 | d1000 | d4000 | d16000 |
+|---|---|---|---|---|---|---|---|
+| **GATED (shipped)** | **1.1476** | 0% | **+3.540** | **+0.579** | +0.018 | +0.001 | +0.004 |
+| UNGATED | 1.4100 | 0% | +1.469 | +0.220 | **+0.107** | -0.065 | **+0.058** |
+Gating wins decisively on the two things it was suspected of costing: **-0.26 BPB** and **2.4x the retrieval lift
+at d=0, 2.6x at d=200**. Un-gated holds a hair more past d=1000, which is what no forgetting should do, but at
++0.107 against +0.018 both are close enough to zero that neither retrieves anything there.
+**Induction is 0% in BOTH arms, and that result is void as evidence either way**: both arms have qk-norm, so both
+sit under the 3:1 ceiling and neither COULD form a usable circuit. I recorded the earlier version of this test as
+underpowered; the truth is the design could not answer the question at all. The gating hypothesis for induction is
+dead on mechanism, not on this null. Gating stays.
