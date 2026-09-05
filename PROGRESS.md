@@ -2938,3 +2938,22 @@ match itself is suppressed.
 **THIS IS THE ARCHITECTURAL FIX WORTH TESTING PROPERLY: train with a sharper feature map.** Everything tried
 before -- delta rule, bigger state, carried-state training, longer training contexts, gate ablation -- left the
 horizon untouched. This moved it 8x at inference alone.
+
+## SHARPENING IS WRONG FOR GENERATION -- and measuring against the stated priority is what caught it
+The user's criterion is generation quality and coherence, so the sharpening win had to be tested against THAT,
+not against needle lift. It fails badly:
+| temp | 0-1k rep | 1-2k | 2-3k | 3-4k | word-like at 3-4k |
+|------|----------|------|------|------|-------------------|
+| **1.00 (as trained)** | **0.02** | 0.20 | 0.34 | **0.42** | **0.93** |
+| 1.25 | 0.08 | 0.34 | 0.92 | **0.97** | 0.51 |
+| 1.50 | 0.41 | 0.64 | 0.70 | 0.45 | 0.90 |
+At T=1.5 the text at token 3000 is *"James lens / James lens / James lens..."* -- a total loop. At T=1.0 it is
+readable: *"you've taken it to the bank and left the bank on the wrong foot... You've never been to a bank!"*
+**THE MECHANISM, and it is the same one working against us.** Sharper retrieval means the read is dominated by a
+SINGLE match. During generation that is an attractor: the model locks onto whatever it retrieved most strongly and
+repeats it. Soft retrieval averages over many keys, which is bad for finding a needle and GOOD for not locking in.
+**This is a genuine architectural tension, not a tuning detail:**
+- **sharp** -> good needle retrieval, generation collapses into loops
+- **soft** -> weak needle retrieval, generation stays varied
+**DECISION: do not sharpen. T=1.0 is correct given the priority.** The needle result alone would have shipped a
+change that makes the thing being optimised for measurably worse -- rep 0.42 -> 0.97 at 3-4k tokens.
