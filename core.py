@@ -124,9 +124,19 @@ class Layer(nn.Module):
         # and make others sharp for retrieval, which is how transformers get specialised induction heads.
         # Stability is unaffected: the DIRECTION is still normalised, so |A| is bounded by 1+s^2+s^4 with s a
         # single learned scalar, and the sum-of-squares norm keeps grow_din exactly function-preserving.
-        s.qk_learn=getattr(cfg,'qk_learn_scale',False)
-        if s.qk_learn: s.qk_ls=nn.Parameter(torch.zeros(1))
-    def qk_s(s):
+        # PER-TOKEN sharpness goes one step further, and is the only version that can resolve the tension rather
+        # than trade it: a sharp read is what finds a needle and is ALSO what turns generation into an attractor,
+        # so a single per-layer value has to compromise. Letting each token set its own lets the model sharpen on
+        # the tokens that are doing retrieval and stay soft on the ones writing prose. Same clamp, so |A| is
+        # bounded identically; init at zero weights so it starts at exactly s=1 like every other arm.
+        s.qk_learn=getattr(cfg,'qk_learn_scale',False); s.qk_tok=getattr(cfg,'qk_token_scale',False)
+        if s.qk_tok:
+            s.Wqs=nn.Linear(cfg.D,1); nn.init.zeros_(s.Wqs.weight); nn.init.zeros_(s.Wqs.bias)
+        elif s.qk_learn: s.qk_ls=nn.Parameter(torch.zeros(1))
+    def qk_s(s,H=None):
+        if s.qk_tok:
+            if H is None: return 1.0
+            return s.Wqs(H).clamp(-2.,2.).exp()             # [B,T,1], broadcasts over DIN
         if s.qk_learn: return s.qk_ls.clamp(-2.,2.).exp()   # s in [0.14, 7.4]; bounds |A| at ~3000
         return getattr(s.cfg,'qk_scale',1.0)
     def forward(s,a,state=None,wgate=None,prev=None):
@@ -150,8 +160,8 @@ class Layer(nn.Module):
             # so the fix has to live here: normalising by the SUM of squares is invariant to appended zero dims,
             # which makes grow_din exactly function-preserving. The scale differs from mean-norm by a constant
             # sqrt(DIN), which the learned Wk/Wq absorb.
-            xk=xk*torch.rsqrt(xk.pow(2).sum(-1,keepdim=True)+1e-6)*s.qk_s()
-            xq=xq*torch.rsqrt(xq.pow(2).sum(-1,keepdim=True)+1e-6)*s.qk_s()
+            xk=xk*torch.rsqrt(xk.pow(2).sum(-1,keepdim=True)+1e-6)*s.qk_s(Hs)
+            xq=xq*torch.rsqrt(xq.pow(2).sum(-1,keepdim=True)+1e-6)*s.qk_s(H)
         kf=taylor(xk,cfg)                                      # writes (shifted keys)
         qf=taylor(xq,cfg)                                      # reads
         v=H@s.Wv.weight.T
@@ -303,8 +313,8 @@ class Core(nn.Module):
             src=prev[i] if prev is not None else torch.zeros_like(H[:,0])
             xk=src@L.Wk.weight.T; xq=(H[:,0])@L.Wq.weight.T
             if L.qknorm:                                           # MUST match forward() or generation drifts
-                xk=xk*torch.rsqrt(xk.pow(2).sum(-1,keepdim=True)+1e-6)*L.qk_s()   # SUM: invariant to appended zero dims
-                xq=xq*torch.rsqrt(xq.pow(2).sum(-1,keepdim=True)+1e-6)*L.qk_s()
+                xk=xk*torch.rsqrt(xk.pow(2).sum(-1,keepdim=True)+1e-6)*L.qk_s(src)   # SUM: invariant to appended zero dims
+                xq=xq*torch.rsqrt(xq.pow(2).sum(-1,keepdim=True)+1e-6)*L.qk_s(H[:,0])
             kf=taylor(xk,cfg)                                      # key from the PREVIOUS token (the shift)
             v=(H[:,0])@L.Wv.weight.T
             if L.gated:

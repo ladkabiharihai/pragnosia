@@ -89,10 +89,10 @@ def gen_rep(m):
     o=o[0].tolist() if torch.is_tensor(o) else list(o)
     m.train(); return rep(o[:3000]),rep(o[3000:6000])
 
-def run(tag,learn):
+def run(tag,learn,tokwise=False):
     torch.manual_seed(0); np.random.seed(0)
     cfg=C.Config(D=D,DIN=DIN,DV=D,NL=NL,T=CH,res_scale=NL**-0.5,tie_emb=True)
-    cfg.gated=True; cfg.qknorm=True; cfg.qk_learn_scale=learn
+    cfg.gated=True; cfg.qknorm=True; cfg.qk_learn_scale=learn; cfg.qk_token_scale=tokwise
     m=C.Core(cfg).to(DEV); P=sum(p.numel() for p in m.parameters())
     STEPS=max(1,int(TPP*P)//(B*CH))
     fwd=torch.compile(m); opt=torch.optim.Adam(m.parameters(),lr=1e-3,betas=(0.9,0.95))
@@ -112,16 +112,29 @@ def run(tag,learn):
           f"   ({(time.time()-t0)/60:.1f}m)",flush=True)
     print(f"    needle  "+"  ".join(f"d{d}:{v:+.3f}" for d,v in zip((0,200,1000,4000),nd)),flush=True)
     print(f"    generation 4gram-rep  0-3k {r1:.2f}   3-6k {r2:.2f}    (real text 0.05)",flush=True)
-    if learn:
+    if tokwise:
+        # what sharpness does it actually ASK FOR, and does it VARY across tokens? A per-token knob that ended up
+        # constant would mean the model had no use for the extra freedom.
+        m.eval()
+        with torch.no_grad():
+            X=EV[0][:,:512]; a=m.emb(X)
+            for j,L_ in enumerate(m.layers):
+                H,_=C.rmsnorm(a); s_=L_.qk_s(H)
+                print(f"      L{j:<2d} s: mean {float(s_.mean()):.2f}  p10 {float(s_.quantile(0.1)):.2f}  "
+                      f"p90 {float(s_.quantile(0.9)):.2f}  max {float(s_.max()):.2f}",flush=True)
+                a,_=L_(a)
+        m.train()
+    elif learn:
         sc=[float(L.qk_s()) for L in m.layers]
         print(f"    LEARNED per-layer s: "+" ".join(f"{v:.2f}" for v in sc),flush=True)
         print(f"      -> selectivity ratio: "+" ".join(f"{1+v**2+v**4:.0f}" for v in sc),flush=True)
     torch.save({'model':m.state_dict(),'D':D,'NL':NL,'DIN':DIN,'DV':D,'tie_emb':True,'head_scale':1.0,'D0':D,
-                'gated':True,'qknorm':True,'qk_learn_scale':learn,'res_scale':cfg.res_scale,'step':STEPS},
-               f"/mnt/kv_cache/pragnosia_data/rs_{'learn' if learn else 'fixed'}.pt")
+                'gated':True,'qknorm':True,'qk_learn_scale':learn,'qk_token_scale':tokwise,'res_scale':cfg.res_scale,'step':STEPS},
+               f"/mnt/kv_cache/pragnosia_data/rs_{'tok' if tokwise else 'learn' if learn else 'fixed'}.pt")
     del m,fwd,opt; torch.cuda.empty_cache()
 
 print(f"LEARNED READ SHARPNESS vs THE FIXED 3:1 CEILING. {D}x{NL}L DIN{DIN} at {TPP:.0f} tok/param, "
       f"identical but for one scalar per layer.\n  GPT-2 124M reference: induction 22/18/4 % at L=64/128/256.\n",flush=True)
 run("A) FIXED s=1   -- the shipped kernel, capped at 3:1",False)
 run("B) LEARNED s   -- one scalar per layer, init s=1",True)
+run("C) PER-TOKEN s -- each token sets its own, so sharp reads and smooth prose need not compromise",False,tokwise=True)
