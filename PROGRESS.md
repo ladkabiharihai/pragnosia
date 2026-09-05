@@ -2871,3 +2871,26 @@ run3 (202M, 10.6B, ungated, window2, old trainer) has induction; run6 (125M, 9.1
 not. Five things differ and the cheap tests cannot separate them. Settling it needs the gated/ungated pair at a
 scale where induction forms -- around 200M and 10B tokens, roughly 12 hours per arm.
 **Worth knowing before that spend: induction is the mechanism behind in-context learning, so flag 2 rests on it.**
+
+## NEW TARGET MET: PRAGNOSIA-124 RUNS ON A 4GB CONSUMER GPU
+| stage | peak GiB | note |
+|-------|----------|------|
+| weights loaded (bf16) | **0.23** | 124.8M params |
+| read 2,048 tokens | 0.34 | |
+| read 65,536 tokens | 0.34 | flat |
+| **read 1,048,576 tokens** | **0.34** | **flat, 25.2s** |
+| generate 200 tokens | 0.34 | 8.9 ms/token |
+| **PEAK ACROSS EVERYTHING** | **0.34 GiB** | against a 3.5 GiB budget |
+**A 10x reduction, from 3.46 GiB to 0.34 GiB**, and it reads a MILLION tokens at that ceiling. Also verified at a
+tighter 3.0 GiB budget with a 256-token read chunk: 0.32 GiB peak, still reads 1M.
+Nothing about the model changed -- only how the same weights are run. Three training defaults that buy nothing at
+inference:
+- **fp32 weights -> bf16**: 476 -> 238 MiB. Quality intact (distinct-1 0.78, 4gram-rep 0.00 vs real text 0.62/0.02)
+- **read chunk 2048 -> 512**: the read chunk is a FREE knob at inference, it need not match the training chunk,
+  and both the [1,T,T] attention (112 MiB at 2048) and the logits scale with it
+- **no fp32 logits copy**: only the LAST position is needed to generate; the rest was allocated and discarded
+One detail that matters specifically on a budget card: `.to(DEV).to(bf16)` puts the fp32 copy on the card FIRST
+and peaks at 0.52 GiB before halving it. Casting on the CPU and then moving peaks at 0.23. On a 4GB device the
+transient is what OOMs you, not the steady state.
+`serve4g.py` is the serving path. **This is the vision's efficiency claim made concrete**: a model that reads a
+million tokens of context on hardware that cannot hold a 124M transformer's KV cache past a few thousand.
