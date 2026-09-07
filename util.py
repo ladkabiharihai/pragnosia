@@ -85,3 +85,22 @@ def cfg_from_ckpt(sd,T=2048,res_scale=16**-0.5):
     cfg.qk_learn_scale=sd.get('qk_learn_scale', any(k.endswith('qk_ls') for k in w))
     cfg.sel_write=sd.get('sel_write', any(k.endswith('Wsal.weight') for k in w))
     return cfg
+
+
+def cap_gpu(gib, dev=0):
+    """HARD-cap this process's GPU allocation. Use it for ANY job that co-runs with prod or with a training run.
+
+    WHY THIS EXISTS. I launched exp/bptt.py alongside the flagship behind a guard that checked FREE MEMORY AT
+    LAUNCH (>20 GiB) against my ESTIMATE of what the job would use (~10-15 GiB). Truncated BPTT holds K chunks of
+    activations in the graph at once -- that is the entire point of it -- so it actually took 25.9 GiB and drove
+    the card to 1.9 GiB free, with prod's vLLM on the same GPU. Nothing fell over, but only by luck.
+    A guard built on an estimate is not a guard. This makes the job hit ITS OWN ceiling and die, instead of
+    eating headroom that belongs to prod.
+
+        from util import cap_gpu; cap_gpu(12)     # this process OOMs at 12 GiB, prod never sees pressure
+    """
+    import torch
+    if not torch.cuda.is_available(): return
+    total = torch.cuda.get_device_properties(dev).total_memory / 2**30
+    torch.cuda.set_per_process_memory_fraction(min(1.0, gib / total), dev)
+    print(f"[cap_gpu] this process is capped at {gib:.1f} GiB of {total:.0f} GiB", flush=True)

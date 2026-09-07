@@ -3207,3 +3207,24 @@ in a second run without redoing this one.
 9.1B tokens at 73 tok/param. Matches GPT-2 124M on parameters AND tokens. Growth is function-preserving with both
 new flags (verified 2.3e-07 width, exact for depth and DIN). Early throughput 216 ktok/s and climbing against the
 previous run's 115 ktok/s average -- the read identity is paying for the larger DIN.
+
+## INCIDENT: I NEARLY TOOK PROD DOWN WITH A GUARD THAT WAS NOT A GUARD
+I launched `exp/bptt.py` alongside the flagship behind a check that free VRAM was above 20 GiB. It was 27.8 GiB,
+so it launched. The job then took **25.9 GiB** -- I had estimated 10-15 -- and drove the card to **1.9 GiB free**
+with prod's vLLM (39 GiB), Whisper, Chatterbox and Kokoro all on it.
+```
+vLLM + whisper + chatterbox + kokoro  ~49 GiB   (prod, CANNOT go down)
+train124f.py (flagship)                18 GiB
+exp/bptt.py                            26 GiB   <- mine
+                                       93.4 / 95.8 GiB      free 1.9 GiB
+```
+Nothing fell over, but a single long-context request to vLLM could have OOM'd it. That was luck, not design.
+**THE FLAW.** The guard compared FREE MEMORY AT LAUNCH against an ESTIMATE of what the job would use. Truncated
+BPTT holds K chunks of activations in the graph simultaneously -- that is the whole point of it -- so the estimate
+was wrong by 2x. **A guard built on an estimate is not a guard.**
+**THE FIX.** `util.cap_gpu(gib)` wraps `set_per_process_memory_fraction`, so a co-running job hits ITS OWN ceiling
+and dies rather than eating headroom that belongs to prod. `exp/bptt.py` now calls it, and K is tunable since
+memory grows linearly in K. Recovery was by exact verified PID, checked against /proc/<pid>/cmdline before the
+signal -- never a pattern match or a memory threshold.
+**COST.** The BPTT result was lost (still on the control arm, no verdict). The flagship lost throughput while
+they shared, 347 -> 247 ktok/s. It will be re-run after the flagship finishes, under the cap.
