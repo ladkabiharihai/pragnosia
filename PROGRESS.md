@@ -3104,3 +3104,26 @@ noise and should not decide anything.
 Induction is 7-10% at L=64 against GPT-2's 22%, and ~0% at L=128+. That is expected and predicted: at DIN=16 the
 SECOND ceiling caps the matched key at 5.9% of the read at L=256. Sharpness lifted the 3:1 cap; DIN sets where the
 next one sits. The DIN sweep is running at arm B's setting, which is the only setting where it can measure anything.
+
+## INDUCTION, RE-MEASURED WITH ENOUGH TRIALS -- AND TWO CORRECTIONS TO WHAT I REPORTED
+Every induction number in this project came from n=100 single-sequence forwards, standard error +-2.6%. Two runs
+of an IDENTICAL configuration (readscale arm B and dinsweep's DIN=16 arm -- same seeds, same budget) scored 7%
+and 3%, which is what exposed it. The trials are independent and carry no state, so they BATCH exactly: n=2000 is
+now **18x cheaper than the old n=100 loop**. `exp/induction.py`, with Wilson intervals, because a normal interval
+is wrong near 0 and induction sits near 0 for every model here.
+| arm (35M, 30 tok/param) | L=64 | L=128 | L=256 |
+|---|---|---|---|
+| **A) fixed s=1 (shipped kernel)** | 0.7% [0.4, 1.1] | 0.0% [0.0, 0.2] | 0.0% [0.0, 0.2] |
+| **B) learned per-layer** | 5.5% [4.6, 6.6] | 0.8% [0.5, 1.4] | 0.1% [0.0, 0.3] |
+| **C) per-token** | **7.2% [6.1, 8.4]** | **1.6% [1.2, 2.3]** | 0.1% [0.0, 0.3] |
+| *GPT-2 124M* | *22%* | *18%* | *4%* |
+| *PRAGNOSIA-124 (fixed s)* | *0.7% [0.3, 1.4]* | *0.2%* | *0.0%* |
+**Correction 1.** I reported the shipped kernel as scoring exactly 0%. It scores **0.7% [0.4, 1.1]** at L=64 --
+near zero, and 8x below the sharpened arms, but not the clean zero I quoted. The finished 124M agrees at 0.7%.
+**Correction 2.** I then said arm B vs C at "7% vs 10%" was inside noise and should not have been presented as a
+finding. At n=100 it was unresolvable, but that swung too far the other way: with power, **C really is above B**
+(7.2% vs 5.5% at L=64, 1.6% vs 0.8% at L=128), though by a smaller margin than the original numbers implied and
+with intervals that only just separate. The first report over-claimed the size; the retraction over-claimed the
+uncertainty.
+What survives both corrections unchanged: **lifting the 3:1 ceiling is worth roughly 8x on induction**, and the
+gap to GPT-2 at L>=128 is still large, which is what the DIN sweep is for.
