@@ -3127,3 +3127,30 @@ with intervals that only just separate. The first report over-claimed the size; 
 uncertainty.
 What survives both corrections unchanged: **lifting the 3:1 ceiling is worth roughly 8x on induction**, and the
 gap to GPT-2 at L>=128 is still large, which is what the DIN sweep is for.
+
+## THE RETRIEVAL HORIZON IS ARCHITECTURAL, NOT A TRAINING-CONTEXT ARTIFACT
+The experiment I had written months ago and never run, finally run -- and with sharpness ON, because at s=1 it
+would have measured retrieval under the 3:1 ceiling and returned a null by construction.
+| arm (24.5M, 343M tokens) | BPB | gate half-life | d=0 | d=200 | d=2000 | d=8000 | d=30000 |
+|---|---|---|---|---|---|---|---|
+| A) 2048-token windows, no carried state | **1.1793** | 1847 tok | +2.585 | **+0.341** | +0.005 | -0.003 | +0.001 |
+| B) 16384-token documents, state threaded | 1.2890 | 1929 tok | **+3.776** | +0.299 | -0.009 | +0.000 | +0.003 |
+**Training on long documents does not extend the horizon.** Both die at d=2000; B costs +0.11 BPB and buys nothing
+past d=0. This also VINDICATES a decision I had flagged as possibly wrong: cutting carried-state training from the
+base run on BPB alone was right, and it does not cost the horizon I worried it was buying.
+### THE MECHANISM IS IN THE NUMBERS
+Learned gate half-life: **1847 and 1929 tokens. Retrieval dies at ~2000 in both.** That is the cause, not a
+coincidence. And the model is not short-sighted for lack of exposure -- arm B trained on 16k-token documents and
+still chose ~1900. With a fixed-size state where EVERY token writes, one fact's share after N tokens is ~1/N, so
+holding memories longer only piles up more of them. **The gate is trading horizon against interference, and ~1900
+is its optimum GIVEN that everything writes.**
+### THE LEVER, AND A DEAD-CODE FINDING
+`wgate` (the vision's propose gate) has been in `_full_mix` since the beginning, but it is consulted only in the
+`elif wgate is None` branch -- so with `gated=True`, which is every shipped configuration, **selective writing has
+never once executed**. Now wired into the gated path as a learned per-token write strength, applied to both the
+persistent-state write and the within-chunk read (or the parallel form and the recurrence disagree). Verified
+forward-vs-step exact across all four flag combinations, 7.7e-16 to 2.5e-15. Init sigmoid(4)=0.982 so it starts
+where the current model is.
+**Prediction recorded before the run:** if writing selectively is the lever, the learned half-life should GROW
+past ~1900 (holding memories stops being expensive) and the needle should survive past d=2000. If the half-life
+stays at ~1900, the hypothesis is wrong and the horizon is a capacity limit rather than an interference limit.

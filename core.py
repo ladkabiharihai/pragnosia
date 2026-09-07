@@ -129,6 +129,17 @@ class Layer(nn.Module):
         # so a single per-layer value has to compromise. Letting each token set its own lets the model sharpen on
         # the tokens that are doing retrieval and stay soft on the ones writing prose. Same clamp, so |A| is
         # bounded identically; init at zero weights so it starts at exactly s=1 like every other arm.
+        # SELECTIVE WRITING, the vision's propose gate. `wgate` has existed since the start but is only consulted
+        # in the UNGATED branch, so with gating on -- every shipped configuration -- it has never once run.
+        # WHY IT IS THE HORIZON LEVER. The state is fixed size and EVERY token writes, so one fact's share after
+        # N tokens is ~1/N. The learned forget half-life came out at 1847 and 1929 tokens in the two horizon arms
+        # and retrieval dies at ~2000 in both -- the gate is not short-sighted, it is trading horizon against
+        # interference, and holding memories longer would only pile up more of them. Writing selectively attacks
+        # the interference instead, which is the term that forces the trade.
+        # Init bias +4 (sigmoid 0.982, near write-everything) so this starts as the current model does.
+        s.sel=getattr(cfg,'sel_write',False)
+        if s.sel:
+            s.Wsal=nn.Linear(cfg.D,1); nn.init.zeros_(s.Wsal.weight); nn.init.constant_(s.Wsal.bias,4.0)
         s.qk_learn=getattr(cfg,'qk_learn_scale',False); s.qk_tok=getattr(cfg,'qk_token_scale',False)
         if s.qk_tok:
             s.Wqs=nn.Linear(cfg.D,1); nn.init.zeros_(s.Wqs.weight); nn.init.zeros_(s.Wqs.bias)
@@ -168,6 +179,7 @@ class Layer(nn.Module):
         v=H@s.Wv.weight.T
         # gate cumulant, needed by BOTH paths
         L=F.logsigmoid(s.Wg(H)).squeeze(-1).cumsum(-1) if s.gated else None
+        if s.sel and wgate is None: wgate=torch.sigmoid(s.Wsal(H)).squeeze(-1)   # [B,T] write strength per token
         sub=getattr(cfg,'subchunk',0)
         if sub and T%sub==0 and wgate is None:
             # SUB-CHUNKED PATH: same function, O(T x sub x FE) instead of O(T^2 x FE), and no [B,T,T] tensor.
@@ -216,7 +228,9 @@ class Layer(nn.Module):
             # chunk boundaries -- measured 2.25e-03 relative error on the chunked recurrence. Doing it correctly
             # requires un-folding kf before the state write; left as the obvious next memory win.
             A=A*(L.unsqueeze(-1)-L.unsqueeze(-2)).clamp(max=0.0).exp()
-        A=A.tril()                                             # causal: read at t sees writes s<=t
+        if wgate is not None: A=A*wgate.unsqueeze(-2)          # ... and the same weight on the WITHIN-chunk read,
+        A=A.tril()                                             # or the parallel form and the recurrence disagree
+                                                               # causal: read at t sees writes s<=t
         den=A.sum(-1,keepdim=True); num=torch.einsum('bts,bsd->btd',A,v)
         if state is not None:                                  # + read the persistent store
             M,zM=state
@@ -237,6 +251,7 @@ class Layer(nn.Module):
             # incoming state by the chunk's total gate -- this is exactly M_T = (prod g) M_0 + sum_t (prod_{u>t} g_u) k_t (x) v_t
             gt=(L[:,-1:]-L).exp().unsqueeze(-1)                # [B,T,1]: gate from t to the end of the chunk
             kg=kf*gt
+            if wgate is not None: kg=kg*wgate.unsqueeze(-1)    # selective write into the PERSISTENT state
             newM=torch.einsum('btf,btd->bfd',kg,v).detach(); newz=kg.squeeze(-1).sum(1).detach() if kg.dim()==4 else kg.sum(1).detach()
             if state is not None:
                 gtot=L[:,-1].exp().view(-1,1,1)
@@ -346,7 +361,9 @@ class Core(nn.Module):
             # of ~2000 tokens those writes accumulate almost undecayed until the read is dominated by whatever it
             # just produced -- a positive feedback loop. Measured: unchanged (1.0) collapses to 4gram-rep 0.79 by
             # token 1000, while a frozen state (0.0) holds 0.00 for the full 1200. Default 1.0 = old behaviour.
-            M=M+write_scale*kf.unsqueeze(2)*v.unsqueeze(1); z=z+write_scale*kf   # write into the state
+            ws=write_scale*(torch.sigmoid(L.Wsal(H[:,0])) if L.sel else 1.0)     # selective write, matching forward()
+            M=M+ws.unsqueeze(-1)*kf.unsqueeze(2)*v.unsqueeze(1) if L.sel else M+write_scale*kf.unsqueeze(2)*v.unsqueeze(1)
+            z=z+ws*kf if L.sel else z+write_scale*kf                             # write into the state
             qf=taylor(xq,cfg)
             num=torch.einsum('bf,bfd->bd',qf,M); den=(qf*z).sum(-1,keepdim=True)+1e-5
             o=(num/den)@L.Wo.weight.T+L.Wo.bias
