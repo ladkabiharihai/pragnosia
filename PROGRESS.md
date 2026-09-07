@@ -3154,3 +3154,29 @@ where the current model is.
 **Prediction recorded before the run:** if writing selectively is the lever, the learned half-life should GROW
 past ~1900 (holding memories stops being expensive) and the needle should survive past d=2000. If the half-life
 stays at ~1900, the hypothesis is wrong and the horizon is a capacity limit rather than an interference limit.
+
+## FINAL ARCHITECTURE: LEARNED PER-LAYER SHARPNESS + DIN=32
+Three configurations, 35M, matched tokens and seed, judged on all four axes with the sample sizes needed to tell
+them apart (induction n=2000 with Wilson intervals, generation 3 documents x 9000 tokens, every arm saved).
+| arm | BPB | ind L=64 | ind L=128 | needle d0 | d200 | gen 0-3k | 3-6k | 6-9k |
+|---|---|---|---|---|---|---|---|---|
+| shipped kernel (fixed s, DIN=16) | 1.1530 | 0.7% | 0.0% | +3.460 | +0.474 | 0.17 | 0.22 | 0.38 |
+| per-layer, DIN=16 | 1.1114 | 5.5% | 0.8% | +3.676 | +0.541 | 0.04 | 0.09 | 0.06 |
+| **per-layer, DIN=32  <- SHIPS** | 1.1012 | **7.0%** | 1.2% | **+4.156** | **+0.691** | **0.04** | **0.03** | **0.05** |
+| per-token, DIN=32, clamp 1.0 | **1.0944** | 6.0% | **1.4%** | +3.297 | +0.613 | 0.09 | 0.34 | 0.41 |
+Against the shipped kernel at matched size and tokens: **-0.052 BPB, 10x induction, +46% retrieval at d=200, and
+generation repetition flat at real-text parity instead of drifting to 0.38.**
+### A HYPOTHESIS I RECORDED AND THEN FALSIFIED
+Per-token sharpness beat per-layer on retrieval but lost long generation, and its layers sat pinned at the [-2,2]
+clamp -- so I predicted saturation was the cause and tightened the clamp to 1.0 to test it. **It got worse**
+(generation 0.34/0.41 against 0.12/0.17 at the looser clamp), and the model saturated the tighter bound in 7 of
+10 layers. The saturation explanation is dead: per-token sharpness costs long-generation coherence for some other
+reason, and it is rejected on the criterion that matters. Its BPB edge (0.0068) is inside single-seed noise.
+### THE DIN=32 SCARE WAS A MEASUREMENT ARTIFACT
+The DIN sweep reported generation repetition **0.63** at DIN=32 -- the number that would have disqualified the
+better configuration. Measured over 3 documents instead of 1, it is **0.03**. That run also saved no checkpoint,
+so it could not be re-checked. Had I trusted it I would have shipped the weaker model on a single bad sample.
+### FLAGSHIP
+`train124f.py`: infant 35.0M (D448x10L DIN16) -> 64.7M -> **125.0M (D832x14L DIN32, FE=1057)**, growth on the
+model's own saturation signal at a 22 tok/param floor, 73 tok/param total = 9.1B tokens, matching GPT-2 124M on
+BOTH axes. State 47 MiB/seq at final size. No carried-state training: measured to cost +0.11 BPB and buy nothing.
