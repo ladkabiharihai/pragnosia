@@ -134,10 +134,11 @@ class Layer(nn.Module):
             s.Wqs=nn.Linear(cfg.D,1); nn.init.zeros_(s.Wqs.weight); nn.init.zeros_(s.Wqs.bias)
         elif s.qk_learn: s.qk_ls=nn.Parameter(torch.zeros(1))
     def qk_s(s,H=None):
+        cl=getattr(s.cfg,'qk_clamp',2.0)                   # s in [exp(-cl), exp(cl)]; bounds |A| at 1+s^2+s^4
         if s.qk_tok:
             if H is None: return 1.0
-            return s.Wqs(H).clamp(-2.,2.).exp()             # [B,T,1], broadcasts over DIN
-        if s.qk_learn: return s.qk_ls.clamp(-2.,2.).exp()   # s in [0.14, 7.4]; bounds |A| at ~3000
+            return s.Wqs(H).clamp(-cl,cl).exp()             # [B,T,1], broadcasts over DIN
+        if s.qk_learn: return s.qk_ls.clamp(-cl,cl).exp()
         return getattr(s.cfg,'qk_scale',1.0)
     def forward(s,a,state=None,wgate=None,prev=None):
         """`state`=(M,zM): the PERSISTENT fast-weight memory carried from previous chunks. Reading it costs nothing

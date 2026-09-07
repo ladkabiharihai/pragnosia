@@ -110,6 +110,9 @@ def run(DIN):
     print(f"    needle  "+"  ".join(f"d{d}:{v:+.3f}" for d,v in zip((0,200,1000,4000),nd)),flush=True)
     print(f"    generation 4gram-rep  0-3k {r1:.2f}   3-6k {r2:.2f}    (real text 0.05)",flush=True)
     print(f"    predicted selectivity ceiling {DIN}:1 -> matched key gets {100*DIN/(DIN+255):.1f}% of the read at L=256",flush=True)
+    torch.save({'model':m.state_dict(),'D':D,'NL':NL,'DIN':DIN,'DV':D,'tie_emb':True,'head_scale':1.0,'D0':D,
+                'gated':True,'qknorm':True,'qk_learn_scale':cfg.qk_learn_scale,'qk_token_scale':cfg.qk_token_scale,
+                'res_scale':cfg.res_scale,'step':STEPS},f"/mnt/kv_cache/pragnosia_data/din{DIN}_{MODE}.pt")
     del m,fwd,opt; torch.cuda.empty_cache()
 
 print(f"DOES DIN BUY RETRIEVAL ONCE THE READ IS SHARP? sharpness mode = {MODE}, {D}x{NL}L at {TPP:.0f} tok/param\n"

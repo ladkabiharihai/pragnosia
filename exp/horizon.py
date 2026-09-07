@@ -91,6 +91,10 @@ def run(tag, carried):
     torch.manual_seed(0); np.random.seed(0)
     cfg = C.Config(D=D, DIN=DIN, DV=D, NL=NL, T=CH, res_scale=NL ** -0.5, tie_emb=True)
     cfg.gated = True; cfg.qknorm = True
+    # SHARPNESS ON. Without it this would measure the retention horizon under the 3:1 read ceiling, where
+    # retrieval is drowned at any distance -- a null by construction, the same trap that voided the delta-rule
+    # bake-off and the gating test. The horizon is only measurable once the read can discriminate at all.
+    cfg.qk_learn_scale = True
     m = C.Core(cfg).to(DEV)
     P = sum(p.numel() for p in m.parameters())
     per = 8 * DOC if carried else 16 * CH          # tokens per optimizer step, matched as closely as batch allows
