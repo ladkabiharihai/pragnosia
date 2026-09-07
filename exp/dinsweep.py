@@ -115,4 +115,4 @@ def run(DIN):
 print(f"DOES DIN BUY RETRIEVAL ONCE THE READ IS SHARP? sharpness mode = {MODE}, {D}x{NL}L at {TPP:.0f} tok/param\n"
       f"  selectivity saturates at DIN:1, so this is only measurable with sharpness ON -- at s=1 it would be a\n"
       f"  null by construction. GPT-2 124M reference: induction 22/18/4 % at L=64/128/256.\n",flush=True)
-for DIN in (16,32,64): run(DIN)
+for DIN in [int(z) for z in (sys.argv[3] if len(sys.argv)>3 else "16,32").split(",")]: run(DIN)

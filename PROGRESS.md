@@ -2976,11 +2976,11 @@ stays ON TOPIC: 19,000 tokens after a prompt about 720p vs 1080p it is still wri
 *"they have an awesome price point for 720p which is pretty high a price the way it is to purchase a 3-kilobit,
 full-fledged 720p"*. Verified through the shipped `generate()` path with defaults, not a special harness.
 Shipped as `refresh_every=1000, refresh_blend=0.5`; set `refresh_every=0` to disable.
-### THE TENSION THIS SITS INSIDE, STATED PLAINLY
-Sharpening retrieval (temperature on the qk-norm) TRIPLES needle lift and DESTROYS generation -- rep 0.42 -> 0.97
-at 3-4k. The same peaked read that finds a needle is an attractor when generating. **Sharp retrieval and coherent
-generation pull in opposite directions**, and that is a dial the deployment sets, not a bug to fix. Given the
-priority, it sits at soft (T=1.0), and refresh recovers the long-range coherence without touching it.
+### THE TENSION THIS SITS INSIDE  (SUPERSEDED -- see the read-sharpness result below)
+Sharpening retrieval AT INFERENCE triples needle lift and destroys generation (rep 0.42 -> 0.97 at 3-4k), so I
+wrote that sharp retrieval and coherent generation pull in opposite directions and the trade is a deployment dial.
+**That conclusion was drawn from inference-time sharpening only, and it is wrong for LEARNED sharpness.** Trained
+rather than imposed, a sharper read makes generation MORE coherent, not less. The retraction is below.
 
 ## INDUCTION AT 0% HAS A CLOSED-FORM CAUSE, AND IT IS NOT A REGRESSION
 I recorded induction as a REGRESSION from the old 202M's 28% and said I could not separate data mix, gating and
@@ -3068,3 +3068,39 @@ So sharpness is the first-order fix and it is nearly free (NL scalars, or NL*D f
 where the ceiling then sits, and raising it is affordable -- state is `FE x DV x NL`, so DIN 24->32 takes the 124M
 from 28 MiB to 49 MiB and DIN 64 to 194 MiB, all inside the 4 GiB budget. Sequence: settle sharpness on the arms
 now running, then test DIN at the winning sharpness, because measuring DIN at s=1 would measure nothing.
+
+## READ SHARPNESS: THE FIX WORKS, AND IT RETRACTS THE "TENSION" I RECORDED ABOVE
+Three arms, 35M at 30 tok/param, identical data/tokens/seed, differing only in how the read scale is set. Both new
+arms init at s=1, so each begins as a bit-identical copy of the shipped kernel and every difference is chosen.
+| arm | BPB | ind L=64 | L=128 | needle d0 | d200 | d1000 | rep 0-3k | 3-6k | 6-9k | word-like |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **A) fixed s=1 (shipped)** | 1.1530 | **0%** | 0% | +3.460 | +0.474 | +0.007 | 0.17 | 0.22 | **0.38** | 0.98 |
+| **B) learned per-layer** | **1.1115** | 7% | 0% | +3.675 | +0.541 | +0.029 | **0.04** | **0.09** | **0.06** | 0.96 |
+| **C) per-token** | 1.1190 | **10%** | **1%** | **+4.766** | **+0.754** | **+0.043** | 0.12 | 0.17 | 0.14 | 0.94 |
+| *real text* | | | | | | | *0.01* | | | *0.97* |
+| *GPT-2 124M* | *0.9335* | *22%* | *18%* | | | | | | | |
+**Both new arms beat the shipped kernel on every axis at once.** That is the part I did not expect.
+### THE RETRACTION
+I recorded that sharp retrieval and coherent generation pull in opposite directions. **Measured on trained models,
+the opposite is true.** The shipped fixed-s arm DEGRADES over length -- rep 0.17 -> 0.22 -> **0.38** across 9000
+tokens -- while learned sharpness stays FLAT at 0.04 -> 0.09 -> 0.06, near real text's 0.01. So sharpness did not
+cost coherence, it BOUGHT it, and the shipped kernel is the one that drifts.
+The reason the inference sweep said otherwise is that it imposed a scale on weights trained at s=1, which is
+out-of-distribution damage rather than a property of sharp reading. A diffuse read averages hundreds of keys into
+a blur, and a blur is exactly what an attractor is made of; a sharp read stays anchored to specific content. I
+generalised from a single out-of-distribution probe to an architectural law, and it was wrong.
+### THE MODEL SPECIALISES ITS LAYERS, WHICH IS WHY THE KNOB WAS WORTH HAVING
+Arm B's learned per-layer s: **2.74 2.38 1.65 1.30 7.39 3.76 6.68 5.93 4.74 3.42**. It did not converge on one
+value -- it held L3 soft at 1.30 and pinned L4 at the 7.39 clamp. Arm C varies WITHIN a layer too (L8: p10 0.73,
+p90 7.39) while keeping L2 and L6 soft throughout (0.91, 0.94). This is the specialised-induction-head story
+arriving on its own, which is what the vision asks for: the model choosing its own structure, not a set schedule.
+### WHICH SHIPS
+**B, on the stated criterion of generation quality and coherence** -- best BPB, and flat repetition across 9000
+tokens. C is the better retrieval engine (+30% needle at d0, induction 10% vs 7%) and is the arm to take if
+retrieval becomes the priority; its extra freedom costs a little coherence, and its layers saturate the clamp,
+so a tighter clamp is the obvious thing to try before choosing it. B vs C on BPB (0.0075) is inside single-seed
+noise and should not decide anything.
+### WHAT IS STILL NOT FIXED
+Induction is 7-10% at L=64 against GPT-2's 22%, and ~0% at L=128+. That is expected and predicted: at DIN=16 the
+SECOND ceiling caps the matched key at 5.9% of the read at L=256. Sharpness lifted the 3:1 cap; DIN sets where the
+next one sits. The DIN sweep is running at arm B's setting, which is the only setting where it can measure anything.

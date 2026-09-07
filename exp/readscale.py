@@ -26,6 +26,7 @@ import torch._inductor.config as _ic; _ic.triton.prefer_nd_tiling=True; _ic.comp
 DEV=C.DEV; TOK=Tokenizer.from_file("/opt/code/membrae/data/bpe32k.json")
 V=32768; CH=2048; B=8; D=448; NL=10; DIN=16
 TPP=float(sys.argv[1]) if len(sys.argv)>1 else 30.0
+ARMS=(sys.argv[2] if len(sys.argv)>2 else "abc").lower()   # so a killed arm can be re-run without redoing the rest
 dm=DataMix(ctx=CH+1,verbose=False,lang_frac=0.70)
 np.random.seed(777); EV=[torch.tensor(dm.batch(2),device=DEV) for _ in range(8)]
 NAMES=["Aurelia","Kestrel","Vandermeer","Okonkwo","Thackeray","Zoravar","Lindqvist","Mbeki"]
@@ -138,6 +139,6 @@ def run(tag,learn,tokwise=False):
 
 print(f"LEARNED READ SHARPNESS vs THE FIXED 3:1 CEILING. {D}x{NL}L DIN{DIN} at {TPP:.0f} tok/param, "
       f"identical but for one scalar per layer.\n  GPT-2 124M reference: induction 22/18/4 % at L=64/128/256.\n",flush=True)
-run("A) FIXED s=1   -- the shipped kernel, capped at 3:1",False)
-run("B) LEARNED s   -- one scalar per layer, init s=1",True)
-run("C) PER-TOKEN s -- each token sets its own, so sharp reads and smooth prose need not compromise",False,tokwise=True)
+if "a" in ARMS: run("A) FIXED s=1   -- the shipped kernel, capped at 3:1",False)
+if "b" in ARMS: run("B) LEARNED s   -- one scalar per layer, init s=1",True)
+if "c" in ARMS: run("C) PER-TOKEN s -- each token sets its own, so sharp reads and smooth prose need not compromise",False,tokwise=True)
