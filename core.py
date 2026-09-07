@@ -173,7 +173,7 @@ class Layer(nn.Module):
             num,den,(newM,newz)=_sub_mix(qf,kf,v,L,state,sub)
             A=None
         else:
-            A,num,den,newM,newz=s._full_mix(qf,kf,v,L,state,wgate)
+            A,num,den,newM,newz=s._full_mix(qf,kf,v,L,state,wgate,xq,xk)
         den=den+1e-5
         r=num/den; o=r@s.Wo.weight.T+s.Wo.bias
         a1=a+s.rs*o
@@ -181,10 +181,28 @@ class Layer(nn.Module):
         a2=a1+s.rs*(g@s.m2.weight.T+s.m2.bias)
         return a2, (H,nrm,Hs,xk,kf,xq,qf,v,A,num,den,r,a1,H2,n2,z,g,(newM,newz))
 
-    def _full_mix(s,qf,kf,v,L,state,wgate):
+    def _full_mix(s,qf,kf,v,L,state,wgate,xq=None,xk=None):
         """the original quadratic form, kept intact as the reference path and the fallback"""
         cfg=s.cfg
-        A=torch.einsum('btf,bsf->bts',qf,kf)                   # retrieval weights beta_{t,s} = qf_t . kf_s
+        if xq is not None and getattr(cfg,'fast_read',True):
+            # IDENTITY, NOT AN APPROXIMATION. taylor(x) = [1, x, x(x)x], so for any two DIN-vectors
+            #     qf . kf = 1 + (xq.xk) + (xq.xk)^2
+            # The pairwise retrieval weight is a DIN-dim dot product and two flops. Expanding to FE = 1+DIN+DIN^2
+            # dims first and then contracting over FE does the SAME arithmetic DIN times over -- and it does it
+            # inside the only term that is quadratic in T, so it is exactly where the waste multiplies.
+            # The features are still built, but only for the STATE (read qf.M, write kf(x)v), which is LINEAR in T.
+            # Verified bit-comparable against the feature form; the win grows with DIN, which matters because
+            # selectivity saturates at DIN:1 and DIN is the next ceiling to lift.
+            # NUMERICS, measured not assumed. In bf16 this is very slightly LESS accurate than the feature form
+            # (1.20e-03 vs 1.03e-03 against an fp32 reference, = +1.7e-04 BPB on the 124M), because the FE-dim
+            # contraction it replaces accumulates inside the tensor core at fp32 and rounds once, whereas here c
+            # is rounded to bf16 before being squared. Promoting the polynomial to fp32 does NOT fix that -- c is
+            # already rounded by then -- and it costs half the speed (1.24x -> 1.07x), so it was reverted. The
+            # residual is 4x smaller than either form's own distance from fp32, and far below any threshold that
+            # decides anything here.
+            c=torch.einsum('btd,bsd->bts',xq,xk); A=1+c+c*c
+        else:
+            A=torch.einsum('btf,bsf->bts',qf,kf)               # retrieval weights beta_{t,s} = qf_t . kf_s
         if s.gated:
             # a per-token rate g_u becomes the pairwise factor exp(L_t - L_s) with L_t = sum_{u<=t} log g_u.
             # CLAMP at 0: the exponent is <=0 only for t>=s, and for t<s it overflows to inf BEFORE the causal
