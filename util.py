@@ -83,4 +83,5 @@ def cfg_from_ckpt(sd,T=2048,res_scale=16**-0.5):
     # sharpness. That is exactly how the stale head_scale above went unnoticed.
     cfg.qk_token_scale=sd.get('qk_token_scale', any(k.endswith('Wqs.weight') for k in w))
     cfg.qk_learn_scale=sd.get('qk_learn_scale', any(k.endswith('qk_ls') for k in w))
+    cfg.sel_write=sd.get('sel_write', any(k.endswith('Wsal.weight') for k in w))
     return cfg

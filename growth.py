@@ -72,6 +72,13 @@ def grow_width(m,add):
                 ng.weight[:,:D]=L.Wg.weight/c; ng.weight[:,D:]=0.0    # new dims contribute nothing yet
                 ng.bias.copy_(L.Wg.bias)                              # keep the learned forget rate exactly
                 L.Wg=ng
+            if getattr(L,'sel',False):
+                # SELECTIVE WRITE reads the residual stream, so it is a READER: /c with new dims at zero. Missing
+                # exactly this for Wg is what crashed run 4 at its first growth.
+                nw=nn.Linear(nD,1).to(DEV)
+                nw.weight[:,:D]=L.Wsal.weight/c; nw.weight[:,D:]=0.0
+                nw.bias.copy_(L.Wsal.bias)                            # keep the learned write policy exactly
+                L.Wsal=nw
             if getattr(L,'qk_tok',False):
                 # READ SHARPNESS reads the residual stream too, so it is a READER and takes /c with new dims at
                 # zero -- the same shape of bug that crashed run 4 when Wg was missed here.

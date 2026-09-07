@@ -3180,3 +3180,30 @@ so it could not be re-checked. Had I trusted it I would have shipped the weaker 
 `train124f.py`: infant 35.0M (D448x10L DIN16) -> 64.7M -> **125.0M (D832x14L DIN32, FE=1057)**, growth on the
 model's own saturation signal at a 22 tok/param floor, 73 tok/param total = 9.1B tokens, matching GPT-2 124M on
 BOTH axes. State 47 MiB/seq at final size. No carried-state training: measured to cost +0.11 BPB and buy nothing.
+
+## SELECTIVE WRITING: PREDICTION FALSIFIED, CHANGE KEPT ANYWAY
+I predicted before running it that if interference set the horizon, writing selectively would let the learned
+forget half-life GROW past ~1900 and the needle survive past d=2000.
+| arm (24.5M) | BPB | gate half-life | d=0 | d=200 | d=2000 | d=8000 | d=30000 |
+|---|---|---|---|---|---|---|---|
+| A) write everything | 1.1820 | 1848 tok | +3.080+-0.300 | +0.428+-0.042 | +0.006 | -0.003 | +0.004 |
+| B) selective write | **1.1695** | **1824 tok** | **+3.464+-0.236** | **+0.580+-0.053** | +0.011 | -0.002 | -0.005 |
+learned write strength per layer: 0.80\|92%  0.62\|88%  0.16\|0%  0.25\|7%  0.19\|6%  0.35\|21%  0.19\|8%  0.35\|29%
+**The half-life did not move (1824 vs 1848) and d=2000 is still zero.** The model genuinely became selective --
+layers 2-7 write only 0-29% of tokens -- and the horizon did not budge. **The interference hypothesis is dead.**
+It ships anyway on its own merits: **-0.0125 BPB and +36% needle lift at d=200** (2.2 sigma).
+### WHERE THE HORIZON ACTUALLY COMES FROM -- THE REMAINING HYPOTHESIS
+Not interference, not training context, not capacity. The likeliest remaining cause is **credit assignment**:
+every long-context path in this codebase DETACHES the state at chunk boundaries, including horizon.py's carried
+arm. So no gradient has ever connected a write at token t to a read at token t+3000, and the model has never
+received a learning signal for retention beyond one 2048-token chunk. A half-life of ~1850 is almost exactly the
+point where the oldest token in a 2048 window has decayed by half -- the model is optimising precisely the range
+it can see. Testing this needs truncated BPTT across 2-4 chunks (gradient flowing through the carried state), which
+is a TRAINING method and orthogonal to the architecture, so it can be tested while the flagship trains and applied
+in a second run without redoing this one.
+
+## FLAGSHIP LAUNCHED
+`train124f.py`, 35.0M -> 64.7M -> 125.0M (D832x14L DIN32), learned per-layer sharpness + selective writing,
+9.1B tokens at 73 tok/param. Matches GPT-2 124M on parameters AND tokens. Growth is function-preserving with both
+new flags (verified 2.3e-07 width, exact for depth and DIN). Early throughput 216 ktok/s and climbing against the
+previous run's 115 ktok/s average -- the read identity is paying for the larger DIN.

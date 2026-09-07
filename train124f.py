@@ -70,6 +70,10 @@ def build():
     cfg = C.Config(D=D, DIN=DIN, DV=D, NL=NL, T=CH, res_scale=TARGET_NL ** -0.5, tie_emb=True)
     cfg.gated = True; cfg.qknorm = True
     cfg.qk_learn_scale = True          # the fix; init s=1 so the infant starts identical to the old model
+    cfg.sel_write = True               # the vision's propose gate, which had never once run under gated=True.
+                                       # It does NOT extend the horizon (measured: half-life 1824 vs 1848, and
+                                       # d=2000 unmoved), so that hypothesis is dead -- but it is worth -0.0125
+                                       # BPB and +36% needle lift at d=200, so it ships on its own merits.
     return C.Core(cfg).to(DEV), cfg
 
 
@@ -141,7 +145,7 @@ def main():
             kind, amt = PLAN[k]; earned = tokens_at_size / P()
             torch.save({'model': m.state_dict(), 'step': it + 1, 'k': k, 'D': m.cfg.D, 'NL': m.cfg.NL,
                         'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': m.cfg.head_scale, 'D0': D,
-                        'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'res_scale': m.cfg.res_scale},
+                        'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'sel_write': True, 'res_scale': m.cfg.res_scale},
                        f"{CKPT[:-3]}_before_grow{k+1}.pt")
             G.grow_width(m, amt[0]); G.grow_depth(m, amt[1]); G.grow_din(m, amt[2])
             k += 1; tokens_at_size = 0
@@ -165,7 +169,7 @@ def main():
         if (it + 1) % SAVE_EVERY == 0:
             torch.save({'model': m.state_dict(), 'opt': opt.state_dict(), 'step': it + 1,
                         'D': m.cfg.D, 'NL': m.cfg.NL, 'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': m.cfg.head_scale, 'D0': D,
-                        'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'res_scale': m.cfg.res_scale,
+                        'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'sel_write': True, 'res_scale': m.cfg.res_scale,
                         'k': k, 'tokens_at_size': tokens_at_size}, CKPT)
         if (it + 1) % EVAL_EVERY == 0:
             b = bpb(m, m.cfg)
@@ -173,7 +177,7 @@ def main():
                       f"| BPB {b:.4f} | GPT-2 0.9335 | {'AHEAD' if b < 0.9335 else 'behind'}")
     torch.save({'model': m.state_dict(), 'opt': opt.state_dict(), 'step': STEPS,
                 'D': m.cfg.D, 'NL': m.cfg.NL, 'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': m.cfg.head_scale, 'D0': D,
-                'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'res_scale': m.cfg.res_scale,
+                'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'sel_write': True, 'res_scale': m.cfg.res_scale,
                         'k': k, 'tokens_at_size': tokens_at_size}, CKPT)
     print(f"\nDONE: {STEPS*B*CH/1e9:.2f}B tokens, final BPB {bpb(m, m.cfg):.4f}  (GPT-2 0.9335)", flush=True)
 
