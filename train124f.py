@@ -31,7 +31,8 @@ The memory faculty is NOT abandoned -- carried-state training is a short fine-tu
 so the +0.126 is paid once at the end rather than across all 9B tokens.
 
   python train124.py            # train, resuming automatically
-  BPB is logged every EVAL_EVERY steps so progress is visible against GPT-2's 0.9335.
+  BPB is logged every EVAL_EVERY steps. It uses 2048-token windows, so it is a RUN-TO-RUN metric,
+  not a GPT-2 comparison -- GPT-2 cannot exceed 1024 context. exp/gpt2_bpb.py does that comparison fairly.
 """
 import sys, os, time, math
 sys.path.insert(0, "/opt/code/membrae")
@@ -79,7 +80,9 @@ def build():
 
 @torch.no_grad()
 def bpb(m, cfg):
-    """tokenizer-independent, so it is directly comparable to GPT-2's 0.9335 on this same text"""
+    """tokenizer-independent, so it compares RUNS to each other. NOT a GPT-2 comparison: this scores
+    2048-token windows, whose later positions have up to 2047 tokens of context, while GPT-2 can never exceed
+    1023 -- and later positions are easier. See exp/gpt2_bpb.py, which matches context and domain."""
     m.eval(); nats = 0.0; nb = 0
     for X in EV:
         with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -120,7 +123,8 @@ def main():
     print(f"PRAGNOSIA-124 GROWN: infant D{D}x{NL}L DIN{DIN} = {P()/1e6:.1f}M -> 124.8M  (GPT-2: 124M)\n"
           f"  budget {TPP:.0f} tok/param of the ENDPOINT = {TPP*P_FINAL/1e9:.2f}B tokens = {STEPS} steps\n"
           f"  plain loop: no carried state, no recall batches, single cosine at LR {LR}\n"
-          f"  target: GPT-2 small scores BPB 0.9335 on this eval set", flush=True)
+          f"  NOTE: this BPB uses 2048-token windows. It tracks progress and compares runs to each other,\n"
+          f"  but it is NOT comparable to GPT-2, which is capped at 1024 context -- use exp/gpt2_bpb.py for that.", flush=True)
 
     t0 = time.time(); ema = None
     bar = pbar(range(step, STEPS), "p124f", total=STEPS - step)
@@ -174,12 +178,12 @@ def main():
         if (it + 1) % EVAL_EVERY == 0:
             b = bpb(m, m.cfg)
             bar.write(f"    step {it+1} | {(it+1)*B*CH/1e9:.2f}B tokens | {(it+1)*B*CH/P_FINAL:.1f} tok/param "
-                      f"| BPB {b:.4f} | GPT-2 0.9335 | {'AHEAD' if b < 0.9335 else 'behind'}")
+                      f"| BPB {b:.4f} | (our 2048-ctx metric; see exp/gpt2_bpb.py for the fair GPT-2 comparison)")
     torch.save({'model': m.state_dict(), 'opt': opt.state_dict(), 'step': STEPS,
                 'D': m.cfg.D, 'NL': m.cfg.NL, 'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': m.cfg.head_scale, 'D0': D,
                 'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'sel_write': True, 'res_scale': m.cfg.res_scale,
                         'k': k, 'tokens_at_size': tokens_at_size}, CKPT)
-    print(f"\nDONE: {STEPS*B*CH/1e9:.2f}B tokens, final BPB {bpb(m, m.cfg):.4f}  (GPT-2 0.9335)", flush=True)
+    print(f"\nDONE: {STEPS*B*CH/1e9:.2f}B tokens, final BPB {bpb(m, m.cfg):.4f}  (2048-ctx metric, not a GPT-2 comparison)", flush=True)
 
 
 if __name__ == "__main__":

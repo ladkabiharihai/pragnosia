@@ -87,7 +87,8 @@ def main():
     fwd = torch.compile(m)
     print(f"PRAGNOSIA-400  |  {P/1e6:.1f}M, budget {TPP:.0f} tok/param = {TPP*P/1e9:.2f}B tokens = {STEPS} steps\n"
           f"  grown from the FINISHED 124M, which keeps its GPT-2-matched claim intact\n"
-          f"  target: GPT-2 small scores BPB 0.9335 on this eval set", flush=True)
+          f"  NOTE: this BPB uses 2048-token windows. It tracks progress and compares runs to each other,\n"
+          f"  but it is NOT comparable to GPT-2, which is capped at 1024 context -- use exp/gpt2_bpb.py for that.", flush=True)
 
     t0 = time.time(); ema = None
     bar = pbar(range(step, STEPS), "p400f", total=STEPS - step)
@@ -116,13 +117,13 @@ def main():
         if (it + 1) % EVAL_EVERY == 0:
             b = bpb(m)
             bar.write(f"    step {it+1} | {(it+1)*B*CH/1e9:.2f}B tokens | {(it+1)*B*CH/P:.1f} tok/param "
-                      f"| BPB {b:.4f} | GPT-2 0.9335 | {'AHEAD' if b < 0.9335 else 'behind'}")
+                      f"| BPB {b:.4f} | (our 2048-ctx metric; see exp/gpt2_bpb.py for the fair GPT-2 comparison)")
     torch.save({'model': m.state_dict(), 'opt': opt.state_dict(), 'step': STEPS,
                 'D': m.cfg.D, 'NL': m.cfg.NL, 'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True,
                 'head_scale': m.cfg.head_scale, 'D0': sd['D0'] if 'D0' in sd else 448,
                 'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'sel_write': True,
                 'res_scale': m.cfg.res_scale, 'k': 3}, CKPT)
-    print(f"\nDONE: {STEPS*B*CH/1e9:.2f}B tokens, final BPB {bpb(m):.4f}  (GPT-2 0.9335)", flush=True)
+    print(f"\nDONE: {STEPS*B*CH/1e9:.2f}B tokens, final BPB {bpb(m):.4f}  (2048-ctx metric, not a GPT-2 comparison)", flush=True)
 
 
 if __name__ == "__main__":
