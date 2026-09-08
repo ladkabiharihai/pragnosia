@@ -234,6 +234,48 @@ this design.)
   2nd-layer zero-init), feat/state (GroupFeatNorm). The growth mechanism demonstrably ran (grew 37M -> 109M across 5
   intrinsic grows). Mechanism sound; the RECIPE was the problem (see next).
 
+## 5b. PROVEN SINCE 2026-09-05 (measured on the 125M; see PROGRESS.md for the runs)
+- **The retrieval kernel had a hard 3:1 selectivity ceiling, and lifting it is worth ~8x on induction.** qk-norm
+  makes |xq|=|xk|=1, so `A = qf.kf = 1 + c + c^2` with c the cosine -- a perfect key match scores 3, an orthogonal
+  one scores 1, whatever Wq/Wk learn. At L=256 the right key got 1.2% of the read. A LEARNED per-layer scale lifts
+  it: induction 0.7% -> 7.0%, BPB -0.052, and generation repetition IMPROVED (0.38 -> 0.05 across 9k tokens).
+- **Selectivity then saturates at DIN:1**, and at s=1 DIN buys NOTHING (1.0% of the read at DIN=8, 1.2% at
+  DIN=128). So `grow_din` had been widening a dimension that could not affect the read. DIN 16 -> 32 is worth
+  +73% needle lift ONCE sharpness is on.
+- **`A = qf.kf = 1 + (xq.xk) + (xq.xk)^2` is an identity**, so the pairwise read never needs the FE-dim features.
+  Makes the read cost independent of DIN: 2.36x faster at DIN=64. This is what makes large DIN affordable.
+- **The retrieval horizon (~2000 tokens) is ARCHITECTURAL.** Not training context: training on 16k documents with
+  the state carried does not move it (+0.11 BPB, no gain past d=0). Not interference: selective writing made the
+  model genuinely sparse and the learned half-life did not move (1824 vs 1848). Remaining hypothesis is CREDIT
+  ASSIGNMENT -- every long-context path detaches the state at chunk boundaries, so no gradient has ever connected
+  a write at t to a read at t+3000, and a half-life of ~1850 is exactly where the oldest token in a 2048 window
+  has decayed by half. UNTESTED (the BPTT run was killed for prod safety).
+- **BPB structurally cannot reward unbounded context.** Scoring the same 512 tokens while varying only preceding
+  context, our BPB moves 0.004 across a 30x range -- but GPT-2's own curve is nearly as flat (0.017 from 64 to
+  768). Next-token prediction is overwhelmingly LOCAL for every model. We are measured on the one axis where this
+  architecture's advantage is invisible by construction. **Judge long context by retrieval and by cost, not BPB.**
+- **Honest standing vs baselines** (fair protocol: same text, same 1024 context, same bytes):
+  | model | params | train tokens | BPB (our mix) |
+  |---|---|---|---|
+  | PRAGNOSIA | 125M | **9.1B** | 1.0833 |
+  | GPT-2 | 124M | ~9B | 1.0910 |
+  | Pythia | 160M | 300B | 1.2113 |
+  | SmolLM2 | 135M | 2T | 0.8854 |
+  We BEAT Pythia-160M with **33x fewer tokens**, and beat GPT-2 at matched budget on our mix; we are behind the
+  2T+ token models and behind GPT-2 on pure web text. The claim is TOKEN EFFICIENCY, not absolute capability.
+- **Base-model ceiling is real and not a size problem.** GPT-2 at 774M -- 6x our 125M -- still scores 2/5 on
+  facts, 0/4 on arithmetic and cannot complete a syllogism. Q&A needs instruction tuning, not parameters.
+
+## 5c. TRAINING-EFFICIENCY FINDINGS (0b2 is a design constraint, so these are first-class)
+- `torch.compile` is worth **2.24x** and is on. Fused Adam is worth a further **9.0%** (the optimizer was 13.9%
+  of a compiled step). Both applied.
+- REJECTED on measurement: the sub-chunked linear-memory path (slower at T=2048 -- the [B,T,T] tensor is 17 MiB
+  against 7 GiB of activations, so it is not the bottleneck until 16k+ context); pinned async H2D (the copy is
+  0.9 ms, under 1% of a step); foreach gradient clipping (worse).
+- After compile + fused Adam, matmuls are 36% of a step. Kernel-level engineering is near its floor; the
+  remaining large wins must come from the OBJECTIVE and the DATA, not from faster kernels -- which is consistent
+  with 5's finding that faculties are unlocked by the objective, not the architecture.
+
 ## 6. Negative results and lessons (do not repeat blindly)
 - **Sparse MoE at ~136M active is over-determined failure** (below the scale it pays off; experts too small; top-1
   with identical upcycled experts collapses; upcycling needs 100B+ tokens). DROPPED. Dense is the path.
