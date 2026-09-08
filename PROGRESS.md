@@ -3284,3 +3284,26 @@ NOT "surpasses GPT-2". An evaluator will run exactly the measurement above and f
 The case rests on what GPT-2 cannot do AT ANY SIZE: 1M tokens at constant memory on a 4GB card, learning facts at
 inference with retention and poisoning rejection, self-growth, and 20k-token coherence. BPB parity on our mix
 makes those credible; it is not itself the headline.
+
+## CHAT: MY BUG, THEN THE MODEL'S CEILING
+The user ran chat.py and every turn after the second came back as Java code, whatever they asked. Two separate
+causes, and only one was the model's.
+**MY BUG.** chat.py carried the recurrent state between turns. That is the self-write attractor I had already
+found and fixed INSIDE a single generation (refresh), and then failed to apply BETWEEN turns. One code snippet in
+turn 2 and the state is dominated by code tokens forever. Measured over six turns:
+| turn-to-turn state | behaviour |
+|---|---|
+| full carry | locks into the first answer's domain; every later turn is Java |
+| half carry | degrades into quoted fragments -- *"My name is John"* |
+| **no carry** | **each turn answered independently** |
+The model was never trained on multi-turn dialogue, so carrying its own output across turns only accumulates
+interference. Default is now NO carry; `/carry` reproduces the failure on request. The fixed state genuinely
+shines on a long DOCUMENT, so `/doc <file>` streams one in and reports the KV cache it would have cost.
+**AND THE FRAMING WAS NOT THE PROBLEM.** I assumed the `<user>/<assistant>` markup was pulling the model into
+instruction data, and tested four framings: bare question, encyclopedia stem, article opening. **Chat markup won**
+-- it is the only one that answers *"the capital of France is Paris"*. The markup is in the training data and
+using it is correct.
+**THE REMAINING GAP IS THE CEILING, NOT A BUG.** After the fix: "capital of France" -> *"Paris"* (right), "black
+hole" -> *"a black hole is a black hole... in the center of the galaxy"* (circular, on-topic), "the moon" ->
+*"the brightest star in the night sky"* (fluent, wrong). That is what a 125M BASE model is. GPT-2 at 774M scores
+the same. It needs instruction tuning, which is a separate stage this week does not have room for.

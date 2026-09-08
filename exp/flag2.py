@@ -26,7 +26,7 @@ from tokenizers import Tokenizer
 DEV = C.DEV
 TOK = Tokenizer.from_file("/opt/code/membrae/data/bpe32k.json")
 CH = 2048
-CKPT = "/mnt/kv_cache/pragnosia_data/p124g.pt"
+CKPT = "/mnt/kv_cache/pragnosia_data/p124f.pt"
 
 sd = torch.load(CKPT, map_location=DEV)
 cfg = cfg_from_ckpt(sd, T=CH, res_scale=sd['res_scale'])
