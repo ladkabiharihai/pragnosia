@@ -3414,3 +3414,25 @@ scalars (0.1M) stay on Adam.
 Caveat worth keeping: this is a known method tuned on transformers, and ours is a recurrent linear-attention model
 with a fixed state, learned read sharpness and a selective-write gate. It transferred anyway. It should be
 re-confirmed at 125M before it goes into a flagship run, since a small-scale optimiser win is not guaranteed to hold.
+
+## MUON WINS FROM SCRATCH AND LOSES ON A WARM START -- AND THE WARM START ITSELF IS THE REAL FINDING
+| test | result |
+|---|---|
+| 24.5M, FROM SCRATCH, matched steps | Adam 1.2125, **Muon 1.1350** (-0.0774, 1.11x wall-clock). Muon at 100M tokens beats Adam at 175M: **~1.75x fewer tokens** |
+| 125M, WARM START from the finished flagship | Adam 0.9477 -> 0.9559, **Muon 0.9477 -> ~1.03** (killed at 112M: 1.0487 and decelerating) |
+**Muon does not survive an optimiser switch on a converged model**, at least at the LR carried over from the
+from-scratch run. That is a confound I could not separate in the time available -- Muon's LR scale differs from
+Adam's and 0.01 is plainly too hot for a warm start -- so the honest statement is "Muon at this LR loses on a warm
+start", not "Muon does not transfer". As a from-scratch optimiser the 24.5M win stands and is large.
+### THE BIGGER FINDING, WHICH IS NOT ABOUT THE OPTIMISER
+**Adam's own warm-start continuation ended WORSE than it began: 0.9477 -> 0.9559 (+0.0081), and 300M tokens did
+not recover it.** BPB jumped to 0.9699 in the first 37M and clawed back only two thirds of that. The finished 125M
+was ANNEALED -- its cosine ended at low LR in a converged basin -- and restarting at 3e-4 with fresh warmup knocks
+it out of that basin.
+This explains something already observed and mis-attributed: **the 400M continuation's BPB went 0.9212 -> 1.0120**
+and I read it as new capacity settling in. Part of it is that; part of it is simply the cost of restarting a
+converged model at a high LR. The 400M runs at 6e-4, twice what was tested here.
+### DECISION
+**Resume the flagship on Adam. Do not restart it with Muon.** The 1.75x from-scratch win does not apply to a
+continuation, and switching would cost the 28k steps already banked for a change measured to be worse. Muon is a
+finding for the NEXT model trained from scratch, where it is worth ~1.75x -- and that is where it should be used.

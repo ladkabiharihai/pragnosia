@@ -26,7 +26,9 @@ TPP=float(sys.argv[1]) if len(sys.argv)>1 else 10.0
 dm=DataMix(ctx=CH+1,verbose=False,lang_frac=0.70)
 np.random.seed(777); EV=[torch.tensor(dm.batch(2),device=DEV) for _ in range(8)]
 
-def zeropower_ns(G,steps=5):
+from muon_opt import zeropower_ns, Muon
+
+def _unused_zeropower_ns(G,steps=5):
     """Newton-Schulz iteration for the orthogonal factor of G. Quintic, runs in bf16, no inverse, no SVD."""
     a,b,c=(3.4445,-4.7750,2.0315)
     X=G.bfloat16()
