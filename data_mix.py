@@ -21,7 +21,8 @@ CAP={"finemath":0.05,"openmath":0.03,"numina":0.01,"opencode":0.03,"evolcode":0.
 LANGUAGE=("window2","dclm")
 REASONING=("finemath","openmath","opencode","numina","evolcode","glaive","magicoder","hermes","tulu3")
 class DataMix:
-    def __init__(s, ctx=64, min_tok=2_000_000, exclude=("recall",), verbose=True, only=None, lang_frac=None):
+    def __init__(s, ctx=64, min_tok=2_000_000, exclude=("recall",), verbose=True, only=None, lang_frac=None,
+                 override=None):
         s.ctx=ctx; s.bins=[]; s.names=[]; sizes=[]
         for f in sorted(glob.glob(f"{DATADIR}/*_32k.bin")):
             nm=re.sub(r'_32k\.bin$','',os.path.basename(f))
@@ -37,6 +38,14 @@ class DataMix:
                 if k in nm: w[i]=max(w[i],fl)
             for k,cp in CAP.items():
                 if k in nm: w[i]=min(w[i],cp)
+        # OVERRIDE: force a corpus to a fixed sampling weight. The weights below (sqrt-size, floors, caps) were
+        # set once while the architecture was being debugged and never revisited -- window2 carries 39.9% of the
+        # sampling weight and is 10.5% synthetic template boilerplate, which is verbatim what leaks into our
+        # generations as <assistant> tags and "Answer: entailment". This makes the mix testable instead of assumed.
+        if override:
+            for k,val in override.items():
+                for i,nm in enumerate(s.names):
+                    if k in nm: w[i]=val
         if lang_frac is not None:
             li=[i for i,n in enumerate(s.names) if any(k in n for k in LANGUAGE)]
             ri=[i for i,n in enumerate(s.names) if any(k in n for k in REASONING)]
@@ -47,6 +56,11 @@ class DataMix:
             nw[li]=w[li]/w[li].sum()*lang_frac            # sqrt-size split WITHIN each group, then scaled
             nw[ri]=w[ri]/w[ri].sum()*(1.0-lang_frac)
             w=nw
+        if override and lang_frac is not None:            # re-apply after the group rescale, then renormalise
+            for k,val in override.items():
+                for i,nm in enumerate(s.names):
+                    if k in nm: w[i]=val
+            w=w/w.sum()
         s.w=w/w.sum(); s.sizes=sizes; s.lang_frac=lang_frac
         if verbose:
             lf="" if lang_frac is None else f", language {lang_frac:.0%} / reasoning {1-lang_frac:.0%}"

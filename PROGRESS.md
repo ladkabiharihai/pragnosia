@@ -3397,3 +3397,20 @@ Ruled out: token-level loss selection as a training-efficiency lever. The remain
 that change what data is SEEN rather than which tokens are scored (curriculum, active data selection at the
 document level, where the forward can genuinely be skipped), and the training-method question the horizon result
 left open: truncated BPTT for credit assignment past a chunk.
+
+## MUON: THE FIRST REAL TRAINING-EFFICIENCY WIN
+Everything before this shaved the COST OF A STEP (compile 2.24x, fused Adam 9%). This shortens the RUN.
+| optimizer (24.5M, matched steps, 250M tokens) | BPB | wall-clock |
+|---|---|---|
+| Adam (fused, current) | 1.2125 | 9.7 min |
+| **Muon on 2D params + Adam on the rest** | **1.1350** | 10.8 min |
+**-0.0774 BPB at 1.11x wall-clock.** At matched tokens it wins at every checkpoint (-0.063 at 25M, -0.077 at 50M,
+-0.074 at 75M, -0.065 at 100M), and **Muon at 100M tokens beats Adam at 175M** -- roughly **1.75x fewer tokens for
+the same loss**, netting ~1.6x after the 11% per-step cost.
+Why it should work here: Adam treats every weight as an independent scalar and ignores that a weight MATRIX has
+structure. Muon orthogonalises the momentum of 2D parameters (Newton-Schulz, bf16, no inverse or SVD), which stops
+updates collapsing into a few dominant directions. 49 matrices (24.6M params) get Muon; the 65 biases, norms and
+scalars (0.1M) stay on Adam.
+Caveat worth keeping: this is a known method tuned on transformers, and ours is a recurrent linear-attention model
+with a fixed state, learned read sharpness and a selective-write gate. It transferred anyway. It should be
+re-confirmed at 125M before it goes into a flagship run, since a small-scale optimiser win is not guaranteed to hold.
