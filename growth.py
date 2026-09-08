@@ -180,12 +180,12 @@ class SaturationSensor:
     about its own outputs). Criterion is NOISE-RELATIVE, not a magic threshold: fit the slope of that entropy over a
     window and compare it to the slope's own standard error. If the entropy is no longer falling faster than its own
     noise, the model has extracted what it can at this capacity -- it is saturated, and it asks to grow."""
-    def __init__(s,window=400,t_stat=1.0,min_gap=2000,floor_tokens=0,ema=0.02):
+    def __init__(s,window=400,t_stat=1.0,min_gap=2000,floor_tokens=0,ema=0.02,consec=3):
         # window/ema matter: with a short window on the RAW signal the test shows the sensor fires on NOISE
         # (an improving-but-noisy trace looks saturated), which turns "intrinsic growth" into a hidden schedule.
         # Smoothing the signal and lengthening the window makes it discriminate correctly.
         s.w=window; s.t=t_stat; s.min_gap=min_gap; s.hist=[]; s.last=0; s.floor=floor_tokens
-        s.ema_a=ema; s.ema=None
+        s.ema_a=ema; s.ema=None; s.consec=consec; s.nsat=0
     @staticmethod
     @torch.no_grad()
     def entropy(logits,sample=4096):
@@ -194,6 +194,26 @@ class SaturationSensor:
         idx=torch.randint(0,f.shape[0],(min(sample,f.shape[0]),),device=f.device)
         p=f[idx].float().softmax(-1)
         return float(-(p*(p+1e-9).log()).sum(-1).mean())
+    def verdict(s):
+        """The sensor's OWN opinion, independent of any external floor: (saturated?, t-statistic).
+        Exposed separately because growth firing on the FIRST step a floor permits it means the FLOOR decided,
+        not the sensor -- and that is the difference between intrinsic growth and a hidden schedule. Measured:
+        growth #1 fired at step 46,947 against a floor of exactly 46,947, so the sensor was rubber-stamping.
+        This makes that visible instead of inferable."""
+        if len(s.hist)<s.w: return None,None
+        y=np.asarray(s.hist,dtype=np.float64); x=np.arange(len(y),dtype=np.float64)
+        n=len(y); sx=x-x.mean(); slope=float((sx*(y-y.mean())).sum()/(sx**2).sum())
+        resid=y-(y.mean()+slope*sx); se=float(np.sqrt((resid**2).sum()/max(1,n-2)/(sx**2).sum()))
+        if se<=0: return None,None
+        t=(-slope)/se
+        # SATURATED MEANS FLAT, NOT MERELY 'NOT FALLING'. The old test was `t <= t_stat`, which classifies a
+        # RISING entropy as saturated -- and entropy always rises right after a growth, because new capacity
+        # perturbs the model. Measured: it fired at 0.9 and 0.1 tok/param with t=-15.44, i.e. entropy climbing
+        # steeply, which is disruption and the opposite of convergence. Requiring |t| <= t_stat means the slope
+        # must be indistinguishable from zero: falling (t>0) is still improving, rising (t<0) is still settling,
+        # and only flat is saturated.
+        return (abs(t) <= s.t), t
+
     def observe(s,ent,step,tokens_seen=0):
         s.ema=ent if s.ema is None else (1-s.ema_a)*s.ema+s.ema_a*ent      # smooth first: raw entropy is too noisy
         s.hist.append(s.ema)
@@ -204,6 +224,18 @@ class SaturationSensor:
         resid=y-(y.mean()+slope*sx); se=float(np.sqrt((resid**2).sum()/max(1,n-2)/(sx**2).sum()))
         if se<=0: return False
         still_improving = (-slope)/se > s.t                      # is entropy falling faster than its own noise?
-        if not still_improving:
-            s.last=step; s.hist=[]; return True                  # SATURATED -> the model asks to grow
+        # same criterion as verdict(): flat, not merely not-falling
+        t=(-slope)/se
+        if abs(t) <= s.t:
+            s.nsat += 1
+            # REQUIRE SUSTAINED FLATNESS. One window can look flat while the model is mid-transient; asking for
+            # `consec` consecutive flat windows is what separates converged from momentarily quiet.
+            if s.nsat >= s.consec:
+                s.last=step; s.hist=[]; s.nsat=0; return True    # SATURATED -> the model asks to grow
+        else:
+            s.nsat = 0
         return False
+
+    def reset(s):
+        """Call after a growth. The window would otherwise straddle the event and mix two different models."""
+        s.hist=[]; s.ema=None; s.nsat=0

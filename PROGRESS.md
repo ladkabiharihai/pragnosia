@@ -3479,3 +3479,34 @@ The measurement was correct; my reading of it at the halfway point was not.
 ### THE RULE THIS ESTABLISHES
 Any BPB claim below **0.012** between single-seed runs is not a result. Either run 3+ seeds or do not claim it.
 That retires the phrase "inside plausible noise", which I used all day without having measured plausible.
+
+## THE SATURATION SENSOR WAS BROKEN: "INTRINSIC GROWTH" WAS THE FLOOR ALL ALONG
+The user asked why growth fired at *exactly* 22 tok/param. It did -- step 46,947 against a floor of 46,947, on the
+first step it was permitted. Adding a `verdict()` that reports the sensor's opinion INDEPENDENTLY of the floor
+showed why:
+```
+[sensor] SATURATED at step 50400 = 0.9 tok/param (t=-15.44); floor opens at 22 tok/param
+>>> SELF-GREW #2 at step 133857 (earned 22.0 tok/param, floor 22)
+    DECIDED BY: the FLOOR -- sensor saturated at 0.9 tok/param, growth waited until 22.0
+```
+**The sensor declared saturation at 0.9 and 0.1 tok/param -- immediately after each growth.** t=-15.44 means
+entropy was RISING steeply, which is the growth transient, and the criterion `t <= t_stat` classified "not falling"
+as "converged". So the sensor fired on disruption, the hand-set floor decided every rung, and **VISION 0a's "the
+model decides WHEN to grow" was not true as implemented** -- every prior run's "SELF-GREW ... earned 22 tok/param"
+was the floor firing with the sensor rubber-stamping it.
+### THE FIX
+1. **Saturated means FLAT, not merely not-falling**: `abs(t) <= t_stat`. Falling (t>0) is still learning; rising
+   (t<0) is still settling; only a slope indistinguishable from zero is convergence.
+2. **Sustained**: `consec=3` consecutive flat windows, so one quiet window mid-transient does not count.
+3. **`reset()` after every growth**, or the 400-step window straddles the event and mixes two different models.
+Validated on synthetic traces before touching the run:
+| trace | fires at | correct? |
+|---|---|---|
+| falling (still learning) | never | yes |
+| **rising (post-growth transient)** | **never** | **yes -- this was the bug** |
+| flat (genuinely saturated) | 654 | yes |
+| falls to 900 then flat | 1665 | yes, after the plateau |
+| rises 300 steps then flat | 921 | yes, waits out the transient |
+Growth now requires BOTH the floor open AND genuine saturation, and the log states which one decided at every
+event. If the sensor now fires later than the floor, growth is genuinely intrinsic; if it still fires at the
+floor, the log will say so rather than implying otherwise.
