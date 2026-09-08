@@ -12,7 +12,8 @@ D832x14L DIN32 (125.0M) -> D1408x18L DIN40 (405.2M). DIN goes 32 -> 40 in the sa
 saturates at DIN:1, so the read ceiling rises with the model instead of staying behind it.
 Compute: 400M at 22 tok/param is 8.9B tokens = 2.1e19 flops, ~3x the 124M's 6.8e18.
 
-  python train400f.py            # resumes automatically
+  python train400f.py                        # resumes automatically; WSD, no fixed endpoint
+  touch /mnt/kv_cache/pragnosia_data/p400f_DECAY_NOW   # finish early: anneals, saves, stops cleanly
 """
 import sys, os, time, math
 sys.path.insert(0, "/opt/code/membrae")
@@ -28,13 +29,29 @@ import torch._inductor.config as _ic; _ic.triton.prefer_nd_tiling = True; _ic.co
 DEV = C.DEV
 TOK = Tokenizer.from_file("/opt/code/membrae/data/bpe32k.json")
 V = 32768
-GROW = (576, 4, 8)                            # D832x14L DIN32 -> D1408x18L DIN40 = 405.2M
+# INCREMENTAL, SENSOR-DRIVEN GROWTH -- not one hand-specified jump.
+# The vision (0a) says growth must be intrinsic: the model decides WHEN from its own predictive entropy, and the
+# 22 tok/param floor only decides when it is ALLOWED to. A single manual grow of +576 width is a schedule, not a
+# decision, so this climbs a ladder instead and lets the SaturationSensor fire each step.
+# The ladder is 3 steps rather than 4 because of the clock: each rung must earn 22 tok/param before the next, and
+# a 4-rung ladder costs 69 GPU-hours to climb before the 405M trains at all, which is the entire remaining budget.
+PLAN = [(160, 2, 0),      # D832x14L DIN32 125.0M -> D992x16L DIN32 ~190M
+        (192, 1, 8),      # -> D1184x17L DIN40 ~285M
+        (224, 1, 0)]      # -> D1408x18L DIN40  405.2M
+TOK_PER_PARAM_GATE = 22.0
 SRC = "/mnt/kv_cache/pragnosia_data/p124f.pt"
 CKPT = "/mnt/kv_cache/pragnosia_data/p400f.pt"
 CH = 2048
 B = int(os.environ.get("B", "8"))
 LR = float(os.environ.get("LR", "6e-4"))      # lower than the 124M's 1e-3: this resumes a converged model
-TPP = float(os.environ.get("TPP", "22"))      # the earned floor; raise if time allows
+TPP = float(os.environ.get("TPP", "73"))      # matched to the 125M's budget; WSD lets us stop anywhere
+# WSD (warmup-stable-decay) instead of cosine, so the run is NOT committed to a token budget in advance.
+# Cosine bakes the endpoint into the schedule: stop early and you stop mid-schedule at a high LR, with a model
+# that was never annealed, which wastes the run. WSD holds LR flat and anneals only at the end, so the budget can
+# be decided by the clock rather than guessed now. To finish early, write the file below and it starts the decay
+# from that step; without it, decay begins at 90% of TPP.
+DECAY_FLAG = "/mnt/kv_cache/pragnosia_data/p400f_DECAY_NOW"
+DECAY_FRAC = 0.10
 WARM = 1000
 SAVE_EVERY = 2000
 EVAL_EVERY = 4000
@@ -65,44 +82,83 @@ def main():
         sd = torch.load(CKPT, map_location=DEV)
         cfg = cfg_from_ckpt(sd, T=CH, res_scale=sd['res_scale'])
         m = C.Core(cfg).to(DEV); m.load_state_dict(sd['model'])
-        step = sd['step']
-        print(f"RESUMED at step {step}", flush=True)
+        step = sd['step']; k = sd.get('k', 0); tokens_at_size = sd.get('tokens_at_size', 0)
+        print(f"RESUMED at step {step}, {k} growths, {sum(p.numel() for p in m.parameters())/1e6:.0f}M", flush=True)
         opt = torch.optim.Adam(m.parameters(), lr=LR, betas=(0.9, 0.95)); opt.load_state_dict(sd['opt'])
     else:
         sd = torch.load(SRC, map_location=DEV)
         cfg = cfg_from_ckpt(sd, T=CH, res_scale=sd['res_scale'])
         m = C.Core(cfg).to(DEV); m.load_state_dict(sd['model'])
-        P0 = sum(p.numel() for p in m.parameters())
-        b0 = bpb(m)
-        # FUNCTION-PRESERVING: verify on real data that growth did not change the model, rather than trusting it.
-        G.grow_width(m, GROW[0]); G.grow_depth(m, GROW[1]); G.grow_din(m, GROW[2])
-        b1 = bpb(m)
-        print(f"GROWN {P0/1e6:.1f}M -> {sum(p.numel() for p in m.parameters())/1e6:.1f}M   "
-              f"D{m.cfg.D}x{m.cfg.NL}L DIN{m.cfg.DIN}", flush=True)
-        print(f"  BPB across the growth: {b0:.4f} -> {b1:.4f}  ({b1-b0:+.4f})   "
-              f"{'function-preserving' if abs(b1-b0) < 0.01 else 'WARNING: growth changed the function'}", flush=True)
+        print(f"STARTING from the FINISHED 125M at {bpb(m):.4f} BPB -- growth is sensor-driven from here",
+              flush=True)
         opt = torch.optim.Adam(m.parameters(), lr=LR, betas=(0.9, 0.95))
+        k = 0; tokens_at_size = 0
     P = sum(p.numel() for p in m.parameters())
-    STEPS = int(TPP * P) // (B * CH)
+    STEPS = int(TPP * 405_200_000) // (B * CH)      # budget set by the ENDPOINT, as the 124M run did
     fwd = torch.compile(m)
-    print(f"PRAGNOSIA-400  |  {P/1e6:.1f}M, budget {TPP:.0f} tok/param = {TPP*P/1e9:.2f}B tokens = {STEPS} steps\n"
+    sensor = G.SaturationSensor(window=400, t_stat=1.0, min_gap=2500, floor_tokens=1)
+    print(f"PRAGNOSIA-400  |  now {P/1e6:.1f}M, ladder "
+          f"125 -> ~190 -> ~285 -> 405M on the SENSOR's signal (floor {TOK_PER_PARAM_GATE:.0f} tok/param)\n"
+          f"  budget {TPP:.0f} tok/param OF THE ENDPOINT = {TPP*405.2e6/1e9:.1f}B tokens = {STEPS} steps; "
+          f"WSD, so it can be stopped early and annealed cleanly\n"
           f"  grown from the FINISHED 124M, which keeps its GPT-2-matched claim intact\n"
           f"  NOTE: this BPB uses 2048-token windows. It tracks progress and compares runs to each other,\n"
           f"  but it is NOT comparable to GPT-2, which is capped at 1024 context -- use exp/gpt2_bpb.py for that.", flush=True)
 
     t0 = time.time(); ema = None
     bar = pbar(range(step, STEPS), "p400f", total=STEPS - step)
+    decay_from = None
     for it in bar:
-        lr = LR * ((it + 1) / WARM if it < WARM else
-                   0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * (it - WARM) / max(1, STEPS - WARM))))
+        # WSD: warm up, hold flat, then anneal over the last DECAY_FRAC -- of the planned budget, or from
+        # wherever the DECAY flag was dropped, whichever comes first.
+        if decay_from is None and os.path.exists(DECAY_FLAG):
+            decay_from = it
+            bar.write(f"    >>> DECAY TRIGGERED at step {it} -- annealing over the next "
+                      f"{int(DECAY_FRAC*STEPS)} steps, then stopping")
+        d0 = decay_from if decay_from is not None else int((1 - DECAY_FRAC) * STEPS)
+        dN = int(DECAY_FRAC * STEPS)
+        if it < WARM:            lr = LR * (it + 1) / WARM
+        elif it < d0:            lr = LR
+        else:                    lr = LR * max(0.02, 1.0 - (it - d0) / max(1, dN))
+        if decay_from is not None and it >= decay_from + dN:
+            bar.write(f"    >>> decay complete at step {it}; saving and stopping"); break
         for g in opt.param_groups: g['lr'] = lr
         X = torch.tensor(dm.batch(B), device=DEV)
         opt.zero_grad(set_to_none=True)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            l = F.cross_entropy(fwd(X[:, :CH]).reshape(-1, V), X[:, 1:CH + 1].reshape(-1))
+            lg = fwd(X[:, :CH])
+            l = F.cross_entropy(lg.reshape(-1, V), X[:, 1:CH + 1].reshape(-1))
         l.backward()
         torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0); opt.step()
+        ent = G.SaturationSensor.entropy(lg.detach()) if 'lg' in dir() else None
         v = l.item(); ema = v if ema is None else 0.99 * ema + 0.01 * v
+        tokens_at_size += B * CH
+        # THE SENSOR DECIDES WHEN. The floor only decides when it is allowed to.
+        Pn = sum(p.numel() for p in m.parameters())
+        if k < len(PLAN) and ent is not None and tokens_at_size >= TOK_PER_PARAM_GATE * Pn \
+           and sensor.observe(ent, it, tokens_at_size):
+            amt = PLAN[k]; earned = tokens_at_size / Pn
+            b_before = bpb(m)
+            torch.save({'model': m.state_dict(), 'step': it + 1, 'k': k, 'D': m.cfg.D, 'NL': m.cfg.NL,
+                        'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': m.cfg.head_scale,
+                        'D0': 448, 'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'sel_write': True,
+                        'res_scale': m.cfg.res_scale}, f"{CKPT[:-3]}_before_grow{k+1}.pt")
+            G.grow_width(m, amt[0]); G.grow_depth(m, amt[1]); G.grow_din(m, amt[2])
+            b_after = bpb(m)
+            k += 1; tokens_at_size = 0
+            opt = torch.optim.Adam(m.parameters(), lr=lr, betas=(0.9, 0.95))
+            torch.cuda.empty_cache()
+            try:
+                fwd = torch.compile(m)
+                _x = torch.zeros(B, CH, dtype=torch.long, device=DEV)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    F.cross_entropy(fwd(_x).reshape(-1, V), _x.reshape(-1)).backward()
+                m.zero_grad(set_to_none=True); opt.zero_grad(set_to_none=True); del _x
+            except Exception as e:
+                bar.write(f"    compile failed after growth ({type(e).__name__}) -- continuing EAGER"); fwd = m
+            bar.write(f"    >>> SELF-GREW #{k} at step {it+1}: D{m.cfg.D}x{m.cfg.NL}L DIN{m.cfg.DIN} -> "
+                      f"{sum(p.numel() for p in m.parameters())/1e6:.0f}M (earned {earned:.0f} tok/param), "
+                      f"BPB {b_before:.4f} -> {b_after:.4f} across the grow")
         if (it + 1) % 50 == 0:
             done = (it + 1 - step) * B * CH
             bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} lr={lr:.1e} "
@@ -113,7 +169,7 @@ def main():
                         'D': m.cfg.D, 'NL': m.cfg.NL, 'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True,
                         'head_scale': m.cfg.head_scale, 'D0': sd['D0'] if 'D0' in sd else 448,
                         'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'sel_write': True,
-                        'res_scale': m.cfg.res_scale, 'k': 3}, CKPT)
+                        'res_scale': m.cfg.res_scale, 'k': k, 'tokens_at_size': tokens_at_size}, CKPT)
         if (it + 1) % EVAL_EVERY == 0:
             b = bpb(m)
             bar.write(f"    step {it+1} | {(it+1)*B*CH/1e9:.2f}B tokens | {(it+1)*B*CH/P:.1f} tok/param "
@@ -122,7 +178,7 @@ def main():
                 'D': m.cfg.D, 'NL': m.cfg.NL, 'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True,
                 'head_scale': m.cfg.head_scale, 'D0': sd['D0'] if 'D0' in sd else 448,
                 'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'sel_write': True,
-                'res_scale': m.cfg.res_scale, 'k': 3}, CKPT)
+                'res_scale': m.cfg.res_scale, 'k': k, 'tokens_at_size': tokens_at_size}, CKPT)
     print(f"\nDONE: {STEPS*B*CH/1e9:.2f}B tokens, final BPB {bpb(m):.4f}  (2048-ctx metric, not a GPT-2 comparison)", flush=True)
 
 
