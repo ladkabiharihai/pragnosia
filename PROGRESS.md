@@ -3363,3 +3363,37 @@ available for the long-context training that needs it.
 ### THROUGHPUT NOW
 **208 ktok/s at 125M, against 121 before.** Honest attribution: ~9% is fused Adam and the REST is that two
 trainers had been running simultaneously and splitting the card -- a mistake of mine, not an optimisation.
+
+## LEARN-FROM-SURPRISE: THE EFFICIENCY HYPOTHESIS FAILED, THE MECHANISM IS NAILED DOWN
+Kernel work is near its floor (compile 2.24x and fused Adam 9% are in; matmuls are 36% of a step), and VISION 5
+says faculties are unlocked by the OBJECTIVE, so the next efficiency lever should be *what the model learns from*.
+**THE MOTIVATION, MEASURED FIRST.** On the finished 125M: the top 20% of tokens carry **62%** of the loss and the
+bottom 34% carry **0.8%**. Uniform training spends a third of its gradient on tokens already learned -- which is
+not what a brain does, where plasticity is gated by prediction error.
+**THE RESULT.** 24.5M models, identical data/seed/steps, only the loss selection differs:
+| arm | BPB @ 250M tokens | vs uniform |
+|---|---|---|
+| **A) uniform -- every token** | **1.2130** | -- |
+| B) top 60% by RAW loss | 1.3502 | +0.1372 |
+| C) top 30% by RAW loss | 1.8871 | +0.6742 |
+| D) top 60% REFERENCE-SCORED (excess loss vs the finished 125M) | 1.2176 | **+0.0046** |
+**Uniform wins. Token selection buys no training efficiency at this scale.** Arm D converged to parity by ~167M
+tokens (+0.0032, inside the +-0.005 noise floor) and then PLATEAUED rather than crossing -- 12 checkpoints, behind
+at every one.
+### WHY IT FAILED, WHICH IS THE REUSABLE PART
+**Raw-loss selection chases unlearnable noise.** A random surname or an arbitrary number has permanently high
+loss and can never be learned, so hardness-ranking preferentially feeds the model exactly what it cannot use.
+The DOSE-RESPONSE proves it is not merely data reduction: halving the kept fraction (60% -> 30%) QUINTUPLES the
+damage (+0.137 -> +0.674). Pure data reduction would degrade gently; this degrades catastrophically because the
+harder you select, the more purely you concentrate on noise.
+**Scoring against a reference fixes the selection but not the economics.** Keeping the same 60% but ranking by
+EXCESS loss over a model that already knows the data (learnable-but-unlearned, rather than merely hard) takes the
+penalty from +0.137 to +0.0046 -- **a 30x difference from changing only how you decide what is worth learning
+from.** That is a real finding about the objective. It still does not save compute, because the forward pass runs
+on every token regardless -- you need the loss to do the selection -- so there is no wall-clock win available even
+in the best case this measures.
+### WHAT THIS RULES OUT AND WHAT IT LEAVES
+Ruled out: token-level loss selection as a training-efficiency lever. The remaining objective-side levers are ones
+that change what data is SEEN rather than which tokens are scored (curriculum, active data selection at the
+document level, where the forward can genuinely be skipped), and the training-method question the horizon result
+left open: truncated BPTT for credit assignment past a chunk.

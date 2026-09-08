@@ -276,6 +276,16 @@ this design.)
   remaining large wins must come from the OBJECTIVE and the DATA, not from faster kernels -- which is consistent
   with 5's finding that faculties are unlocked by the objective, not the architecture.
 
+## 5d. NEGATIVE: token-level loss selection is NOT a training-efficiency lever (2026-09-08)
+Motivated by 0f (prediction error gates plasticity) and 5 (the objective unlocks faculties), and by measuring that
+the top 20% of tokens carry 62% of our loss while the bottom 34% carry 0.8%. Tested at 24.5M, matched steps:
+uniform **1.2130**; top-60% by raw loss 1.3502; top-30% by raw loss 1.8871; top-60% reference-scored **1.2176**.
+Uniform wins. Two things are established: raw-loss selection CHASES UNLEARNABLE NOISE (the dose-response is
+5x worse damage for 2x more aggressive selection, which pure data reduction cannot explain), and scoring against
+a reference model that already knows the data fixes the SELECTION (30x less penalty) but not the ECONOMICS -- the
+forward pass runs on every token regardless, so no wall-clock saving exists. Do not revisit token-level selection;
+document-level selection, where the forward CAN be skipped, is the version that remains open.
+
 ## 6. Negative results and lessons (do not repeat blindly)
 - **Sparse MoE at ~136M active is over-determined failure** (below the scale it pays off; experts too small; top-1
   with identical upcycled experts collapses; upcycling needs 100B+ tokens). DROPPED. Dense is the path.
