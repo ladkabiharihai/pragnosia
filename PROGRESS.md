@@ -3451,3 +3451,31 @@ dense-4's 1.2737** — 52% more capacity, same bill, **+0.0082 BPB worse**. At m
 (top-2) and +0.0828 (top-1), sub-linear in the saving but never free.
 **CAVEAT:** +0.0082 is inside plausible seed noise and we have never measured the seed floor on BPB. Honest
 reading: no measurable gain, not measurably worse.
+
+## THE SEED NOISE FLOOR, FINALLY MEASURED -- AND FOUR SHIPPED DECISIONS DO NOT CLEAR IT
+Identical config, identical budget, only the seed differing (verified to change BOTH init and data order):
+`1.2249  1.2248  1.2160  1.2203`  ->  **mean 1.2215, std 0.0042, spread 0.0089**
+**Two single-seed runs must differ by >0.0120 BPB to be 2-sigma.** Against that bar:
+| decision | margin | verdict |
+|---|---|---|
+| reference-scored token selection vs uniform | 0.0046 | **INSIDE NOISE** |
+| per-layer vs per-token sharpness | 0.0068 | **INSIDE NOISE** |
+| brain routed-8 vs dense-4 at matched compute | 0.0082 | **INSIDE NOISE** |
+| **DIN 16 vs 32 -- called a WIN and SHIPPED** | 0.0102 | **INSIDE NOISE** |
+| read sharpness fix (shipped) | 0.0518 | **CLEARS** (4.3x) |
+| Muon vs Adam from scratch | 0.0774 | **CLEARS** (6.4x) |
+### THE ONE THAT COSTS US
+**DIN=32 went into the flagship on a 0.0102 BPB margin that is inside noise**, and the 400M has since grown to
+DIN=40 -- carrying FE 1057 against 601, a **2.6x larger state**, for a BPB difference that cannot be
+distinguished from a different random seed.
+Partial defence, stated precisely rather than as an escape: DIN's case was never only BPB. The sweep showed needle
+lift at d=0 going **+2.950 -> +5.097 (+73%)**, a much larger relative margin on a different metric -- whose noise
+floor I have ALSO never measured. So DIN=32 is **not justified by BPB** and **may still be justified by
+retrieval**, and right now I do not know which.
+### AND I MADE THE EXACT ERROR THIS EXPERIMENT EXISTS TO PREVENT
+Seeds 0 and 1 came back at 1.2249 and 1.2248 -- agreeing to 0.0001 -- and I wrote that "every margin I hedged on
+today was real, including DIN". That was a conclusion drawn from n=2. Seeds 2 and 3 (1.2160, 1.2203) reversed it.
+The measurement was correct; my reading of it at the halfway point was not.
+### THE RULE THIS ESTABLISHES
+Any BPB claim below **0.012** between single-seed runs is not a result. Either run 3+ seeds or do not claim it.
+That retires the phrase "inside plausible noise", which I used all day without having measured plausible.

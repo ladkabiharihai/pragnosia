@@ -286,6 +286,16 @@ a reference model that already knows the data fixes the SELECTION (30x less pena
 forward pass runs on every token regardless, so no wall-clock saving exists. Do not revisit token-level selection;
 document-level selection, where the forward CAN be skipped, is the version that remains open.
 
+## 5e. THE MEASUREMENT BAR (2026-09-08): BPB claims under 0.012 between single seeds are not results
+Seed noise floor measured for the first time: 4 identical runs differing only in seed gave
+`1.2249 1.2248 1.2160 1.2203`, **std 0.0042**, so two single-seed runs must differ by **>0.0120 BPB** for 2-sigma.
+This retires four decisions taken on smaller margins -- DIN 16 vs 32 (0.0102, called a win and SHIPPED),
+per-layer vs per-token sharpness (0.0068), brain routing at matched compute (0.0082), reference-scored token
+selection (0.0046). The read-sharpness fix (0.0518) and Muon from scratch (0.0774) clear comfortably and stand.
+**DIN=32 is in the flagship on an unjustified BPB margin.** It may still be justified by retrieval (+73% needle
+lift at d=0), whose noise floor is also unmeasured. Measure it before defending the state cost.
+RULE: run 3+ seeds or do not claim a sub-0.012 BPB difference.
+
 ## 6. Negative results and lessons (do not repeat blindly)
 - **Sparse MoE at ~136M active is over-determined failure** (below the scale it pays off; experts too small; top-1
   with identical upcycled experts collapses; upcycling needs 100B+ tokens). DROPPED. Dense is the path.
