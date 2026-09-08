@@ -22,7 +22,7 @@ DOCUMENT, not a chat transcript -- use `/doc <file>` to stream one in and then a
   /doc PATH  stream a long file into the state, then ask about it -- this is the real long-context demo
   /carry     toggle carrying state between turns (default OFF; ON reproduces the code-loop failure)
   /state     show state size vs what a transformer's KV cache would cost here
-  /temp 0.8  set temperature      /raw   toggle chat framing
+  /temp 0.8  set temperature      /raw   toggle chat framing      /n 2000  raise the ceiling
   /greedy    always take the most likely token -- deterministic, and much better for FACTS.
              Measured: "capital of France" holds only 19.9% of the probability mass even though it is the
              model's TOP choice, so sampling at temp 0.8 returns it just 30% of the time. Greedy returns it
@@ -42,7 +42,7 @@ def main():
     ap.add_argument("--temp",type=float,default=0.8)
     ap.add_argument("--greedy",action="store_true",help="deterministic; much better for factual questions")
     ap.add_argument("--top_p",type=float,default=0.92)
-    ap.add_argument("--n",type=int,default=120)
+    ap.add_argument("--n",type=int,default=1200,help="ceiling only; it stops when it is done")
     ap.add_argument("--raw",action="store_true")
     ap.add_argument("--carry",action="store_true",help="carry state between turns (measured WORSE; see docstring)")
     a=ap.parse_args()
@@ -75,6 +75,7 @@ def main():
             a.greedy=not a.greedy
             print(f"  [greedy={a.greedy}] " + ("always takes the top token: deterministic, best for facts."
                   if a.greedy else "sampling at temp %.2f: more varied, better for prose."%a.temp)+"\n"); continue
+        if u.startswith("/n "): a.n=int(u.split()[1]); print(f"  [ceiling={a.n} tokens]\n"); continue
         if u=="/raw": a.raw=not a.raw; print(f"  [raw={a.raw}]\n"); continue
         if u=="/carry":
             a.carry=not a.carry; st=None; pv=None
@@ -100,17 +101,31 @@ def main():
         p = u if a.raw else f"<user> {u}\n<assistant>"
         ids=TOK.encode(p).ids; ntok+=len(ids)
         t0=time.time()
-        with torch.no_grad():
-            out,ns=m.generate(torch.tensor([ids],device=DEV),n=a.n,temp=a.temp,top_p=a.top_p,
-                              greedy=a.greedy,states=st)
-        st = ns if a.carry else None      # default OFF: carrying its own output across turns is measured worse
-        txt=TOK.decode(out)
-        if not a.raw:
-            for stop in ("<user>","\n<","<|"):
-                if stop in txt: txt=txt.split(stop)[0]
+        # GENERATE UNTIL IT IS DONE, not until a fixed budget. Decode in blocks and stop at the first turn
+        # boundary the model emits, or when it starts repeating itself -- a base model will otherwise continue
+        # forever, so "unbounded" needs a real stopping rule rather than a bigger number.
+        STOPS=("<user>","<|","\n\n\n\n")
+        out=[]; cur=torch.tensor([ids],device=DEV); gs=st; blk=60
+        print(f"\033[36mpragnosia:\033[0m ",end="",flush=True)
+        shown=0
+        while len(out)<a.n:
+            with torch.no_grad():
+                o,gs=m.generate(cur,n=min(blk,a.n-len(out)),temp=a.temp,top_p=a.top_p,greedy=a.greedy,states=gs)
+            out+=o; cur=torch.tensor([o[-1:]],device=DEV)
+            txt=TOK.decode(out)
+            hit=next((txt.index(x) for x in STOPS if x in txt),None)
+            if hit is not None: txt=txt[:hit]
+            # repetition guard: a base model loops rather than stopping, so treat a hard loop as an ending
+            tail=out[-160:]
+            if len(tail)>=160:
+                g=[tuple(tail[i:i+6]) for i in range(len(tail)-5)]
+                if 1-len(set(g))/len(g) > 0.55: hit=hit if hit is not None else len(txt)
+            print(txt[shown:],end="",flush=True); shown=len(txt)
+            if hit is not None: break
+        st = gs if a.carry else None      # default OFF: carrying its own output across turns is measured worse
         ntok+=len(out); turns+=1
         dt=time.time()-t0
-        print(f"\033[36mpragnosia:\033[0m {txt.strip()}")
+        print()
         print(f"  \033[2m[{len(out)} tok, {1000*dt/max(1,len(out)):.0f} ms/tok, turn {turns}, "
               f"{ntok:,} tokens of history, state still {state_mib:.0f} MiB]\033[0m\n")
 
