@@ -3307,3 +3307,32 @@ using it is correct.
 hole" -> *"a black hole is a black hole... in the center of the galaxy"* (circular, on-topic), "the moon" ->
 *"the brightest star in the night sky"* (fluent, wrong). That is what a 125M BASE model is. GPT-2 at 774M scores
 the same. It needs instruction tuning, which is a separate stage this week does not have room for.
+
+## WHY THE SAME QUESTION GIVES DIFFERENT ANSWERS (user observation, and it is the most diagnostic one yet)
+The model does not hold an answer, it holds a DISTRIBUTION, and chat.py samples from it. So the variance is a
+coin flip we perform on the model's behalf, not the model being inconsistent.
+| question | P(correct) | rank | hit @T=0.8 | greedy |
+|---|---|---|---|---|
+| capital of France | **19.9%** | **1** | 30% | "Paris" every time |
+| gas plants absorb | **10.8%** | **1** | 42% | "carbon dioxide" every time |
+| spider legs | 0.8% | 9 | 0% | "10 legs" (wrong, every time) |
+| who wrote Romeo and Juliet | 0.9% | 8 | 0% | wrong |
+**Two situations that look identical in chat.** When it KNOWS, the right token is RANK 1 but holds only ~20% of
+the mass, so sampling at 0.8 discards it two times in three. When it does NOT know, it is rank 8-9 and no decoding
+strategy recovers it. **Rank is the diagnostic; sampling hides it behind randomness.**
+### THE TRADE, MEASURED
+| setting | facts correct | 4-gram repetition |
+|---|---|---|
+| greedy | 40% | 0.25 |
+| **temp 0.2** | **43%** | 0.22 |
+| temp 0.8 (default) | 27% | **0.09** |
+Low temperature nearly doubles factual accuracy and costs fluency; there is no setting that wins both. chat.py now
+documents 0.2 for facts and 0.8 for prose rather than pretending one default serves both.
+### AND PROMPT PHRASING BEATS BOTH
+"what is the capital of France?" loops at EVERY temperature -- *"the capital of France is the capital of France"*.
+Priming the continuation instead, *"The capital of France is"*, answers **Paris**. The model is a continuation
+engine; asking it a question is the harder mode for it, and that is a property of a base model, not a bug.
+### AND ONE FAILURE WAS PURE TOKENISATION
+*"blackholes"* -> `[' black', 'h', 'oles']`, which the model has never seen together, so it answered with
+*"a genus of earthworm"*. *"black holes"* -> `[' black', ' holes']` -> astronomical objects. At 32k vocab and 125M
+params there is no capacity to recover from an unfamiliar fragmentation.
