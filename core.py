@@ -47,7 +47,7 @@ def _shift(x):                                                # key source is th
 
 def dgelu(x):                                                 # exact derivative of the erf GELU
     return 0.5*(1+torch.erf(x/1.4142135623730951))+x*torch.exp(-0.5*x*x)/2.5066282746310002
-def _sub_mix(qf,kf,v,L,state,b):
+def _sub_mix(qf,kf,v,L,state,b,xq=None,xk=None,wgate=None):
     """SUB-CHUNKED LINEAR ATTENTION (the GLA/Mamba-2 formulation), mathematically identical to the full quadratic
     form but O(T x b x FE) instead of O(T^2 x FE), and it never materialises [B,T,T].
 
@@ -64,6 +64,14 @@ def _sub_mix(qf,kf,v,L,state,b):
     """
     B,T,FE=qf.shape; DV=v.shape[-1]; nb=T//b
     qb=qf.view(B,nb,b,FE); kb=kf.view(B,nb,b,FE); vb=v.view(B,nb,b,DV)
+    # THE SAME IDENTITY AS _full_mix: within a block, A = qf.kf = 1 + (xq.xk) + (xq.xk)^2, so the pairwise term
+    # never needs the FE-dim features. I optimised _full_mix and left this path on the slow form -- which is the
+    # path that matters MORE, because it is the one with linear memory. The features are still used for the
+    # cross-block state read/write, which is linear in T.
+    DIN=None if xq is None else xq.shape[-1]
+    if xq is not None:
+        xqb=xq.view(B,nb,b,DIN); xkb=xk.view(B,nb,b,DIN)
+    if wgate is not None: wgb=wgate.view(B,nb,b)
     if L is not None:
         Lb=L.view(B,nb,b)
         last=Lb[:,:,-1]
@@ -76,7 +84,11 @@ def _sub_mix(qf,kf,v,L,state,b):
     ns=[]; ds=[]
     for i in range(nb):
         q=qb[:,i]; k=kb[:,i]; vv=vb[:,i]
-        A=torch.einsum('btf,bsf->bts',q,k)
+        if xq is not None:
+            c=torch.einsum('btd,bsd->bts',xqb[:,i],xkb[:,i]); A=1+c+c*c
+        else:
+            A=torch.einsum('btf,bsf->bts',q,k)
+        if wgate is not None: A=A*wgb[:,i].unsqueeze(-2)   # selective write, same weight as the state write
         if L is not None:
             lc=Lc[:,i]
             A=A*(lc.unsqueeze(-1)-lc.unsqueeze(-2)).clamp(max=0.0).exp()
@@ -88,10 +100,13 @@ def _sub_mix(qf,kf,v,L,state,b):
         ns.append(num+rd); ds.append(den+rz)
         if L is not None:
             ge=(lc[:,-1:]-lc).exp().unsqueeze(-1)       # decay each key to the END of this block
-            kg=k*ge; tot=lc[:,-1].exp().view(B,1,1)
+            kg=k*ge
+            if wgate is not None: kg=kg*wgb[:,i].unsqueeze(-1)
+            tot=lc[:,-1].exp().view(B,1,1)
             M=M*tot+torch.einsum('btf,btd->bfd',kg,vv); z=z*tot.squeeze(-1)+kg.sum(1)
         else:
-            M=M+torch.einsum('btf,btd->bfd',k,vv); z=z+k.sum(1)
+            kk=k if wgate is None else k*wgb[:,i].unsqueeze(-1)
+            M=M+torch.einsum('btf,btd->bfd',kk,vv); z=z+kk.sum(1)
     return torch.cat(ns,1),torch.cat(ds,1),(M.detach(),z.detach())
 
 
@@ -181,9 +196,9 @@ class Layer(nn.Module):
         L=F.logsigmoid(s.Wg(H)).squeeze(-1).cumsum(-1) if s.gated else None
         if s.sel and wgate is None: wgate=torch.sigmoid(s.Wsal(H)).squeeze(-1)   # [B,T] write strength per token
         sub=getattr(cfg,'subchunk',0)
-        if sub and T%sub==0 and wgate is None:
+        if sub and T%sub==0:
             # SUB-CHUNKED PATH: same function, O(T x sub x FE) instead of O(T^2 x FE), and no [B,T,T] tensor.
-            num,den,(newM,newz)=_sub_mix(qf,kf,v,L,state,sub)
+            num,den,(newM,newz)=_sub_mix(qf,kf,v,L,state,sub,xq,xk,wgate)
             A=None
         else:
             A,num,den,newM,newz=s._full_mix(qf,kf,v,L,state,wgate,xq,xk)

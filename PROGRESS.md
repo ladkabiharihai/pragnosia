@@ -3336,3 +3336,30 @@ engine; asking it a question is the harder mode for it, and that is a property o
 *"blackholes"* -> `[' black', 'h', 'oles']`, which the model has never seen together, so it answered with
 *"a genus of earthworm"*. *"black holes"* -> `[' black', ' holes']` -> astronomical objects. At 32k vocab and 125M
 params there is no capacity to recover from an unfamiliar fragmentation.
+
+## TRAINING EFFICIENCY: WHAT I MEASURED, INCLUDING WHAT DID NOT WORK
+Compute is the binding constraint -- one H100 shared with prod, and no more GPUs if this gets funded -- so the
+budget is worth attacking directly. Profiled the real training step rather than reasoning about it.
+### THE STARTING POINT
+`torch.compile` is already worth **2.24x** (112 -> 50 ms/step) and was already on. After compile the breakdown is
+matmuls 36%, **Adam 13.9%**, softmax 6.4%, fused triton kernels the rest. The eager profile I took first showed
+elementwise ops at 24.5% and OVERSTATED them -- compile fuses exactly those, so optimising them would have been
+chasing something the compiler already fixed.
+### WHAT WORKED
+**Fused Adam: -9.0% step time** (65.3 -> 59.4 ms), identical maths, one kernel instead of a multi_tensor_apply
+launch per parameter group per moment. Applied to all three trainers.
+### WHAT DID NOT WORK, MEASURED AND REJECTED
+| idea | why I expected it | what happened |
+|---|---|---|
+| sub-chunked path (linear memory) | avoids the [B,T,T] tensor | **slower** (232 vs 143 ms) and memory barely moved: at T=2048 that tensor is ~17 MiB against ~7 GiB of ordinary activations, so it is NOT the bottleneck at our sequence length. It would be at 16k+. |
+| pinned memory + async H2D | my first measurement said the copy was 18 ms of a 140 ms step | the measurement was wrong -- I had not synchronised before timing. It is **0.9 ms**, under 1% of a step. Idea killed before it was implemented. |
+| `foreach=True` gradient clipping | fewer kernel launches | slightly **worse** (60.5 vs 59.4 ms) |
+Clipping itself costs 4.8% of a step and stays, because stability is worth more than 4.8%.
+### AND A DEAD CODE PATH FOUND WHILE LOOKING
+`_sub_mix` was guarded by `wgate is None`, so turning on selective writing silently disabled the entire
+sub-chunked path. It also never used the read identity that `_full_mix` got. Both fixed and verified bit-exact
+against the quadratic reference (0.00e+00 and 8.2e-16). It does not pay off at T=2048, but it is now correct and
+available for the long-context training that needs it.
+### THROUGHPUT NOW
+**208 ktok/s at 125M, against 121 before.** Honest attribution: ~9% is fused Adam and the REST is that two
+trainers had been running simultaneously and splitting the card -- a mistake of mine, not an optimisation.

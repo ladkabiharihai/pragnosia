@@ -43,6 +43,9 @@ SRC = "/mnt/kv_cache/pragnosia_data/p124f.pt"
 CKPT = "/mnt/kv_cache/pragnosia_data/p400f.pt"
 CH = 2048
 B = int(os.environ.get("B", "8"))
+# FUSED ADAM: the optimizer update was 13.9% of a COMPILED step, spent in multi_tensor_apply -- a separate
+# kernel launch per parameter group per moment. torch's fused Adam does the whole update in one kernel and
+# measured 9.0% off the step time (65.3 -> 59.4 ms) with identical maths. Free, so it is on.
 LR = float(os.environ.get("LR", "6e-4"))      # lower than the 124M's 1e-3: this resumes a converged model
 TPP = float(os.environ.get("TPP", "73"))      # matched to the 125M's budget; WSD lets us stop anywhere
 # WSD (warmup-stable-decay) instead of cosine, so the run is NOT committed to a token budget in advance.
@@ -84,15 +87,24 @@ def main():
         m = C.Core(cfg).to(DEV); m.load_state_dict(sd['model'])
         step = sd['step']; k = sd.get('k', 0); tokens_at_size = sd.get('tokens_at_size', 0)
         print(f"RESUMED at step {step}, {k} growths, {sum(p.numel() for p in m.parameters())/1e6:.0f}M", flush=True)
-        opt = torch.optim.Adam(m.parameters(), lr=LR, betas=(0.9, 0.95)); opt.load_state_dict(sd['opt'])
+        opt = torch.optim.Adam(m.parameters(), lr=LR, betas=(0.9, 0.95), fused=True); opt.load_state_dict(sd['opt'])
     else:
         sd = torch.load(SRC, map_location=DEV)
         cfg = cfg_from_ckpt(sd, T=CH, res_scale=sd['res_scale'])
         m = C.Core(cfg).to(DEV); m.load_state_dict(sd['model'])
+        P0m = sum(p.numel() for p in m.parameters())
         print(f"STARTING from the FINISHED 125M at {bpb(m):.4f} BPB -- growth is sensor-driven from here",
               flush=True)
-        opt = torch.optim.Adam(m.parameters(), lr=LR, betas=(0.9, 0.95))
-        k = 0; tokens_at_size = 0
+        opt = torch.optim.Adam(m.parameters(), lr=LR, betas=(0.9, 0.95), fused=True)
+        k = 0
+        # CARRY FORWARD WHAT THE 125M ALREADY EARNED. It finished with 6.93B tokens at this size (55 tok/param,
+        # 2.5x the floor), so resetting this to zero would force it to re-earn 22 tok/param -- ~6.5 hours of
+        # retraining a model that is already fully trained -- before the sensor is even allowed to fire.
+        # The floor exists to stop a model growing before it has earned its current size. This one has.
+        tokens_at_size = sd.get('tokens_at_size', 0)
+        print(f"  carrying forward {tokens_at_size/1e9:.2f}B tokens already earned at this size "
+              f"({tokens_at_size/P0m:.0f} tok/param) -- the sensor may fire as soon as it sees saturation",
+              flush=True)
     P = sum(p.numel() for p in m.parameters())
     STEPS = int(TPP * 405_200_000) // (B * CH)      # budget set by the ENDPOINT, as the 124M run did
     fwd = torch.compile(m)
@@ -146,7 +158,7 @@ def main():
             G.grow_width(m, amt[0]); G.grow_depth(m, amt[1]); G.grow_din(m, amt[2])
             b_after = bpb(m)
             k += 1; tokens_at_size = 0
-            opt = torch.optim.Adam(m.parameters(), lr=lr, betas=(0.9, 0.95))
+            opt = torch.optim.Adam(m.parameters(), lr=lr, betas=(0.9, 0.95), fused=True)
             torch.cuda.empty_cache()
             try:
                 fwd = torch.compile(m)

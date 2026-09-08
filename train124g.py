@@ -80,7 +80,7 @@ def main():
     P = lambda: sum(p.numel() for p in m.parameters())
     P_FINAL = 124_800_000                      # the budget is set by the ENDPOINT so total tokens match GPT-2
     STEPS = int(TPP * P_FINAL) // (B * CH)
-    opt = torch.optim.Adam(m.parameters(), lr=LR, betas=(0.9, 0.95))
+    opt = torch.optim.Adam(m.parameters(), lr=LR, betas=(0.9, 0.95), fused=True)
     step = 0; k = 0; tokens_at_size = 0
     if os.path.exists(CKPT):
         sd = torch.load(CKPT, map_location=DEV)
@@ -94,7 +94,7 @@ def main():
             kind, amt = PLAN[kk]; G.grow_width(m, amt[0]); G.grow_depth(m, amt[1]); G.grow_din(m, amt[2])
         assert abs(m.cfg.head_scale - (D / sd['D']) ** 0.5) < 1e-6, "head_scale did not telescope as expected"
         m.load_state_dict(sd['model'])
-        opt = torch.optim.Adam(m.parameters(), lr=LR, betas=(0.9, 0.95)); opt.load_state_dict(sd['opt'])
+        opt = torch.optim.Adam(m.parameters(), lr=LR, betas=(0.9, 0.95), fused=True); opt.load_state_dict(sd['opt'])
         step = sd['step']; tokens_at_size = sd.get('tokens_at_size', 0)
         print(f"RESUMED at step {step}/{STEPS}, {k} grows, {P()/1e6:.0f}M", flush=True)
     fwd = torch.compile(m)
@@ -132,7 +132,7 @@ def main():
                        f"{CKPT[:-3]}_before_grow{k+1}.pt")
             G.grow_width(m, amt[0]); G.grow_depth(m, amt[1]); G.grow_din(m, amt[2])
             k += 1; tokens_at_size = 0
-            opt = torch.optim.Adam(m.parameters(), lr=lr, betas=(0.9, 0.95))
+            opt = torch.optim.Adam(m.parameters(), lr=lr, betas=(0.9, 0.95), fused=True)
             torch.cuda.empty_cache()
             try:
                 fwd = torch.compile(m)
