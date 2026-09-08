@@ -3436,3 +3436,18 @@ converged model at a high LR. The 400M runs at 6e-4, twice what was tested here.
 **Resume the flagship on Adam. Do not restart it with Muon.** The 1.75x from-scratch win does not apply to a
 continuation, and switching would cost the 28k steps already banked for a change measured to be worse. Muon is a
 finding for the NEXT model trained from scratch, where it is worth ~1.75x -- and that is where it should be used.
+
+## BRAIN-REGION CONDITIONAL COMPUTATION: SPEED YES, CAPABILITY NO
+Built in an isolated copy (`brainexp/`), main line locked at tag `pre-brain-exp`. Regions specialised by function
+(pituitary/amygdala/cerebellum always-on; occipital/temporal/parietal/frontal routed), only top-k cortical regions
+see each token. Fixed-capacity routing in SEQUENCE ORDER, because our layers are recurrent and cannot gather
+tokens arbitrarily. Full write-up in `brainexp/RESULT.md`.
+**TRUE:** the growth property is arithmetic — 4 -> 8 regions at fixed top-k is **+52% params at identical
+27.6 MFLOPs/token**. And it converts to real speed once the batch fills the idle GPU: **354 vs 257 ktok/s (1.38x)
+at 9.43 vs 18.13 GiB**. At batch 8 routed was SLOWER; the user noticed it sat at 64-74% GPU utilisation against
+dense's 100%, i.e. launch-bound not compute-bound. Router never collapsed (entropy 1.32-1.38 of 1.386).
+**FALSE:** it does not buy capability per FLOP. At matched compute, routed-8 (62.5M params) scored **1.2819 vs
+dense-4's 1.2737** — 52% more capacity, same bill, **+0.0082 BPB worse**. At matched params routing costs +0.0502
+(top-2) and +0.0828 (top-1), sub-linear in the saving but never free.
+**CAVEAT:** +0.0082 is inside plausible seed noise and we have never measured the seed floor on BPB. Honest
+reading: no measurable gain, not measurably worse.

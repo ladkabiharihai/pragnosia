@@ -1,0 +1,106 @@
+"""Shared utilities: standard logging location and a tqdm progress bar for every training loop.
+All logs live in logs/ (never scattered in the workspace root). Usage:
+    from util import LOGS, pbar
+    for i in pbar(range(STEPS), "substrate", loss=lambda: cur):   ...
+"""
+import os,sys,time
+from tqdm import tqdm
+ROOT=os.path.dirname(os.path.abspath(__file__)); LOGS=os.path.join(ROOT,"logs")
+os.makedirs(LOGS,exist_ok=True)
+def logpath(name): return os.path.join(LOGS,f"{name}.log")
+class _Tee:
+    def __init__(s,*f): s.f=f
+    def write(s,x):
+        for h in s.f:
+            h.write(x); h.flush()
+    def flush(s):
+        for h in s.f: h.flush()
+def setup_log(name=None):
+    """Every run writes to logs/<name>.log AND stdout, so any run can be tailed live:
+         tail -f logs/<name>.log
+    Called automatically by scripts; name defaults to the script filename."""
+    import __main__
+    if name is None:
+        name=os.path.splitext(os.path.basename(getattr(__main__,"__file__","run")))[0]
+    fh=open(logpath(name),"a",buffering=1)
+    fh.write(f"\n===== {name} started {__import__('datetime').datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
+    sys.stdout=_Tee(sys.__stdout__,fh); sys.stderr=_Tee(sys.__stderr__,fh)
+    return logpath(name)
+class _LinePbar:
+    """Progress as CLEAN LINES (no carriage returns) -- readable with `tail -f` on a log file, which a tqdm bar is
+    not. Same interface as tqdm (iterate, .set_postfix_str, .write)."""
+    def __init__(s,it,desc,total,every):
+        s.it=it; s.desc=desc; s.every=every; s.post=""
+        s.total=total if total is not None else (len(it) if hasattr(it,"__len__") else None)
+        s.t0=time.time(); s.last=0.0; s.n=0
+    def set_postfix_str(s,x): s.post=x
+    def write(s,x): print(x,flush=True)
+    def __iter__(s):
+        for v in s.it:
+            yield v
+            s.n+=1; now=time.time()
+            if now-s.last>=s.every or (s.total and s.n==s.total):
+                s.last=now; el=now-s.t0; rate=s.n/max(el,1e-9)
+                if s.total:
+                    rem=(s.total-s.n)/max(rate,1e-9)
+                    print(f"[{s.desc}] {s.n}/{s.total} ({100*s.n/s.total:4.1f}%) elapsed {el/60:5.1f}m "
+                          f"eta {rem/60:5.1f}m {rate:6.1f} it/s  {s.post}",flush=True)
+                else:
+                    print(f"[{s.desc}] {s.n} elapsed {el/60:5.1f}m {rate:6.1f} it/s  {s.post}",flush=True)
+def pbar(it,desc="train",total=None,every=10.0):
+    """Progress bar. Interactive terminal -> tqdm bar; writing to a log file -> clean periodic lines."""
+    istty=getattr(sys.__stdout__,"isatty",lambda:False)()
+    if istty:
+        return tqdm(it,desc=desc,total=total,file=sys.__stdout__,ncols=110,mininterval=every,smoothing=0.1,
+                    bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}")
+    return _LinePbar(it,desc,total,every)
+
+def cfg_from_ckpt(sd,T=2048,res_scale=16**-0.5):
+    """Build a Config that MATCHES a checkpoint, inferring anything the checkpoint did not record.
+    DIN is read from the Wk weight shape when absent: DIN grows now (grow_din), and a checkpoint written before
+    that change records only D/DV/NL, so a loader that assumed DIN=8 would fail to load a grown model. This is the
+    same class of bug as DV not being recorded, caught the same way -- by reloading a grown checkpoint."""
+    import core as _C
+    w=sd['model']
+    DIN=sd.get('DIN') or int(w['layers.0.Wk.weight'].shape[0])
+    DV=sd.get('DV') or int(w['layers.0.Wv.weight'].shape[0])
+    NL=sd.get('NL') or len([k for k in w if k.endswith('.Wk.weight')])
+    cfg=_C.Config(D=sd['D'],DIN=DIN,DV=DV,NL=NL,T=T,res_scale=res_scale)
+    cfg.tie_emb=sd.get('tie_emb',False); cfg.head_scale=sd.get('head_scale',1.0)
+    # gated/qknorm MUST be restored too: without them Core builds no Wg and load_state_dict fails on the
+    # unexpected layers.N.Wg keys. Fall back to INFERRING from the weights so checkpoints written before these
+    # flags were persisted still load.
+    # head_scale: with tied embeddings grow_width divides it by c=sqrt(nD/D) at every width growth, so the
+    # accumulated value telescopes to sqrt(D0/D). Some checkpoints recorded a hardcoded 1.0 while the live model
+    # had 0.7338 -- reading the stale field reported BPB 1.1550 for a model that actually scores 1.0698. If the
+    # checkpoint says a growth happened but head_scale is still exactly 1.0, the field is stale: recompute it.
+    if sd.get('k',0)>0 and abs(cfg.head_scale-1.0)<1e-12 and 'D0' in sd:
+        cfg.head_scale=(sd['D0']/sd['D'])**0.5
+    cfg.gated=sd.get('gated', any(k.endswith('Wg.weight') for k in sd['model']))
+    cfg.qknorm=sd.get('qknorm', cfg.gated)
+    # READ SHARPNESS, same rule: infer from the weights rather than trust a flag that may not have been written.
+    # Getting this wrong is silent in the worst way -- the model loads, and every retrieval is at the wrong
+    # sharpness. That is exactly how the stale head_scale above went unnoticed.
+    cfg.qk_token_scale=sd.get('qk_token_scale', any(k.endswith('Wqs.weight') for k in w))
+    cfg.qk_learn_scale=sd.get('qk_learn_scale', any(k.endswith('qk_ls') for k in w))
+    cfg.sel_write=sd.get('sel_write', any(k.endswith('Wsal.weight') for k in w))
+    return cfg
+
+
+def cap_gpu(gib, dev=0):
+    """HARD-cap this process's GPU allocation. Use it for ANY job that co-runs with prod or with a training run.
+
+    WHY THIS EXISTS. I launched exp/bptt.py alongside the flagship behind a guard that checked FREE MEMORY AT
+    LAUNCH (>20 GiB) against my ESTIMATE of what the job would use (~10-15 GiB). Truncated BPTT holds K chunks of
+    activations in the graph at once -- that is the entire point of it -- so it actually took 25.9 GiB and drove
+    the card to 1.9 GiB free, with prod's vLLM on the same GPU. Nothing fell over, but only by luck.
+    A guard built on an estimate is not a guard. This makes the job hit ITS OWN ceiling and die, instead of
+    eating headroom that belongs to prod.
+
+        from util import cap_gpu; cap_gpu(12)     # this process OOMs at 12 GiB, prod never sees pressure
+    """
+    import torch
+    if not torch.cuda.is_available(): return
+    total = torch.cuda.get_device_properties(dev).total_memory / 2**30
+    torch.cuda.set_per_process_memory_fraction(min(1.0, gib / total), dev)
+    print(f"[cap_gpu] this process is capped at {gib:.1f} GiB of {total:.0f} GiB", flush=True)
