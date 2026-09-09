@@ -3510,3 +3510,31 @@ Validated on synthetic traces before touching the run:
 Growth now requires BOTH the floor open AND genuine saturation, and the log states which one decided at every
 event. If the sensor now fires later than the floor, growth is genuinely intrinsic; if it still fires at the
 floor, the log will say so rather than implying otherwise.
+
+## MUON DOES NOT TRANSFER TO 125M -- THE 1.75x WAS A 24.5M RESULT AND I BUILT A PLAN ON IT
+Ran the full from-scratch Muon ladder for 14 hours (infant 35M -> 65M -> 125M, 10.70B tokens, WSD, all growth
+sensor-gated). At 35M it reproduced the small-scale win. At 125M it evaporated.
+| stage | tokens | Adam | Muon | delta | vs 0.0120 noise bar |
+|---|---|---|---|---|---|
+| 35M | 0.07B | 1.3685 | **1.2979** | **-0.0706** | 5.9x -- REAL |
+| 35M | 0.20B | 1.2186 | **1.1576** | **-0.0610** | 5.1x -- REAL |
+| 125M | 7.86B | 0.9276 | 0.9261 | -0.0015 | 0.1x -- NOISE |
+| 125M | 9.11B | 0.9211 | 0.9179 | -0.0032 | 0.3x -- NOISE |
+**At 35M Muon beat Adam's best-ever-at-that-size in 2.20x fewer steps. At 125M the two are indistinguishable.**
+### THE CONFOUND I CANNOT RESOLVE
+Adam ran COSINE and had annealed to low LR by 8-9B; Muon ran WSD and is still at flat 2.0e-02. An annealed model
+always scores better than the same model mid-training, so this comparison is tilted TOWARD Adam. Annealing
+typically buys 0.02-0.05, which would put Muon ahead -- but that is an expectation, not a measurement, and the
+decay phase is 10% of a 2.88M-step budget (~8h) which the clock does not allow. **Unresolved, and recorded as
+unresolved.** Generation at 125M also favoured Adam (it answered "carbon dioxide" correctly; Muon did not), but
+that is subject to the same annealing confound.
+### DECISION
+Stopped the Muon run, preserved its checkpoint (`pbrain_muon_125M_10.7B.pt`, 125M @ 10.7B, un-annealed), and
+resumed the Adam 400M continuation from step 28,000 / 191M with optimizer state intact.
+### THE METHODOLOGICAL LESSON, WHICH IS THE PART WORTH KEEPING
+**Clearing the seed-noise floor at one scale is NOT evidence of scale transfer. They are different questions and I
+conflated them.** Muon's 0.0774 was 6.4x the 0.0120 bar -- statistically unambiguous -- and it still did not
+survive a 5x increase in model size. Significance answers "is this real at the scale I measured it"; it says
+nothing about "will it still be real one order of magnitude up". Cost: ~14 GPU-hours.
+**RULE: an architecture or optimiser change measured only at <=35M is a HYPOTHESIS at 125M+, no matter how many
+sigma it clears. Confirm at the target scale before it enters a flagship run.**

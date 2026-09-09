@@ -157,6 +157,34 @@ A transformer can lean on its KV cache to remember precisely; **we cannot, so pr
 WEIGHTS.** Consolidation is how this architecture remembers exactly, which is the same conclusion §2 reaches from
 first principles: "Finite-state over infinite-context FORCES consolidation."
 
+## 0h. CURRENT STATE (2026-09-09) -- read this before anything else
+
+**Live run:** `train400f.py`, Adam, resumed at step 28,000 / **191M** after one sensor-gated growth, climbing to
+405M. WSD, so `touch /mnt/kv_cache/pragnosia_data/p400f_DECAY_NOW` anneals and stops cleanly at any point.
+
+**Best artifact:** `p124f.pt` -- 125M, 9.11B tokens, matched to GPT-2 124M on parameters AND tokens.
+Fair protocol (same text, same 1024 context, same bytes): **our mix 1.0833 vs GPT-2 1.0910 (ahead 0.008);
+web text 1.2076 vs 1.1108 (behind 0.097)**. Beats Pythia-160M by 0.103 with **33x fewer tokens**; loses to
+SmolLM2-135M (2T tokens) by 0.223.
+
+**What is measured and stands:**
+- constant memory + latency to 1M tokens (2.51 -> 2.74 GiB, 13.8 -> 10.6 ms/tok)
+- continual learning at inference: +4.50 nats, 89% retained, BPB drift +0.005, poisoning REJECTED
+- long generation: 12k tokens at 0.05-0.16 repetition (real text 0.05)
+- self-growth, function-preserving to 2.3e-07
+- learned read sharpness: -0.0518 BPB, 4.3x the noise bar
+
+**What is measured and does NOT stand:** Muon at 125M (5f), token-level loss selection (5d), brain-region
+conditional computation for capability (it buys 1.38x speed, not quality), DIN 16 vs 32 on BPB (5e).
+
+**Known-unfixed, in priority order:**
+1. **Retrieval dies at ~2000 tokens.** Architectural, not training-context or interference. Credit assignment is
+   the one surviving hypothesis and is UNTESTED (the BPTT run was killed for prod safety).
+2. **Growth timing is set by the hand-set floor, not the sensor** -- 0a violation. The sensor is now fixed and
+   instrumented to report which one decided, but it has not yet been observed deciding.
+3. **Verification cannot admit new information** -- everything novel goes to HOLD.
+4. **BPB cannot reward this architecture's advantage** (0.004 across a 30x context range). Do not optimise it.
+
 ## 1. The goal (the whole point)
 - **Grows itself, from infant, like a child.** Self-growth is central. A fixed model would defy the goal.
 - **Faculties intrinsic to the model**, not scaffolding. Provable at small scale.
@@ -291,10 +319,25 @@ Seed noise floor measured for the first time: 4 identical runs differing only in
 `1.2249 1.2248 1.2160 1.2203`, **std 0.0042**, so two single-seed runs must differ by **>0.0120 BPB** for 2-sigma.
 This retires four decisions taken on smaller margins -- DIN 16 vs 32 (0.0102, called a win and SHIPPED),
 per-layer vs per-token sharpness (0.0068), brain routing at matched compute (0.0082), reference-scored token
-selection (0.0046). The read-sharpness fix (0.0518) and Muon from scratch (0.0774) clear comfortably and stand.
+selection (0.0046). The read-sharpness fix (0.0518) clears comfortably and stands. Muon (0.0774) cleared the bar
+at 24.5M and then FAILED TO TRANSFER -- see 5f.
 **DIN=32 is in the flagship on an unjustified BPB margin.** It may still be justified by retrieval (+73% needle
 lift at d=0), whose noise floor is also unmeasured. Measure it before defending the state cost.
 RULE: run 3+ seeds or do not claim a sub-0.012 BPB difference.
+
+## 5f. NEGATIVE: Muon does not transfer to 125M, and significance is not scale-transfer (2026-09-09)
+Muon beat fused Adam by **0.0774 BPB** from scratch at 24.5M -- 6.4x the 0.0120 seed-noise bar, statistically
+unambiguous, ~1.75x fewer tokens. A full 14-hour from-scratch ladder to 125M (10.70B tokens) reproduced it at 35M
+(**-0.061 to -0.071**, and it beat Adam's best-ever-at-35M in 2.20x fewer steps) and then **lost it entirely at
+125M: -0.0015 to -0.0032, inside noise.**
+CONFOUND, recorded as unresolved: Adam had annealed (cosine) by 8-9B while Muon was still at flat LR (WSD), which
+tilts the comparison toward Adam by an unmeasured 0.02-0.05. Resolving it needs an 8h decay phase the clock did
+not allow. Muon's checkpoint is kept (`pbrain_muon_125M_10.7B.pt`) so that test remains cheap later.
+**THE RULE THIS ESTABLISHES, and it is more valuable than the optimiser:** clearing the noise floor at one scale
+is NOT evidence of scale transfer -- they are different questions. Significance answers "is this real where I
+measured it"; it is silent on "is it still real an order of magnitude up". **Any architecture or optimiser change
+measured only at <=35M is a HYPOTHESIS at 125M+, however many sigma it clears, and must be confirmed at the target
+scale before entering a flagship run.** Cost of learning this: ~14 GPU-hours.
 
 ## 6. Negative results and lessons (do not repeat blindly)
 - **Sparse MoE at ~136M active is over-determined failure** (below the scale it pays off; experts too small; top-1
