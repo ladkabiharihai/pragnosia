@@ -206,6 +206,20 @@ d=0: +6.020    d=200: +1.341    d=1,000: +0.194    d=4,000: -0.122
 This is a real property of a fixed-size recurrent state and we state it rather than hide it. We claim unbounded
 *reading* at constant cost, which is measured above, not unbounded *retrieval*.
 
+**We know it is architectural, because we tested the alternatives and they failed.** Four explanations were
+checked and all four are ruled out: it is not the training context (16,384-token documents with the state
+carried scored no better at d=2,000), not write interference (selective writing made the model genuinely sparse
+and the learned half-life did not move, 1,824 against 1,848), not capacity (a 202M model on 5.4B tokens decays
+identically), and not credit assignment. That last one was the hypothesis we most expected to be right: every
+long-context path detaches the recurrent state at chunk boundaries, so no gradient had ever connected a write
+at token *t* to a read at *t+3,000*, and the ~1,850-token half-life is almost exactly where the oldest token in
+a 2,048 window has decayed by half. Connecting the gradient across chunks changed the half-life by **6 tokens**
+(1,775 to 1,769) and left the d=2,000 needle flat (+0.007 to -0.002).
+
+So the horizon is a property of carrying a fixed-size state, and no training-side change we know of moves it.
+That is the price of constant-cost context, and it is the honest counterweight to the memory and latency
+numbers above.
+
 **Question answering, arithmetic, or reasoning.** This is a base model with no instruction tuning. It scores 1/5
 on simple factual questions. For calibration, GPT-2 at 774M, six times our size, scores 2/5 and cannot complete a
 syllogism. Those capabilities require an instruction tuning stage that we have not run.

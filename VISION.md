@@ -423,6 +423,41 @@ already saturated before the floor opened did NOT decide, however loudly it was 
 has made the decision. Until a growth event prints SENSOR, the vision's claim that the model grows on its own
 signal is not demonstrated, and the claim sheet should keep saying so.
 
+## 5i. NEGATIVE, AND IT CLOSES THE QUESTION: the retrieval horizon is NOT a credit-assignment failure (2026-09-09)
+
+The ~2000-token retrieval horizon was the largest open architectural problem and three explanations had already
+been ruled out: training context (16384-token documents with the state carried scored no better at d=2000),
+interference (selective writing made the model genuinely sparse and the half-life did not move), and capacity
+(a 202M model on 5.4B tokens degenerates identically). The last hypothesis standing was credit assignment:
+every long-context path in this codebase detaches the state at chunk boundaries, so no gradient has ever
+connected a write at token t to a read at t+3000, and a half-life near 1850 is almost exactly where the oldest
+token in a 2048 window has decayed by half. The model might simply have been optimising the only range it
+could see.
+
+Tested directly at 24.5M, 245M tokens, same data, same seed, same everything but the detach. Arm B keeps the
+graph across 2 chunks so gradient flows from a read in chunk 1 back to a write in chunk 0, spanning 4096 tokens
+and therefore covering the d=2000 needle.
+
+                     detached            bptt        change
+    half-life        1775 tok            1769 tok    -6
+    needle d=0       +2.769+-0.218       +2.567+-0.199   -0.202
+    needle d=200     +0.545+-0.071       +0.508+-0.072   -0.037
+    needle d=2000    +0.007+-0.003       -0.002+-0.003   -0.009
+    needle d=8000    +0.003+-0.003       -0.002+-0.003   -0.005
+
+The prediction was that the half-life would GROW and the needle would survive past d=2000. Neither happened;
+d=2000 is if anything marginally worse, and BPB moved 1.2399 to 1.2435, inside the 0.012 seed bar either way.
+
+**Conclusion: the horizon is intrinsic to a fixed-size recurrent state, not an artifact of how we train.** Stop
+trying to fix it by changing the training signal. This is the honest cost of constant-cost context and the
+claim sheet states it as a measured limitation rather than an open question. What remains untested is whether a
+DIFFERENT state design (larger, structured, or with an explicit slow-decay channel) moves it; that is an
+architecture change, not a training change, and is the only direction left worth trying.
+
+One scope caveat stated plainly: this ran K=2 (4096 tokens of BPTT), so the d=8000 needle sits outside the
+gradient span and that row is not a fair test of the hypothesis. d=2000 is inside the span and is, and it is
+the row the hypothesis was about.
+
 ## 6. Negative results and lessons (do not repeat blindly)
 - **Sparse MoE at ~136M active is over-determined failure** (below the scale it pays off; experts too small; top-1
   with identical upcycled experts collapses; upcycling needs 100B+ tokens). DROPPED. Dense is the path.
