@@ -3538,3 +3538,44 @@ survive a 5x increase in model size. Significance answers "is this real at the s
 nothing about "will it still be real one order of magnitude up". Cost: ~14 GPU-hours.
 **RULE: an architecture or optimiser change measured only at <=35M is a HYPOTHESIS at 125M+, no matter how many
 sigma it clears. Confirm at the target scale before it enters a flagship run.**
+
+## THE STATE IS 99% EMPTY, AND THE CAUSE IS KEY COLLAPSE
+Asked whether "use the same state better" was a live direction, measured before designing anything. It is live,
+and the headroom is ~80x.
+### THE STATE IS ESSENTIALLY UNUSED
+Streaming real text through the finished 125M and taking the singular spectrum of each layer's state M:
+| tokens written | mean effective rank | of max 832 | dims holding 90% of energy |
+|---|---|---|---|
+| 2,048 | 13.2 | **1.6%** | 6 |
+| 16,384 | 6.2 | 0.7% | 4 |
+| 65,536 | 13.7 | 1.7% | 7 |
+| 200,704 | 9.8 | **1.2%** | 5 |
+per-layer effective rank: `2 12 30 3 2 4 2 32 2 2 6 18 10 11`. **We allocate 1057 x 832 = 0.88M numbers per layer
+and use ~10 dimensions.** It does not fill with more tokens -- flat from 2k to 200k.
+### IT IS NOT THE CONSTANT FEATURE (my first hypothesis, wrong)
+taylor(x)=[1,x,x(x)x] and the leading 1 is identical for every token, so I expected the state to be rank-1
+dominated by that direction. Measured: the constant row holds **0.1-12%** of the energy; the quadratic rows hold
+**60-98%**. Not the cause.
+### IT IS THE KEYS
+| stage | effective rank | of max |
+|---|---|---|
+| `Wk` weight matrix | 21-24 | 32 |
+| **`xk` -- the actual keys** | **5.6-21.2** | **32** |
+| `kf` Taylor features | 17-218 | 1057 |
+| `v` values | 75-337 | 832 |
+Values are rich; **keys collapse to as few as 6 directions**, and since `M = sum kf (x) v` the state's rank is
+bounded by key diversity -- `kf` rank tracks `xk` rank exactly (xk~6 -> kf~17; xk~20 -> kf~180).
+Note `Wk` can produce 21-24 dimensions but `xk` after normalisation is as low as 5.6, so the collapse is in the
+KEYS CLUSTERING ON THE SPHERE, which qk-norm cannot fix -- it rescales, it does not decorrelate.
+### WHAT THIS UNIFIES
+Three problems we had been treating separately are one problem:
+1. **State 99% empty** -- not too small, addressed by too few key directions.
+2. **The 3:1 selectivity ceiling** -- real, but underneath it clustered keys mean cos(q,k) is high for
+   everything. The learned sharpness fix (-0.0518, real) was compensating for a key space that never spread.
+3. **DIN 16 vs 32 inside noise** -- we use 6-21 of 32 dimensions, so adding more cannot help. We now have the
+   MECHANISM, not just the null result. **DIN=32/40 in the live run is paying 3.9x the state for nothing.**
+### WHAT IS NOT YET KNOWN
+Why the keys cluster, and whether it is fixable. Candidates, untested: the shifted-key construction (keys come
+from the PREVIOUS token's hidden state, which may be less diverse than the current one); no pressure anywhere in
+the objective for key diversity; or Wk's own partial collapse (rank 21-24 of 32) being inherited. A decorrelation
+penalty or a whitening step on xk is the obvious first experiment, and it is cheap.
