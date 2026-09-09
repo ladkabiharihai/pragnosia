@@ -29,7 +29,11 @@ cap_gpu(float(sys.argv[2]) if len(sys.argv)>2 else 12.0)   # co-runs with prod: 
 DEV=C.DEV; TOK=Tokenizer.from_file("/opt/code/membrae/data/bpe32k.json")
 V=32768; CH=2048; D=384; NL=8; DIN=16
 K=int(os.environ.get("K","4"))   # chunks held in the graph; memory grows LINEARLY in K, so this is the knob
-BB=4                         # small batch: the flagship is training on the same card
+# Memory grows LINEARLY in both K and batch, and arm B holds K chunks in the graph. At BB=4 arm A peaked at
+# 7.2 GiB and arm B reached 25.9 GiB, which drove the shared card to 1.9 GiB free with prod on it and the run
+# never finished. BB is now a knob so arm B fits under the cap; BOTH arms use it, because comparing arms at
+# different batch sizes would confound the thing being measured with the batch size.
+BB=int(os.environ.get("BB","2"))
 TPP=float(sys.argv[1]) if len(sys.argv)>1 else 10.0
 DOC=CH*K
 dmw=DataMix(ctx=CH+1,verbose=False,lang_frac=0.70)
@@ -102,6 +106,14 @@ def run(tag,bptt):
                 st=[(a.detach(),b.detach()) for a,b in st]; pv=[q.detach() for q in pv]
         if bptt: tot.backward()
         torch.nn.utils.clip_grad_norm_(m.parameters(),1.0); opt.step()
+        # PROGRESS. The first version of this printed nothing until an arm finished, so a 50-minute arm was
+        # indistinguishable from a hung process, and the arm that OOMed did so silently after 50 minutes of
+        # apparently-fine silence. Print rarely enough to be free and often enough to be watchable.
+        if (i+1)%200==0:
+            el=time.time()-t0
+            print(f"    {tag[:1]} {i+1}/{STEPS} ({100*(i+1)/STEPS:.0f}%) loss {float(l)*K:.3f} "
+                  f"{el/60:.1f}m eta {(STEPS-i-1)*el/(i+1)/60:.0f}m "
+                  f"peak {torch.cuda.max_memory_allocated()/2**30:.1f}GiB",flush=True)
     bb=bpb(m,cfg); nd=needle(m,cfg)
     with torch.no_grad():
         hl=float(np.mean([np.log(0.5)/np.log(min(0.9999999,torch.sigmoid(L.Wg.bias).item())) for L in m.layers]))

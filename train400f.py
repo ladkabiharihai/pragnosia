@@ -38,7 +38,10 @@ V = 32768
 PLAN = [(160, 2, 0),      # D832x14L DIN32 125.0M -> D992x16L DIN32 ~190M
         (192, 1, 8),      # -> D1184x17L DIN40 ~285M
         (224, 1, 0)]      # -> D1408x18L DIN40  405.2M
-TOK_PER_PARAM_GATE = 22.0
+TOK_PER_PARAM_GATE = 22.0    # FLOOR: the earliest growth is ALLOWED. Stops growing before the size is earned.
+TOK_PER_PARAM_CEIL = 40.0    # CEILING: growth is FORCED. A sensor that never fires must not be able to stall
+                             # the run: the endpoint (405M) is a deliverable and cannot depend on a heuristic
+                             # firing. Between floor and ceiling the SENSOR decides, and the log says which.
 SRC = "/mnt/kv_cache/pragnosia_data/p124f.pt"
 CKPT = "/mnt/kv_cache/pragnosia_data/p400f.pt"
 CH = 2048
@@ -108,7 +111,9 @@ def main():
     P = sum(p.numel() for p in m.parameters())
     STEPS = int(TPP * 405_200_000) // (B * CH)      # budget set by the ENDPOINT, as the 124M run did
     fwd = torch.compile(m)
-    sensor = G.SaturationSensor(window=400, t_stat=1.0, min_gap=2500, floor_tokens=1)
+    # window is now in BLOCKS of `block` steps: 40 x 50 = 2000 steps per window, 3 consecutive disjoint
+    # windows = 6000 steps of sustained flat entropy before the model is judged saturated.
+    sensor = G.SaturationSensor(window=40, t_stat=1.0, min_gap=2500, floor_tokens=1, block=50)
     print(f"PRAGNOSIA-400  |  now {P/1e6:.1f}M, ladder "
           f"125 -> ~190 -> ~285 -> 405M on the SENSOR's signal (floor {TOK_PER_PARAM_GATE:.0f} tok/param)\n"
           f"  budget {TPP:.0f} tok/param OF THE ENDPOINT = {TPP*405.2e6/1e9:.1f}B tokens = {STEPS} steps; "
@@ -117,7 +122,7 @@ def main():
           f"  NOTE: this BPB uses 2048-token windows. It tracks progress and compares runs to each other,\n"
           f"  but it is NOT comparable to GPT-2, which is capped at 1024 context -- use exp/gpt2_bpb.py for that.", flush=True)
 
-    t0 = time.time(); ema = None
+    t0 = time.time(); ema = None; sat_before_floor = False
     bar = pbar(range(step, STEPS), "p400f", total=STEPS - step)
     decay_from = None
     for it in bar:
@@ -143,13 +148,28 @@ def main():
         l.backward()
         torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0); opt.step()
         ent = G.SaturationSensor.entropy(lg.detach()) if 'lg' in dir() else None
+        # FEED THE SENSOR EVERY STEP. This used to sit on the right of an `and` after the floor test, so Python
+        # short-circuited it and observe() was never called until the floor had already opened -- after which
+        # the sensor still needed its full 400-sample window before it could hold any opinion at all. That is a
+        # third way the floor was deciding while the log said the sensor did. The window is now continuous, so
+        # by the time the floor opens the sensor already has a formed opinion to act on.
+        sat_now = sensor.observe(ent, it, tokens_at_size) if ent is not None else False
         v = l.item(); ema = v if ema is None else 0.99 * ema + 0.01 * v
         tokens_at_size += B * CH
         # THE SENSOR DECIDES WHEN. The floor only decides when it is allowed to.
         Pn = sum(p.numel() for p in m.parameters())
-        if k < len(PLAN) and ent is not None and tokens_at_size >= TOK_PER_PARAM_GATE * Pn \
-           and sensor.observe(ent, it, tokens_at_size):
-            amt = PLAN[k]; earned = tokens_at_size / Pn
+        earned = tokens_at_size / Pn
+        floor_open = earned >= TOK_PER_PARAM_GATE
+        ceil_hit = earned >= TOK_PER_PARAM_CEIL
+        sat_op, t_op = sensor.verdict()          # the sensor's opinion, independent of any floor
+        # WHICH CONSTRAINT IS BINDING. If the sensor was already asking to grow before the floor opened, then
+        # the FLOOR is what held it back and the floor decided, however loudly the sensor was signalling. Only
+        # a sensor that starts asking AFTER the floor is already open has actually made the decision.
+        if sat_now and not floor_open: sat_before_floor = True
+        if k < len(PLAN) and ent is not None and ((floor_open and sat_now) or ceil_hit):
+            decided_by = ("CEILING" if not (floor_open and sat_now)
+                          else ("FLOOR (sensor was saturated and waiting)" if sat_before_floor else "SENSOR"))
+            amt = PLAN[k]
             b_before = bpb(m)
             torch.save({'model': m.state_dict(), 'step': it + 1, 'k': k, 'D': m.cfg.D, 'NL': m.cfg.NL,
                         'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': m.cfg.head_scale,
@@ -168,9 +188,16 @@ def main():
                 m.zero_grad(set_to_none=True); opt.zero_grad(set_to_none=True); del _x
             except Exception as e:
                 bar.write(f"    compile failed after growth ({type(e).__name__}) -- continuing EAGER"); fwd = m
-            bar.write(f"    >>> SELF-GREW #{k} at step {it+1}: D{m.cfg.D}x{m.cfg.NL}L DIN{m.cfg.DIN} -> "
-                      f"{sum(p.numel() for p in m.parameters())/1e6:.0f}M (earned {earned:.0f} tok/param), "
+            bar.write(f"    >>> GREW #{k} at step {it+1}: D{m.cfg.D}x{m.cfg.NL}L DIN{m.cfg.DIN} -> "
+                      f"{sum(p.numel() for p in m.parameters())/1e6:.0f}M (earned {earned:.1f} tok/param), "
                       f"BPB {b_before:.4f} -> {b_after:.4f} across the grow")
+            # WHO DECIDED. If this says FLOOR or CEILING then the model did not choose and the vision's claim
+            # that it grows on its own signal is not demonstrated by this event. Stated at the event so it
+            # cannot be inferred wrongly later.
+            bar.write(f"        DECIDED BY: {decided_by}   (floor {TOK_PER_PARAM_GATE:.0f}, ceiling "
+                      f"{TOK_PER_PARAM_CEIL:.0f}, earned {earned:.1f} tok/param; sensor opinion "
+                      f"saturated={sat_op} t={t_op if t_op is None else round(t_op,2)})")
+            sensor.reset(); sat_before_floor = False
         if (it + 1) % 50 == 0:
             done = (it + 1 - step) * B * CH
             bar.set_postfix_str(f"loss={ema:.3f} ppl={math.exp(min(20,ema)):.0f} lr={lr:.1e} "
@@ -182,6 +209,11 @@ def main():
                         'head_scale': m.cfg.head_scale, 'D0': sd['D0'] if 'D0' in sd else 448,
                         'gated': True, 'qknorm': True, 'qk_learn_scale': True, 'sel_write': True,
                         'res_scale': m.cfg.res_scale, 'k': k, 'tokens_at_size': tokens_at_size}, CKPT)
+        if (it + 1) % 2000 == 0 and k < len(PLAN):
+            bar.write(f"    [growth] earned {earned:.1f} tok/param (floor {TOK_PER_PARAM_GATE:.0f}, ceiling "
+                      f"{TOK_PER_PARAM_CEIL:.0f})  sensor: saturated={sat_op} "
+                      f"t={t_op if t_op is None else round(t_op,2)}  "
+                      f"{'FLOOR OPEN' if floor_open else 'floor closed'}")
         if (it + 1) % EVAL_EVERY == 0:
             b = bpb(m)
             bar.write(f"    step {it+1} | {(it+1)*B*CH/1e9:.2f}B tokens | {(it+1)*B*CH/P:.1f} tok/param "

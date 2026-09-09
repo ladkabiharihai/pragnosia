@@ -381,6 +381,48 @@ stable. Asked for ONE continuous 9,000-token document, which is what its 1,024 p
 without feeding it its own output, it goes 0.06, 0.16, 0.97. Both are reported: the honest claim is that GPT-2
 writes good short text and cannot sustain a long document, not that GPT-2 is a bad model.
 
+## 5h. THE GROWTH TRIGGER WAS BROKEN IN FOUR SEPARATE WAYS (2026-09-09), and the fourth was in the fix
+
+VISION 0a says the model decides when to grow. Commit ffd5058 found the saturation criterion classified a
+RISING entropy as converged and fixed it. Auditing the live flagship found three more defects, one of which
+was introduced by that fix, and the model has therefore never once decided to grow in any run to date.
+
+**1. The live run was not running the fix.** train400f.py started at 06:26; growth.py was corrected at 07:06.
+The process had the old sensor in memory, so the two remaining growth events on the ladder would have been
+floor-driven exactly like the first.
+
+**2. The floor test short-circuited the sensor.** The condition was
+`tokens_at_size >= GATE*Pn and sensor.observe(...)`. Python evaluates the right side only if the left is true,
+so observe() was never called until the floor had already opened, and the sensor then needed its full window
+before it could hold any opinion. It was structurally incapable of deciding first. Every SELF-GREW line ever
+printed was the floor firing with the sensor unable to disagree.
+
+**3. "Three consecutive windows" was three consecutive STEPS.** observe() runs every step and the window slides
+by one sample, so consecutive calls shared 399 of 400 points. The sustained-flatness requirement, which is the
+entire defence against firing on a transient, was satisfied by three adjacent steps. Measured live it fired
+repeatedly at 13.5 tok/param.
+
+**4. The t-statistic was inflated by the smoothing that fed it.** The signal was smoothed with an EMA and then
+handed to a least-squares t-test that assumes independent samples. An EMA manufactures autocorrelation, the
+residuals understate the true noise, the standard error comes out far too small, and |t| is inflated: on the
+live run it swung between -20 and +24 while the model was simply training normally. The only moments it read
+"flat" were the instants that swing crossed zero, which is the opposite of convergence. Replaced with means
+over disjoint blocks of 50 raw steps, which reduces noise without creating autocorrelation, so the test's own
+assumption roughly holds and |t| <= 1 means what it says.
+
+**The design now.** FLOOR (22 tok/param, earliest allowed) then SENSOR (three disjoint 2000-step windows of
+flat entropy) then CEILING (40 tok/param, forced). The ceiling exists because a deliverable cannot depend on a
+heuristic firing; without it, a sensor that never fires stalls the ladder and 405M never arrives. Verified on
+six synthetic traces at the real floor-to-ceiling ratio before restarting the run: a still-falling, rising, or
+oscillating trace never fires the sensor, a trace that plateaus inside the window fires it, and a trace flat
+from the start is correctly attributed to the FLOOR because the sensor was saturated and waiting.
+
+**Attribution is now part of the claim.** Every growth event logs which of the three decided. A sensor that was
+already saturated before the floor opened did NOT decide, however loudly it was signalling, and the log says
+"FLOOR (sensor was saturated and waiting)". Only a sensor that begins asking after the floor is already open
+has made the decision. Until a growth event prints SENSOR, the vision's claim that the model grows on its own
+signal is not demonstrated, and the claim sheet should keep saying so.
+
 ## 6. Negative results and lessons (do not repeat blindly)
 - **Sparse MoE at ~136M active is over-determined failure** (below the scale it pays off; experts too small; top-1
   with identical upcycled experts collapses; upcycling needs 100B+ tokens). DROPPED. Dense is the path.

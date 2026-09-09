@@ -185,12 +185,21 @@ class SaturationSensor:
     about its own outputs). Criterion is NOISE-RELATIVE, not a magic threshold: fit the slope of that entropy over a
     window and compare it to the slope's own standard error. If the entropy is no longer falling faster than its own
     noise, the model has extracted what it can at this capacity -- it is saturated, and it asks to grow."""
-    def __init__(s,window=400,t_stat=1.0,min_gap=2000,floor_tokens=0,ema=0.02,consec=3):
+    def __init__(s,window=40,t_stat=1.0,min_gap=2000,floor_tokens=0,ema=0.02,consec=3,block=50):
         # window/ema matter: with a short window on the RAW signal the test shows the sensor fires on NOISE
         # (an improving-but-noisy trace looks saturated), which turns "intrinsic growth" into a hidden schedule.
         # Smoothing the signal and lengthening the window makes it discriminate correctly.
+        # BLOCK MEANS, NOT AN EMA. The signal was smoothed with an exponential moving average and then fed to
+        # a least-squares t-test that assumes independent samples. An EMA makes consecutive samples strongly
+        # autocorrelated, so the residuals understate the true noise, the standard error comes out far too
+        # small, and |t| is inflated. Measured live on the flagship the statistic swung between -20 and +24 on
+        # a model that was simply training normally, and the only moments it read "flat" were the instants the
+        # swing crossed zero. Averaging disjoint blocks of raw entropy reduces noise WITHOUT manufacturing
+        # autocorrelation, so the t-test's own assumption is roughly satisfied and |t|<=1 means what it says.
+        s.block=block; s.buf=[]
         s.w=window; s.t=t_stat; s.min_gap=min_gap; s.hist=[]; s.last=0; s.floor=floor_tokens
         s.ema_a=ema; s.ema=None; s.consec=consec; s.nsat=0
+        s.n_since=0     # blocks since the criterion was last EVALUATED, so consecutive tests use disjoint data
     @staticmethod
     @torch.no_grad()
     def entropy(logits,sample=4096):
@@ -220,10 +229,20 @@ class SaturationSensor:
         return (abs(t) <= s.t), t
 
     def observe(s,ent,step,tokens_seen=0):
-        s.ema=ent if s.ema is None else (1-s.ema_a)*s.ema+s.ema_a*ent      # smooth first: raw entropy is too noisy
-        s.hist.append(s.ema)
+        s.buf.append(float(ent))
+        if len(s.buf)<s.block: return False                # accumulate a block of raw entropy first
+        s.hist.append(float(np.mean(s.buf))); s.buf=[]      # one nearly-independent sample per block
         if len(s.hist)>s.w: s.hist.pop(0)
+        s.n_since+=1
         if len(s.hist)<s.w or step-s.last<s.min_gap or tokens_seen<s.floor: return False
+        # EVALUATE ON DISJOINT WINDOWS. observe() runs every step and the window slides by one, so consecutive
+        # calls share 399 of 400 samples. Counting `consec` consecutive PASSES therefore meant three consecutive
+        # STEPS, which is an instant, not sustained flatness -- and measured live it fired repeatedly at 13.5
+        # tok/param while the t-statistic was swinging between -20 and +24, i.e. on the moment the swing crossed
+        # zero. Only testing once per full window makes `consec` mean what the docstring says: three independent
+        # windows, 1200 steps of genuinely flat entropy.
+        if s.n_since<s.w: return False
+        s.n_since=0
         y=np.asarray(s.hist,dtype=np.float64); x=np.arange(len(y),dtype=np.float64)
         n=len(y); sx=x-x.mean(); slope=float((sx*(y-y.mean())).sum()/(sx**2).sum())
         resid=y-(y.mean()+slope*sx); se=float(np.sqrt((resid**2).sum()/max(1,n-2)/(sx**2).sum()))
@@ -236,7 +255,11 @@ class SaturationSensor:
             # REQUIRE SUSTAINED FLATNESS. One window can look flat while the model is mid-transient; asking for
             # `consec` consecutive flat windows is what separates converged from momentarily quiet.
             if s.nsat >= s.consec:
-                s.last=step; s.hist=[]; s.nsat=0; return True    # SATURATED -> the model asks to grow
+                # DO NOT clear state here. Clearing on fire meant a sensor that saturated while an external
+                # floor was still closed threw its evidence away and had to re-earn 6000 steps of flatness,
+                # so by the time the floor opened the sensor was mid-rebuild and the floor decided by default.
+                # Saturation now PERSISTS until the caller acts on it and calls reset() after the growth.
+                s.last=step; return True                          # SATURATED -> the model asks to grow
         else:
             s.nsat = 0
         return False
