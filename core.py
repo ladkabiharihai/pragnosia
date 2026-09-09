@@ -407,7 +407,8 @@ class Core(nn.Module):
         h,_=rmsnorm(a); return s.head(h)[:,0]*getattr(s.cfg,'head_scale',1.0), ns, npv
     @torch.no_grad()
     def generate(s,ids,n=40,temp=1.0,states=None,top_p=1.0,greedy=False,write_scale=0.25,
-                 refresh_every=1000,refresh_blend=0.5):
+                 refresh_every=1000,refresh_blend=0.5,
+                 rep_thresh=0.35,rep_win=256,rep_check=64,rep_blend=0.75):
         """write_scale controls how much of its OWN output the model writes back into the recurrent state.
 REFRESH (refresh_every / refresh_blend) IS WHAT MAKES LONG GENERATION HOLD. Generated tokens
         accumulate in a fixed-size state; because the model's own output is far more self-similar than real text,
@@ -418,6 +419,26 @@ REFRESH (refresh_every / refresh_blend) IS WHAT MAKES LONG GENERATION HOLD. Gene
             refresh 1000 / blend 0.5    rep 0.04, 0.07, 0.05, 0.11, 0.10 across 0-20k   (real text 0.05)
         and the text is still on topic 19,000 tokens after the prompt. Swept: period 250/500/1000 and blend
         0.25/0.5/0.75; 1000 and 0.5 won. Set refresh_every=0 to disable.
+
+        TRIGGERED REFRESH (rep_thresh, default off). The periodic refresh above is open-loop: a loop that starts
+        at token 100 runs for 900 more tokens before anything intervenes. Measured across a prompt x temperature
+        matrix, the periodic refresh holds at temperature 0.9 (4-gram repetition 0.081 and 0.124) but not at 0.8
+        with a short prompt (0.468), where the anchor state is thin and the sampler has little entropy to escape
+        with. rep_thresh closes the loop: every rep_check tokens, measure 4-gram repetition over the last rep_win
+        generated tokens and, if it exceeds rep_thresh, refresh immediately with rep_blend. Cost is one set of
+        256 tuples every 64 tokens, which is nothing next to a forward pass.
+
+        MEASURED, 9000 generated tokens per cell, 4-gram repetition over 3000-token windows (exp/refresh_trigger.py):
+            prompt              temp   off     on      fires
+            256-token real doc  0.9    0.099   0.072   3
+            256-token real doc  0.8    0.263   0.238   15
+            6-token generic     0.9    0.084   0.084   0      <- never fired, output byte-identical
+            6-token generic     0.8    0.555   0.226   9      <- the broken case
+        Three cells better, none worse, and in the broken case the per-window trend reverses from 0.37/0.56/0.73
+        (running away) to 0.29/0.21/0.18 (recovering), with distinct-3 rising 0.393 -> 0.625. The condition that
+        made it default rather than optional is the third row: where generation was already healthy it fired
+        zero times and changed nothing, so this cannot silently alter a working setup. Real web text on the same
+        metric is 0.051. Set rep_thresh=0 to disable.
 
         DEFAULT CHANGED 0.0 -> 0.25. The 0.0 default was measured on a model from the OLD trainer, where ANY
         self-writing collapsed into word loops. On the clean run it is the opposite: 0.0 means the model cannot
@@ -459,10 +480,15 @@ REFRESH (refresh_every / refresh_blend) IS WHAT MAKES LONG GENERATION HOLD. Gene
                      _t.zeros(x.shape[0],s.cfg.FE,device=x.device)) for _ in range(s.cfg.NL)]
         st,pv=(s.prefill(x[:,:-1],states) if x.shape[1]>1 else (states,None))
         _base=[(a.clone(),z.clone()) for a,z in st]      # the PROMPT's state, the anchor refresh returns to
-        out=[]; cur=x[:,-1:]
+        out=[]; cur=x[:,-1:]; ntrig=0
         for i in range(n):
-            if refresh_every and i and i%refresh_every==0:
-                b=refresh_blend
+            b=None
+            if refresh_every and i and i%refresh_every==0: b=refresh_blend
+            elif rep_thresh and i>=rep_win and i%rep_check==0:
+                w=out[-rep_win:]
+                g=[tuple(w[j:j+4]) for j in range(len(w)-3)]
+                if g and 1-len(set(g))/len(g) > rep_thresh: b=rep_blend; ntrig+=1
+            if b is not None:
                 st=[((1-b)*a+b*a0,(1-b)*z+b*z0) for (a,z),(a0,z0) in zip(st,_base)]
             lg,st,pv=s.step(cur,st,pv,write_scale=write_scale)
             lg=lg[0].float()
@@ -474,6 +500,7 @@ REFRESH (refresh_every / refresh_blend) IS WHAT MAKES LONG GENERATION HOLD. Gene
                     p=_t.zeros_like(p).scatter_(0,si[keep],sp[keep]); p=p/p.sum()
                 nx=int(_t.multinomial(p,1))
             out.append(nx); cur=_t.tensor([[nx]],device=x.device)
+        s.last_refresh_triggers=ntrig
         return out,st
     @torch.no_grad()
     def prefill(s,X,states=None):

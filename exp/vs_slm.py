@@ -69,7 +69,7 @@ for dname,kw in (("OUR MIX (70% language / 30% reasoning)",dict(lang_frac=0.70))
     print("="*104); print(f"  {dname}   -- BPB, same text, same 1024-token context for every model")
     print("="*104)
     print(f"  {'model':>16s} {'params':>8s} {'train tokens':>22s} {'BPB':>8s}   {'vs ours':>9s}")
-    ob,oP=ours_bpb("/mnt/kv_cache/pragnosia_data/p124g.pt",TX)
+    ob,oP=ours_bpb(os.environ.get("PRAGNOSIA_CKPT","/mnt/kv_cache/pragnosia_data/p124f.pt"),TX)
     print(f"  {'PRAGNOSIA':>16s} {oP/1e6:7.0f}M {'9.1B':>22s} {ob:8.4f}   {'--':>9s}",flush=True)
     for name,short,par,tok in MODELS:
         try:

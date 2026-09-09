@@ -17,8 +17,9 @@ import sys, os, time, argparse, math
 sys.path.insert(0, "/opt/code/membrae"); sys.path.insert(0, "/opt/code/membrae/exp")
 os.environ.setdefault('HF_HOME', '/mnt/kv_cache/hf_cache')
 import numpy as np, torch, torch.nn.functional as F
+from util import cfg_from_ckpt, cap_gpu
+cap_gpu(12.0)   # prod shares this GPU; never gate a launch on free VRAM, cap the process
 import core as C
-from util import cfg_from_ckpt
 from data_mix import DataMix
 from tokenizers import Tokenizer
 
@@ -83,9 +84,14 @@ def c2(m, cfg):
     for name, kw in (("our mix", dict(lang_frac=0.70)), ("web text (dclm)", dict(only='dclm'))):
         np.random.seed(777); dm = DataMix(ctx=2049, verbose=False, **kw)
         texts = []
+        # DOCUMENTS MUST BE LONGER THAN THE WINDOW. A >200-character filter admits ~50-token documents, so a
+        # "1024-token" comparison would mostly run on sequences far shorter than the window, and would not match
+        # what exp/vs_slm.py reports for the same model on the same nominal eval. >3000 characters is ~1024+
+        # tokens. This mismatch made two of our own scripts disagree (1.0798 vs 1.1085) and looked like
+        # cherry-picking; it was a defect here.
         while len(texts) < 20:
             t = TOK.decode(dm.batch(1)[0].tolist())
-            if len(t.strip()) > 200: texts.append(t)
+            if len(t.strip()) > 3000: texts.append(t)
         on = gn = 0.0; nb = gnb = 0
         with torch.no_grad():
             for t in texts:
@@ -164,8 +170,14 @@ def c5(m, cfg, quick):
             o, _ = m.generate(torch.tensor([d], device=DEV), n=n, temp=0.9, top_p=0.95)
             ws.append([rep(o[i:i + 3000]) for i in range(0, n - 2999, 3000)])
     per = np.mean(np.array(ws), axis=0)
+    # MEASURE the real-text reference instead of hardcoding it. The previous version asserted "(0.05)" as a
+    # literal in the claim string. It happens to be right for web text, but a sheet that states its own
+    # baseline from memory is exactly the thing a reviewer should not have to take on trust -- and the same
+    # constant would have been silently wrong against our 70/30 mix, where real text scores 0.243.
+    np.random.seed(0); rp = DataMix(ctx=3001, verbose=False, only='dclm')
+    ref = float(np.mean([rep([int(t) for t in rp.batch(1)[0][:3000]]) for _ in range(8)]))
     claim(5, f"Coherent generation to {n:,} tokens",
-          "4-gram repetition stays near real text (0.05) with no upward drift",
+          f"4-gram repetition stays near real text ({ref:.3f}, measured here on 8 windows) with no upward drift",
           "  ".join(f"{3*i}-{3*(i+1)}k:{v:.2f}" for i, v in enumerate(per)),
           per.max() < 0.25 and per[-1] < 2.5 * max(0.02, per[0]))
 

@@ -339,6 +339,48 @@ measured it"; it is silent on "is it still real an order of magnitude up". **Any
 measured only at <=35M is a HYPOTHESIS at 125M+, however many sigma it clears, and must be confirmed at the target
 scale before entering a flagship run.** Cost of learning this: ~14 GPU-hours.
 
+## 5g. THE THREE-EXAMPLE PROBLEM (2026-09-09): two headline claims rested on anecdotes, and measuring them properly changed both
+
+An external review of CLAIMS.md asked for more evidence behind anti-poisoning (three hand-picked examples) and
+for diversity metrics behind long generation (one repetition number). Both turned out to be hiding something.
+
+**Anti-poisoning: a real vulnerability, found only by building the benchmark.** 747 labelled cases, ground
+truth from the corpus by construction rather than by our judgement (exp/poison_bench.py), five classes. The
+class that did not exist before we wrote it is the one that mattered: NEWSUBJ, a fluent real English frame with
+an invented subject spliced in, which is what an actual poisoning attempt looks like. The shipped verifier
+ACCEPTED 12 of 150 of them. The cause was structural, not a threshold: the evidence key was the tokens
+immediately before the answer, so "the vault at Threadneedle is guarded by" retrieved whatever generally
+follows "is guarded by" and reported it as evidence about Threadneedle. Requiring the key to contain the rarest
+token of its window takes successful poisonings from 12 to 0 across all 450 adversarial cases, at a cost of 4
+points of acceptance on facts the corpus does support (53.7% to 49.0%). Anti-poisoning and acquisition rate
+trade against each other and we chose the safe side, because a bad write is permanent and a HOLD is not.
+
+**And a reminder about hand-checking.** A more sophisticated rule that locates the subject anywhere in the
+context, not just adjacent to the answer, fixed all three examples I checked by hand and scored 52.5% overall
+against 72.6%. Three or six examples cannot distinguish a fix from a coincidence, which is the same lesson as
+5e in a different domain: this time the sample size was on cases rather than seeds.
+
+**Long generation: the published number was conditional and did not say so.** "4-gram repetition 0.05 to 0.16"
+was measured at one prompt and one temperature. Across a prompt x temperature matrix at 9,000 tokens the model
+reads 0.072 and 0.084 at temperature 0.9 but 0.263 and 0.555 at 0.8, the last still climbing (0.37, 0.56, 0.73
+across windows). The real-text reference was also a hardcoded literal in a print statement; measured, it is
+0.048 +- 0.017 on web text and 0.243 +- 0.238 on our own 70/30 mix, whose reasoning portion is templated and
+repeats heavily. The constant happened to be right for the corpus it was used against, and would have been
+badly wrong against the other one. Neither the harness nor a claim sheet should state its own baseline from
+memory.
+
+**The fix that came out of it, and it is a real one.** State refresh was open-loop: blend back toward the
+prompt state every 1,000 tokens whether or not anything is wrong, so a loop starting at token 100 runs 900
+tokens unchecked. Generation now measures its own 4-gram repetition over the last 256 tokens every 64 tokens
+and refreshes immediately past 0.35. Three of four cells better, none worse, the broken cell 0.555 to 0.226
+with its trend reversed to 0.29, 0.21, 0.18. In the cell that was already healthy it fired zero times and the
+output was byte-identical, which is the property that made it safe as a default rather than an option.
+
+**External reference, measured fairly.** GPT-2 124M given a fresh prompt every 1,000 tokens scores 0.140 and is
+stable. Asked for ONE continuous 9,000-token document, which is what its 1,024 positions make impossible
+without feeding it its own output, it goes 0.06, 0.16, 0.97. Both are reported: the honest claim is that GPT-2
+writes good short text and cannot sustain a long document, not that GPT-2 is a bad model.
+
 ## 6. Negative results and lessons (do not repeat blindly)
 - **Sparse MoE at ~136M active is over-determined failure** (below the scale it pays off; experts too small; top-1
   with identical upcycled experts collapses; upcycling needs 100B+ tokens). DROPPED. Dense is the path.
