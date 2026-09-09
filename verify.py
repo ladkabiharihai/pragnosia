@@ -98,7 +98,7 @@ def _ev_subject(ct,at,topk=6,min_n=20,win=24,max_anchor_freq=1e-4):
     top=[(TOK.decode([int(v)]),int(c),float(c)/tot) for v,c in zip(vals[:topk],cnts[:topk])]
     return dict(n=int(tot),claim_share=share,top=top,claim_rank=rank,key="subject",anchor=int(anchor))
 
-def evidence(ctx,ans,topk=6,min_n=20,mode="anchored"):
+def evidence(ctx,ans,topk=6,min_n=20,mode="anchored",ctx_ids=None,ans_ids=None):
     """Pick the EVIDENCE KEY, which is the single most consequential decision this module makes.
 
     The original rule scored each candidate key by claim_share + top_share and kept the highest, described as
@@ -115,7 +115,13 @@ def evidence(ctx,ans,topk=6,min_n=20,mode="anchored"):
     The rule now is: take the LONGEST key that still has enough occurrences to be evidence. Longest = most
     specific to the actual subject of the claim; the min_n floor is what stops it from running off into
     patterns too rare to mean anything. Shorter keys are a fallback, not a competitor."""
-    ct=TOK.encode(ctx).ids; at=TOK.encode(ans).ids
+    # ACCEPT TOKEN IDS DIRECTLY. This tokenizer does not round-trip: measured on 4000 corpus tokens, only
+    # 65.1% satisfy encode(decode(t)) == [t], because it distinguishes word-initial from word-internal pieces
+    # ('place' as token 4052 re-encodes to 1283, ',' as 12 re-encodes to 1999). A caller that HAS the ids and
+    # hands us text instead is silently asking about a different token 35% of the time. Real callers have
+    # text and are unaffected; evaluation harnesses have ids and must be able to pass them.
+    ct=list(ctx_ids) if ctx_ids is not None else TOK.encode(ctx).ids
+    at=list(ans_ids) if ans_ids is not None else TOK.encode(ans).ids
     # THE SUBJECT ANCHOR. specific() only asks that a key contain SOME content token, which "is guarded by"
     # satisfies via "guarded". That is not the same as containing what the claim is ABOUT. Measured on 150
     # fluent claims with an invented subject spliced into a real frame, 12 were ACCEPTED and 13 REJECTED: the
@@ -144,7 +150,8 @@ def evidence(ctx,ans,topk=6,min_n=20,mode="anchored"):
     # legacy behaviour, kept so the change above stays measurable rather than asserted
     return max(cands,key=lambda ke:(ke[1]['claim_share'] if ke[1]['claim_share']>0 else 0)
                                    +(ke[1]['top'][0][2] if ke[1]['top'] else 0))[1]
-def verify(ctx,ans,min_evidence=20,accept_share=0.10,accept_rank=3,contradict_share=0.25,mode="anchored"):
+def verify(ctx,ans,min_evidence=20,accept_share=0.10,accept_rank=3,contradict_share=0.25,mode="anchored",
+           ctx_ids=None,ans_ids=None):
     """ACCEPT / REJECT / HOLD from retrieved evidence alone (mechanical judge, as VISION 7d specifies for the young model).
 
     DEFAULT = "anchored", chosen by measurement on 747 labelled cases (exp/poison_bench.py), all four rules
@@ -168,7 +175,7 @@ def verify(ctx,ans,min_evidence=20,accept_share=0.10,accept_rank=3,contradict_sh
     answer as "two hydrogen atoms" never has the claimed token in next position. It is kept in the file as a
     measured negative rather than deleted, because "we tried the obvious better idea and it was worse" is
     information."""
-    ev=evidence(ctx,ans,mode=mode)
+    ev=evidence(ctx,ans,mode=mode,ctx_ids=ctx_ids,ans_ids=ans_ids)
     if ev['n']<min_evidence: return "HOLD",ev                       # no evidence either way -> never make it permanent
     if ev['claim_share']>=accept_share or (ev['claim_rank'] is not None and ev['claim_rank']<accept_rank):
         return "ACCEPT",ev

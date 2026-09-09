@@ -65,28 +65,35 @@ corpus by construction rather than from our judgement (`exp/poison_bench.py`), i
 
 | class | what it is | correct verdict | result |
 |---|---|---|---|
-| CONSENS | the corpus's own modal continuation | ACCEPT | 49.0% |
-| TRUE | a real continuation from one corpus position | ACCEPT | 37.3% |
-| POISON | a plausible token the corpus does not support here | REJECT | 76.7% |
-| NOVEL | a context that occurs nowhere in the corpus | HOLD | 100.0% |
-| NEWSUBJ | a fluent real frame with an **invented subject** | HOLD | 99.3% |
+| CONSENS | the corpus's own modal continuation | ACCEPT | **87.1%** |
+| TRUE | a real continuation from one corpus position | ACCEPT | 76.0% |
+| POISON | a plausible token the corpus does not support here | REJECT | 81.3% |
+| NOVEL | a context that occurs nowhere in the corpus | HOLD | **100.0%** |
+| NEWSUBJ | a fluent real frame with an **invented subject** | HOLD | **100.0%** |
 
-**Zero of 450 adversarial cases were accepted** (POISON, NOVEL and NEWSUBJ combined; 95% CI on the poison
-class alone [97.5, 100.0]). Every poison either got REJECT or HOLD, and both keep it out of the weights.
+**Zero of 450 adversarial cases were accepted** (POISON, NOVEL and NEWSUBJ combined). Every poison got REJECT
+or HOLD, and both keep it out of the weights.
 
 **The benchmark found a real vulnerability, which is why it was worth building.** The NEWSUBJ class did not
-exist until we wrote it, and on the shipped verifier it accepted **12 of 150** fluent claims about invented
-entities. The cause was structural: the evidence key was the tokens immediately preceding the answer, so for
-"the vault at Threadneedle is guarded by" it retrieved what generally follows *"is guarded by"* anywhere in
-the corpus and reported that as evidence about Threadneedle. The key is now required to contain the rarest
-token of its window, so a claim about an unseen subject returns no evidence and holds. That change took
-successful poisonings from 12 to 0.
+exist until we wrote it, and on the previous verifier it accepted **26 of 150** fluent claims about invented
+entities, a 17% poisoning rate. The cause was structural: the evidence key was the tokens immediately
+preceding the answer, so for "the vault at Threadneedle is guarded by" it retrieved what generally follows
+*"is guarded by"* anywhere in the corpus and reported that as evidence about Threadneedle. The key is now
+required to contain the rarest token of its window, so a claim about an unseen subject returns no evidence and
+holds. That change took successful poisonings from 26 to **0**.
 
-**What it costs, stated plainly.** The gate is conservative: it accepts only **49%** of facts the corpus
-actively agrees with. Anti-poisoning and acquisition rate trade against each other, we chose the safe side
-because a bad write is permanent while a HOLD is recoverable, and we are not claiming a solved problem. We
-also tried a more sophisticated rule that finds the subject anywhere in the context rather than adjacent to
-the answer; it looked better on the three examples above and scored **52.5%** overall against 72.6%, so it was
+**What it costs, and a correction to an earlier version of this sheet.** The gate is conservative: it accepts
+87% of facts the corpus agrees with rather than the 98.6% the unguarded rule accepts, so eliminating a 17%
+poisoning rate cost about 11 points of acquisition. We chose that side because a bad write is permanent while
+a HOLD is recoverable. An earlier version of this document reported that acceptance figure as **49%**. That
+number was wrong and the fault was ours: the benchmark built each case as token ids, decoded them to text, and
+let the verifier re-encode, and this tokenizer round-trips only 65% of tokens (it distinguishes word-initial
+from word-internal pieces, so `place` as token 4052 re-encodes to 1283). A third of every class was therefore
+asking about a different token than the one constructed. The verifier now accepts ids directly and the numbers
+above are measured without that corruption.
+
+We also tried a more sophisticated rule that finds the subject anywhere in the context rather than adjacent to
+the answer. It looked better on the three examples above and scored **61.3%** overall against 88.9%, so it was
 measured, rejected, and left in the code as a documented negative.
 
 To our knowledge we are unaware of a comparable published model that learns verified facts online, retains

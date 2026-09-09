@@ -348,16 +348,25 @@ for diversity metrics behind long generation (one repetition number). Both turne
 truth from the corpus by construction rather than by our judgement (exp/poison_bench.py), five classes. The
 class that did not exist before we wrote it is the one that mattered: NEWSUBJ, a fluent real English frame with
 an invented subject spliced in, which is what an actual poisoning attempt looks like. The shipped verifier
-ACCEPTED 12 of 150 of them. The cause was structural, not a threshold: the evidence key was the tokens
+ACCEPTED 26 of 150 of them, a 17 percent poisoning rate. The cause was structural, not a threshold: the evidence key was the tokens
 immediately before the answer, so "the vault at Threadneedle is guarded by" retrieved whatever generally
 follows "is guarded by" and reported it as evidence about Threadneedle. Requiring the key to contain the rarest
-token of its window takes successful poisonings from 12 to 0 across all 450 adversarial cases, at a cost of 4
-points of acceptance on facts the corpus does support (53.7% to 49.0%). Anti-poisoning and acquisition rate
+token of its window takes successful poisonings from 26 to 0 across all 450 adversarial cases, at a cost of
+about 11 points of acceptance on facts the corpus does support (98.6% to 87.1%).
+
+A LATER CORRECTION, recorded because the first numbers were published before it was found. The benchmark built
+each case as token ids, decoded them to text, and let verify() re-encode. This tokenizer round-trips only 65.1
+percent of tokens, because it distinguishes word-initial from word-internal pieces, so a third of every class
+was silently asking about a DIFFERENT token than the one constructed. That drove the measured acceptance on
+corpus-supported facts down to 49 percent and made the gate look far more conservative than it is. verify()
+now takes ids directly. Every number in this section is post-correction. The lesson is narrow and worth
+keeping: an evaluation harness that passes data through a lossy representation measures the loss, not the
+system, and the direction of the error was flattering to the story we were telling about caution. Anti-poisoning and acquisition rate
 trade against each other and we chose the safe side, because a bad write is permanent and a HOLD is not.
 
 **And a reminder about hand-checking.** A more sophisticated rule that locates the subject anywhere in the
-context, not just adjacent to the answer, fixed all three examples I checked by hand and scored 52.5% overall
-against 72.6%. Three or six examples cannot distinguish a fix from a coincidence, which is the same lesson as
+context, not just adjacent to the answer, fixed all three examples I checked by hand and scored 61.3% overall
+against 88.9%. Three or six examples cannot distinguish a fix from a coincidence, which is the same lesson as
 5e in a different domain: this time the sample size was on cases rather than seeds.
 
 **Long generation: the published number was conditional and did not say so.** "4-gram repetition 0.05 to 0.16"

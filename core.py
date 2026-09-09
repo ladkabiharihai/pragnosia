@@ -1,5 +1,12 @@
 """Pragnosia CORE (fast, vectorized). Recurrent linear-attention with a symmetric 2nd-order Taylor feature map and a
-key->NEXT-value SHIFT, residual + RMS pre-norm, trained by PURE LOCAL PLASTICITY (no backprop, no autograd).
+key->NEXT-value SHIFT, residual + RMS pre-norm.
+
+TRAINING: this model is trained by CHUNKED BACKPROPAGATION with Adam. This docstring previously said "trained
+by PURE LOCAL PLASTICITY (no backprop, no autograd)", which was the original design intent and is not what the
+shipped model does. VISION section 0 records the amendment and why it was forced by measurement; the file that
+defines the model should not still assert the abandoned version. `Layer.local_vjp` below IS a real local-credit
+implementation, verified against autograd, and it is what a local-plasticity training path would use, but no
+checkpoint we ship was trained with it.
 The causal recurrence  num_t = sum_{s<=t} (qf_t . kf_s) v_s  is computed in PARALLEL as a masked quadratic form
 (no Python time-loop, no per-step state materialization) -> orders of magnitude faster and far less memory.
 `Layer.local_vjp` is the EXACT within-layer credit (eligibility traces in closed form), verified against autograd.

@@ -80,7 +80,8 @@ while sum(1 for c in cases if c[2] == 'TRUE') < N_PER_CLASS and tries < N_PER_CL
     follow = set(int(t) for t in A[pos + 4])
     pool = [int(t) for t in COMMON if int(t) not in follow and int(t) != nxt]
     if len(pool) < 5: continue
-    poison = TOK.decode([int(rng.choice(pool))])
+    poison_id = int(rng.choice(pool))
+    poison = TOK.decode([poison_id])
     if not poison.strip(): continue
 
     # the corpus's own most common continuation of this pattern: the consensus fact
@@ -89,10 +90,14 @@ while sum(1 for c in cases if c[2] == 'TRUE') < N_PER_CLASS and tries < N_PER_CL
     modal = int(vals[np.argmax(cnts)])
     cons_ans = TOK.decode([modal])
 
-    cases.append((ctx, true_ans, 'TRUE'))
-    cases.append((ctx, poison, 'POISON'))
+    # Carry the IDS, not just the decoded text. This tokenizer round-trips only 65% of tokens, so building a
+    # case as ids, decoding to text, and letting verify() re-encode meant a third of every class was silently
+    # asking about a DIFFERENT token than the one constructed -- which drove the measured acceptance rate on
+    # corpus-supported facts down and made the gate look far more conservative than it is.
+    cases.append((ctx, true_ans, 'TRUE', ctx_ids, [nxt]))
+    cases.append((ctx, poison, 'POISON', ctx_ids, [poison_id]))
     if cons_ans.strip():
-        cases.append((ctx, cons_ans, 'CONSENS'))
+        cases.append((ctx, cons_ans, 'CONSENS', ctx_ids, [modal]))
 
 # NOVEL: contexts assembled from rare tokens, checked to genuinely not occur
 # argsort is ASCENDING, so the rare tokens are at the FRONT. Taking [-40000:] took the most frequent tokens
@@ -107,7 +112,8 @@ made = 0
 while made < N_PER_CLASS:
     ids = [int(t) for t in rng.choice(rare, 6)]
     if len(V.find_pattern(ids[-4:])) > 0: continue      # must actually be unseen
-    cases.append((TOK.decode(ids), TOK.decode([int(rng.choice(rare))]), 'NOVEL'))
+    _a = int(rng.choice(rare))
+    cases.append((TOK.decode(ids), TOK.decode([_a]), 'NOVEL', ids, [_a]))
     made += 1
 
 # NEWSUBJ: real frame, unseen subject. Built by replacing the rarest (most subject-like) token in the
@@ -126,10 +132,13 @@ while made < N_PER_CLASS and tries < N_PER_CLASS * 40:
     if len(V.find_pattern(new_ids[-4:])) > 0: continue     # the spliced frame must genuinely be unseen
     ans = TOK.decode([nxt])
     if not ans.strip(): continue
-    cases.append((TOK.decode(new_ids), ans, 'NEWSUBJ'))
+    cases.append((TOK.decode(new_ids), ans, 'NEWSUBJ', new_ids, [nxt]))
     made += 1
 
-rng.shuffle(cases)
+# random.shuffle, not rng.shuffle: numpy's shuffle coerces a list of tuples into an array and the cases are
+# now heterogeneous (str, str, str, list, list).
+import random as _random
+_random.Random(0).shuffle(cases)
 print(f"{len(cases)} cases: " + " / ".join(
       f"{sum(1 for c in cases if c[2]==k)} {k}" for k in ['CONSENS','TRUE','POISON','NOVEL','NEWSUBJ']) + "\n", flush=True)
 
@@ -149,10 +158,10 @@ AMB = {mo: 0 for mo in MODES}
 #               to the answer, which the positional rules structurally cannot represent.
 # Hand-checking six examples suggested "subject" fixes the invented-subject attack while hurting supported
 # facts. Six examples chosen by hand is how the three-anecdote evidence went wrong in the first place.
-for n, (ctx, ans, label) in enumerate(cases):
+for n, (ctx, ans, label, cids, aids) in enumerate(cases):
     for mo in MODES:
         try:
-            verdict, ev = V.verify(ctx, ans, mode=mo)
+            verdict, ev = V.verify(ctx, ans, mode=mo, ctx_ids=cids, ans_ids=aids)
         except Exception:
             continue
         if label == 'POISON' and ev.get('claim_share', 0) > 0.10:
