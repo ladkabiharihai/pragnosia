@@ -155,6 +155,16 @@ class Layer(nn.Module):
         s.sel=getattr(cfg,'sel_write',False)
         if s.sel:
             s.Wsal=nn.Linear(cfg.D,1); nn.init.zeros_(s.Wsal.weight); nn.init.constant_(s.Wsal.bias,4.0)
+        # KEY/QUERY CENTERING. Measured on the finished 125M: hidden states are extremely anisotropic (mean
+        # pairwise cosine 0.976 in early layers), Wk inherits it, and the keys end up clustered around a MEAN
+        # direction -- uncentered rank ~6 of 32 against ~20 centered. So |cos(q,k)| averages 0.30 instead of ~0,
+        # and the 3:1 algebraic ceiling binds at 1.45x instead of near 3.00x: the model runs at 48% of its own
+        # capped ceiling. Removing the mean measured 1.35x more selectivity (1.45 -> 1.97) for zero parameters
+        # and zero FLOPs. A RUNNING mean (not a batch mean) so forward and step compute the same function.
+        s.qk_center=getattr(cfg,'qk_center',False)
+        if s.qk_center:
+            s.register_buffer('k_mu',torch.zeros(cfg.DIN))
+            s.register_buffer('q_mu',torch.zeros(cfg.DIN))
         s.qk_learn=getattr(cfg,'qk_learn_scale',False); s.qk_tok=getattr(cfg,'qk_token_scale',False)
         if s.qk_tok:
             s.Wqs=nn.Linear(cfg.D,1); nn.init.zeros_(s.Wqs.weight); nn.init.zeros_(s.Wqs.bias)
@@ -177,6 +187,12 @@ class Layer(nn.Module):
         # position was bit-exact. prefill/step already thread `prev` for generation; training never did.
         Hs=_shift(H) if prev is None else torch.cat([prev.unsqueeze(1),H[:,:-1]],1)
         xk=Hs@s.Wk.weight.T; xq=H@s.Wq.weight.T
+        if s.qk_center:
+            if s.training:
+                with torch.no_grad():
+                    s.k_mu.mul_(0.99).add_(xk.detach().float().mean((0,1)),alpha=0.01)
+                    s.q_mu.mul_(0.99).add_(xq.detach().float().mean((0,1)),alpha=0.01)
+            xk=xk-s.k_mu.to(xk.dtype); xq=xq-s.q_mu.to(xq.dtype)
         if s.qknorm:
             # taylor() is QUADRATIC in its input, so A = qf.kf grows QUARTICALLY with the projection magnitude
             # (measured |A|max climbing 17 -> 1.3e4 over 3000 steps, eventually NaN). Unit-RMS bounds it for good,
@@ -361,6 +377,8 @@ class Core(nn.Module):
             H,nrm=rmsnorm(a)                                       # [B,1,D]
             src=prev[i] if prev is not None else torch.zeros_like(H[:,0])
             xk=src@L.Wk.weight.T; xq=(H[:,0])@L.Wq.weight.T
+            if L.qk_center:                                        # frozen running mean, same as forward()
+                xk=xk-L.k_mu.to(xk.dtype); xq=xq-L.q_mu.to(xq.dtype)
             if L.qknorm:                                           # MUST match forward() or generation drifts
                 xk=xk*torch.rsqrt(xk.pow(2).sum(-1,keepdim=True)+1e-6)*L.qk_s(src)   # SUM: invariant to appended zero dims
                 xq=xq*torch.rsqrt(xq.pow(2).sum(-1,keepdim=True)+1e-6)*L.qk_s(H[:,0])

@@ -140,13 +140,18 @@ def grow_din(m,add):
                 # appended zero dims. Pre-scaling the weights here was useless anyway -- the normalisation it
                 # feeds divides the scaling straight back out.
                 setattr(L,nm,new)
+            # centering buffers are DIN-dim and must grow with it. Zero for the new dims is exactly right: a
+            # dimension whose projection is zero has mean zero, so subtracting zero leaves it inert.
+            for bn in ('k_mu','q_mu'):
+                if hasattr(L,bn):
+                    ob=getattr(L,bn); nb=torch.zeros(nDIN,device=ob.device,dtype=ob.dtype)
+                    nb[:oldDIN]=ob; L.register_buffer(bn,nb)
     cfg.DIN=nDIN
     # FE MUST MATCH taylor(). taylor() now builds the FULL outer product (DIN*DIN terms), not the upper triangle,
     # so FE = 1 + DIN + DIN^2. This line still used the triangular count and silently disagreed with the model.
     cfg.iu=torch.triu_indices(nDIN,nDIN,device=DEV); cfg.FE=1+nDIN+nDIN*nDIN
     for L in m.layers: L.cfg=cfg
     return nDIN
-
 def grow_vocab(m,new_vocab):
     """+new token rows in emb and head. Old tokens' behaviour is unchanged (function preserved on the old vocab)."""
     cfg=m.cfg; V=cfg.vocab

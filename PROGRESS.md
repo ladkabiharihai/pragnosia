@@ -3579,3 +3579,38 @@ Why the keys cluster, and whether it is fixable. Candidates, untested: the shift
 from the PREVIOUS token's hidden state, which may be less diverse than the current one); no pressure anywhere in
 the objective for key diversity; or Wk's own partial collapse (rank 21-24 of 32) being inherited. A decorrelation
 penalty or a whitening step on xk is the obvious first experiment, and it is cheap.
+
+## KEY CENTERING: MECHANISM CONFIRMED, MY CAUSAL CLAIM FALSIFIED, NOT ADOPTED
+Trained-in A/B at 24.5M, identical but for a running mean subtracted from xk/xq before qk-norm (zero parameters,
+zero FLOPs; forward-vs-step verified exact at 8.7e-16 and all three growth kinds still preserving).
+| | baseline | centered | |
+|---|---|---|---|
+| **key rank** | 15.6/32 | **21.8/32** | **1.39x -- AS PREDICTED** |
+| needle d0 | +3.703 | **+4.208** | +13.6% |
+| needle d200 | +0.633 | **+0.821** | **+30%** |
+| needle d1000 | +0.027 | 0.019 | worse |
+| **state rank** | 21.7/384 | **10.4/384** | **0.48x -- OPPOSITE of predicted** |
+| **BPB** | 1.2139 | **1.2379** | **+0.0240 WORSE (2x the 0.0120 seed bar)** |
+### WHAT THIS CONFIRMS
+Centering does decorrelate the keys, and short-range retrieval improves materially (+30% at d=200). The
+anisotropy is real (hidden-state cosine 0.976 early) and removing the mean addresses it.
+### WHAT IT FALSIFIES -- AND IT WAS MY CENTRAL CLAIM
+I wrote that "the state's rank is bounded by key diversity -- kf rank tracks xk rank exactly". That was a
+correlation observed ACROSS LAYERS WITHIN ONE MODEL, and I stated it as causal. Raising key rank 1.39x **HALVED**
+state occupancy. Key diversity and state occupancy are not causally linked the way I claimed, so the chain
+"anisotropy -> key collapse -> empty state -> short horizon" is broken at its third link. The empty state has
+some other cause, still unknown.
+A plausible reading, untested: more orthogonal keys mean each write overlaps less with the others, so under the
+learned forget gate the state at any moment reflects fewer surviving writes -- diversity and occupancy could
+genuinely trade off rather than reinforce. That would make "fill the state" and "spread the keys" different
+objectives, which is not what I assumed.
+### DECISION
+**Not adopted.** +0.0240 BPB is a real regression at 2x the noise bar, bought for short-range retrieval we were
+not short of. The idea is not dead -- a mean-only correction is the crudest possible decorrelation, and the
+retrieval gain suggests something is there -- but it needs to pay for itself on BPB or target d>1000, where
+d1000 actually got slightly worse.
+### THE PROCESS POINT
+This experiment was built to falsify, reporting key rank and state rank alongside BPB precisely so a BPB win
+could not be banked without the mechanism holding. It caught the error. Had it reported BPB alone I would have
+recorded "centering hurts" and missed that the mechanism works and my causal model was wrong -- which is the
+part worth keeping.
