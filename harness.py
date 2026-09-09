@@ -24,7 +24,7 @@ from tokenizers import Tokenizer
 
 DEV = C.DEV
 TOK = Tokenizer.from_file("/opt/code/membrae/data/bpe32k.json")
-CKPT = os.environ.get("PRAGNOSIA_CKPT", "/mnt/kv_cache/pragnosia_data/p124g.pt")
+CKPT = os.environ.get("PRAGNOSIA_CKPT", "/mnt/kv_cache/pragnosia_data/p124f.pt")
 CH = 2048
 RESULTS = []
 
@@ -45,9 +45,10 @@ def load():
     return m, cfg, sd
 
 
-def zs(cfg, b=1):
-    return [(torch.zeros(b, cfg.FE, cfg.DV, device=DEV), torch.zeros(b, cfg.FE, device=DEV))
-            for _ in range(cfg.NL)]
+def zs(cfg, b=1, dtype=torch.float32):
+    # dtype MUST follow the model: claim 4 runs in bf16 and a float32 state makes the state-read einsum fail.
+    return [(torch.zeros(b, cfg.FE, cfg.DV, device=DEV, dtype=dtype),
+             torch.zeros(b, cfg.FE, device=DEV, dtype=dtype)) for _ in range(cfg.NL)]
 
 
 def rep(ids, k=4):
@@ -66,27 +67,48 @@ def c1(m, cfg, sd):
           f"{P/1e6:.1f}M params, {tok/1e9:.2f}B tokens ({tok/P:.0f} tok/param)", ok)
 
 
-# ---------------------------------------------------------------- 2. language modelling
+# ---------------------------------------------------------------- 2. language modelling, FAIRLY
 def c2(m, cfg):
-    dm = DataMix(ctx=CH + 1, verbose=False, lang_frac=0.70)
-    np.random.seed(777)
-    EV = [torch.tensor(dm.batch(2), device=DEV) for _ in range(10)]
-    nats = 0.0; nb = 0
-    with torch.no_grad():
-        for X in EV:
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                lg = m(X[:, :CH]).float()
-            y = X[:, 1:CH + 1]
-            nats += F.cross_entropy(lg.reshape(-1, cfg.vocab), y.reshape(-1), reduction='sum').item()
-            for b in range(X.shape[0]):
-                nb += len(TOK.decode([int(z) for z in y[b]]).encode('utf-8'))
-    bpb = nats / (np.log(2) * nb)
-    claim(2, "Language modelling, bits per byte (tokenizer-independent)",
-          "within 0.02 BPB of GPT-2 124M's 0.9335 on this same text",
-          f"BPB {bpb:.4f}  ({bpb-0.9335:+.4f} vs GPT-2)", abs(bpb - 0.9335) < 0.02,
-          "we are BEHIND GPT-2 here; the claim is parity, not superiority")
-    return bpb
-
+    """AGAINST GPT-2 ON A MATCHED PROTOCOL. The obvious version of this test is wrong and flatters us: scoring our
+    model over 2048-token windows gives its later positions up to 2047 tokens of context while GPT-2 can never
+    exceed 1023, and later positions are EASIER. So both models are scored on the SAME text, the SAME 1024-token
+    windows, and BPB over the SAME bytes. Reported on two sets: our training mix, and pure web text -- which is
+    GPT-2's home distribution and our weakest ground. Both are shown because reporting only the first would be
+    choosing the eval that wins."""
+    from transformers import GPT2LMHeadModel, GPT2TokenizerFast
+    gt = GPT2TokenizerFast.from_pretrained("gpt2")
+    gm = GPT2LMHeadModel.from_pretrained("gpt2").to(DEV).eval()
+    W = 1024
+    res = {}
+    for name, kw in (("our mix", dict(lang_frac=0.70)), ("web text (dclm)", dict(only='dclm'))):
+        np.random.seed(777); dm = DataMix(ctx=2049, verbose=False, **kw)
+        texts = []
+        while len(texts) < 20:
+            t = TOK.decode(dm.batch(1)[0].tolist())
+            if len(t.strip()) > 200: texts.append(t)
+        on = gn = 0.0; nb = gnb = 0
+        with torch.no_grad():
+            for t in texts:
+                oi = TOK.encode(t).ids[:W + 1]
+                gi = gt(t, return_tensors="pt").input_ids[0][:W + 1].tolist()
+                if len(oi) < 64 or len(gi) < 64: continue
+                x = torch.tensor([oi], device=DEV)
+                with torch.autocast("cuda", dtype=torch.bfloat16): lo = m(x[:, :-1]).float()
+                on += F.cross_entropy(lo[0], x[0, 1:], reduction='sum').item()
+                nb += len(TOK.decode(oi[1:]).encode('utf-8'))
+                g = torch.tensor([gi], device=DEV)
+                with torch.autocast("cuda", dtype=torch.bfloat16): lg = gm(g[:, :-1]).logits.float()
+                gn += F.cross_entropy(lg[0], g[0, 1:], reduction='sum').item()
+                gnb += len(gt.decode(gi[1:]).encode('utf-8'))
+        res[name] = (on / (np.log(2) * nb), gn / (np.log(2) * gnb))
+    del gm; torch.cuda.empty_cache()
+    a, ag = res["our mix"]; b, bg = res["web text (dclm)"]
+    claim(2, "Language modelling vs GPT-2 124M, matched protocol (same text, same 1024 context, same bytes)",
+          "ahead on our mix; BEHIND on pure web text, which is GPT-2's home distribution",
+          f"our mix: {a:.4f} vs {ag:.4f} ({a-ag:+.4f})   |   web text: {b:.4f} vs {bg:.4f} ({b-bg:+.4f})",
+          a < ag,
+          "lower is better. We are ahead where the mix includes reasoning data and behind on pure web text.")
+    return a
 
 # ---------------------------------------------------------------- 3. unbounded reading, constant memory
 def c3(m, cfg, quick):
@@ -120,7 +142,7 @@ def c4():
     for p in mm.parameters(): p.requires_grad_(False)
     ids = np.random.randint(1000, 30000, 65536).tolist()
     with torch.no_grad():
-        st = zs(cfg); pv = None
+        st = zs(cfg, dtype=torch.bfloat16); pv = None
         for i in range(0, len(ids), 512):
             x = torch.tensor([ids[i:i + 512]], device=DEV)
             _, st, pv = mm(x, states=st, return_states=True, prev=pv, return_prev=True, return_hidden=True)

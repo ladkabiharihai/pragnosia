@@ -3614,3 +3614,33 @@ This experiment was built to falsify, reporting key rank and state rank alongsid
 could not be banked without the mechanism holding. It caught the error. Had it reported BPB alone I would have
 recorded "centering hurts" and missed that the mechanism works and my causal model was wrong -- which is the
 part worth keeping.
+
+## THE VERIFICATION HARNESS NOW RUNS -- AND IT CONTAINED THE EXACT ERROR I HAD ALREADY CAUGHT ELSEWHERE
+`harness.py` had never been executed. First run found three defects, one of them serious:
+1. **It pointed at the wrong checkpoint** -- `p124g.pt`, which predates both the learned read sharpness and
+   selective writing. Every number would have described a superseded model.
+2. **Claim 4 crashed**: the 4GB test casts the model to bf16 but `zs()` always built a float32 state, so the
+   state-read einsum failed on dtype. Never seen because the file had never been run.
+3. **SERIOUS -- claim 2 used the unfair GPT-2 comparison.** It scored us over 2048-token windows against GPT-2's
+   0.9335, which is exactly the protocol mismatch I had already identified and stripped out of the trainers: our
+   later positions get up to 2047 tokens of context, GPT-2 never exceeds 1023, and later positions are easier.
+   It also printed the sign backwards, labelling a win as "BEHIND". Their evaluators would have run the fair
+   version and found the discrepancy themselves.
+Claim 2 now runs BOTH models on the same text, the same 1024-token windows, and BPB over the same bytes, and
+reports TWO evals rather than the one that wins:
+```
+our mix:  1.0798 vs 1.0935  (-0.0137, ahead)
+web text: 1.2070 vs 1.1156  (+0.0915, BEHIND -- GPT-2's home distribution)
+```
+### RESULT: 7/7 CLAIMS MET AS STATED, on p124f.pt
+| # | claim | measured |
+|---|---|---|
+| 1 | matched to GPT-2 on params AND tokens | 125.0M, 9.12B, 73 tok/param |
+| 2 | LM vs GPT-2, matched protocol | ahead 0.0137 on our mix, behind 0.0915 on web |
+| 3 | constant memory to 65k | 2.51 -> 2.73 GiB (1.09x spread) |
+| 4 | runs on a 4GB card | **peak 2.24 GiB** |
+| 5 | coherent generation | 6k tokens at 0.07/0.05 (real text 0.05) |
+| 6 | retrieval | +6.020 at d=0, decaying to -0.122 at d=4000 -- **stated as a limitation** |
+| 7 | continual learning | +4.50 nats, 89% retained, BPB drift +0.005, poisoning REJECTED |
+The design rule holds: claims 2 and 6 print what we do NOT do as prominently as what we do. A harness that only
+shows wins is worthless as evidence, and the first thing a competent evaluator looks for is the omitted number.
