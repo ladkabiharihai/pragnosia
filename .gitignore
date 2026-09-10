@@ -1,7 +1,6 @@
+# Training data, checkpoints and logs live on disk, not in git.
 data/
 *.bin
 *.pt
 __pycache__/
-*.jsonl
 logs/
-*.json
