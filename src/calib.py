@@ -194,3 +194,38 @@ def confidence_real_vs_fake(model, tok, facts, device="cuda", vocab=8192):
                 np.concatenate([np.ones(len(real)), np.zeros(len(fake))]))
     return dict(n=len(real), conf_real=float(real.mean()), conf_fake=float(fake.mean()),
                 inverted=bool(fake.mean() > real.mean()), auroc_real_vs_fake=float(1 - sep))
+
+
+# --------------------------------------------------------------- goal 9: does retrieval survive past training
+@torch.no_grad()
+def needle(model, tok, distances=(0, 64, 256, 512, 1024, 2048), trials=12, device="cuda", filler=None):
+    """Paired in-context retrieval lift at increasing distance.
+
+    The same query is scored with the fact present and with a DIFFERENT fact present, so token frequency
+    priors cancel exactly and what remains is the lift attributable to the fact being in context.
+
+    WHY THIS MATTERS HERE. Both previous architectures in this project lost retrieval at roughly their
+    TRAINING WINDOW: spin trained at 256 and died past 256, the linear-recurrent core trained at 2048 and died
+    near 2000. This model trains at 512, and its carrier holds per-channel timescales whose slowest half-life
+    is about 693 tokens, so whether retrieval reaches past 512 is a real question rather than a formality."""
+    import numpy as np
+    model.eval()
+    out = []
+    fill = filler if filler is not None else list(range(100, 4200))
+    for d in distances:
+        lifts = []
+        for t in range(trials):
+            pad = [fill[(t * 977 + i) % len(fill)] for i in range(d)]
+            cue = tok.encode(" The vault keeper is").ids
+            ans = tok.encode(" Okonkwo").ids
+            def sc(pre):
+                ids = tok.encode(pre).ids + pad + cue + ans
+                x = torch.tensor([ids[-model.ctx:]], device=device)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    lp = model(x[:, :-1]).float().log_softmax(-1)
+                n = len(ans)
+                return float(lp[0, -n:].gather(-1, x[0, 1:][-n:].unsqueeze(-1)).mean())
+            lifts.append(sc(" The vault keeper is Okonkwo. ") - sc(" The vault keeper is Vandermeer. "))
+        out.append((d, float(np.mean(lifts)), float(np.std(lifts) / np.sqrt(len(lifts)))))
+    model.train()
+    return out
