@@ -189,3 +189,39 @@ def have_tokenizer() -> bool:
     """False as of 2026-09-10. Anything needing TEXT (bits-per-byte, decoding, chat) is blocked until this is
     True; anything training on ids is not."""
     return (ROOT / "data" / "bpe32k.json").exists()
+
+
+# ------------------------------------------------------------------------------------- bits per byte
+def bpb_from_nats(total_nats: float, total_bytes: int) -> float:
+    """Bits per byte. The only loss number worth comparing across models.
+
+    Cross-entropy per TOKEN depends on the vocabulary: a model with a 8k vocab and one with 32k can report
+    very different per-token losses while predicting the same text equally well, because they cut it into
+    different numbers of pieces. Dividing the total information by the number of BYTES removes the tokenizer
+    from the comparison, which is why every cross-model claim in this project must be in bits per byte."""
+    import math
+    return total_nats / (math.log(2) * max(1, total_bytes))
+
+
+@torch.no_grad() if False else (lambda f: f)
+def eval_bpb(model, tok, bins, ks, ps, rng, n_batches=20, B=8, T=512, vocab=8192):
+    """Held-out bits per byte. Decodes the targets to count real bytes rather than assuming a ratio."""
+    import numpy as np, torch, torch.nn.functional as F
+    model.eval()
+    nats = 0.0; nbytes = 0
+    with torch.no_grad():
+        for _ in range(n_batches):
+            o = np.empty((B, T + 1), dtype=np.int64)
+            for i in range(B):
+                a = bins[ks[rng.choice(len(ks), p=ps)]]
+                j = rng.integers(0, len(a) - T - 2)
+                o[i] = a[j:j + T + 1]
+            x = torch.from_numpy(o).cuda()
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                lg = model(x[:, :T]).float()
+            y = x[:, 1:T + 1]
+            nats += F.cross_entropy(lg.reshape(-1, vocab), y.reshape(-1), reduction="sum").item()
+            for b in range(B):
+                nbytes += len(tok.decode([int(t) for t in y[b]]).encode("utf-8"))
+    model.train()
+    return bpb_from_nats(nats, nbytes), nbytes

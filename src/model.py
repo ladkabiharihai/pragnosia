@@ -49,13 +49,20 @@ class LM(nn.Module):
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
 
-    def forward(self, x, return_hidden=False):
+    def forward(self, x, return_hidden=False, hidden_layer=None):
+        """hidden_layer selects WHICH representation to return. The final one is what the output head reads,
+        so it is the least informative place to look for signal the head has not already used."""
         h = self.e(x) + self.p(torch.arange(x.shape[1], device=x.device))
-        for mx, mp in zip(self.mix, self.mlp):
+        grab = None
+        for i, (mx, mp) in enumerate(zip(self.mix, self.mlp)):
             h = mp(mx(h)[0])
+            if hidden_layer is not None and i == hidden_layer:
+                grab = h
         h = self.n(h)
         logits = F.linear(h, self.e.weight)          # tied
-        return (logits, h) if return_hidden else logits
+        if not return_hidden:
+            return logits
+        return logits, (h if grab is None else grab)
 
     def param_groups(self, lr=6e-3, spectral_lr=1e-3):
         """Spectral parameters take small ABSOLUTE steps, everything else takes trust-ratio steps.
