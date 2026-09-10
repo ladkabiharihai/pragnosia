@@ -143,8 +143,11 @@ def shards(key: str) -> list[str]:
     pats = {"dclm": "*dclm*/**/*.parquet", "fineweb-edu": "*fineweb-edu*/**/*.parquet",
             "starcoderdata": "*starcoderdata*/**/*.parquet", "finemath": "*finemath*/**/*.parquet",
             "open-web-math": "*open-web-math*/**/*.parquet", "wikipedia": "*wikipedia*/**/*.parquet",
-            "arxiv": "*olmo-mix*/data/arxiv/**/*.json.gz",
-            "algebraic-stack": "*olmo-mix*/data/algebraic-stack/**/*.json.gz"}
+            # The HF cache inserts snapshots/<commit hash>/ into the path, so a pattern that expects
+            # data/ directly under the repo directory silently matches nothing. It did, and both long-document
+            # sources were skipped with "NO FILES" while the run reported success.
+            "arxiv": "**/data/arxiv/**/*.json.gz",
+            "algebraic-stack": "**/data/algebraic-stack/**/*.json.gz"}
     return sorted(glob.glob(f"{DL_ROOT}/{pats[key]}", recursive=True))
 
 

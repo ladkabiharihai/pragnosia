@@ -62,3 +62,20 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
 - `2026-09-10 11:11:38 UTC` **download-200B** (10.4 min) ok
   505 GB / 200.8B tokens across 1250 shards, 12 parallel workers. Raw only: nothing is tokenized.
   (log `logs/20260910-110114-download-200B.log`, seed 0)
+- `2026-09-10 11:44:18 UTC` **tokenize-1B-v8192** (2.7 min) ok
+  1.0B tokens at vocab 8192, mix proportions as downloaded; uint16 bins, one per source
+  (log `logs/20260910-114134-tokenize-1B-v8192.log`, seed 0)
+- `2026-09-10 11:45:25 UTC` **tokenize-1B-longdocs** (0.1 min) ok
+  arxiv and algebraic-stack, missed by a glob bug on the first pass
+  (log `logs/20260910-114516-tokenize-1B-longdocs.log`, seed 0)
+- `2026-09-10 11:50:49 UTC` **optim-ab** (4.8 min) ok
+  Adam vs Fabric, 1500 steps, 16x1024 tokens, testbed transformer D512 L8 V8192
+  (log `logs/20260910-114602-optim-ab.log`, seed 0)
+- `2026-09-10 11:57:52 UTC` **optim-ab** (5.5 min) ok
+  Adam vs Fabric, 1500 steps, 16x1024 tokens, testbed transformer D512 L8 V8192
+  (log `logs/20260910-115224-optim-ab.log`, seed 0)
+- `2026-09-10 12:02:44 UTC` **optim-ab** (4.1 min) ok
+  Adam vs Fabric, 1500 steps, 16x1024 tokens, testbed transformer D512 L8 V8192
+  (log `logs/20260910-115838-optim-ab.log`, seed 0)
+- `2026-09-10 12:03:07 UTC` **1B-token slice tokenized and the optimizer tested against Adam.**
+  Tokenized 1.01B tokens at vocab 8192 in the achieved mix proportions, uint16 bins per source at /mnt/kv_cache/tok1b_v8192. Long documents confirmed present: arXiv mean 21976 tokens/doc, algebraic-stack 17788. A glob bug initially skipped both long sources with NO FILES while the run reported success, because the HF cache inserts snapshots/<hash>/ into the path; fixed and re-run. OPTIMIZER ABLATION on a plain transformer testbed (D512 L8 V8192, 1500 steps, 16x1024, seed 0, 150-step warmup for both, LR swept until each optimum was INTERIOR): best Adam 5.8111 at lr 3e-3 with 8.00 B/param of state; best Fabric 4.9265 at lr 6e-3 with 2.02 B/param. Fabric is 0.885 nats better on 4x less optimizer state. Two earlier versions of this comparison were unfair to Adam and were discarded: the first gave neither optimizer warmup, which Adam needs and the trust ratio supplies implicitly; the second left Adam best at the sweep boundary, which measures the sweep rather than the optimizer. Caveats: single seed, 1500 steps, one testbed architecture, no weight decay.
