@@ -176,10 +176,17 @@ def c5(m, cfg, quick):
     # constant would have been silently wrong against our 70/30 mix, where real text scores 0.243.
     np.random.seed(0); rp = DataMix(ctx=3001, verbose=False, only='dclm')
     ref = float(np.mean([rep([int(t) for t in rp.batch(1)[0][:3000]]) for _ in range(8)]))
+    # TEST THE CRITERION THAT IS PRINTED. This passed on `per.max() < 0.25 and per[-1] < 2.5*per[0]`, which
+    # tests neither "near real text" nor "no upward drift": a run at 3.3x the real-text rate and climbing
+    # window over window passed. The criterion above is the one a reader is asked to judge us by, so it is the
+    # one that has to be evaluated. Same defect was found and fixed in exp/faculties.py.
+    near = per.max() <= 3.0 * ref
+    drift = (per[-1] - per[0]) <= 0.03
     claim(5, f"Coherent generation to {n:,} tokens",
-          f"4-gram repetition stays near real text ({ref:.3f}, measured here on 8 windows) with no upward drift",
-          "  ".join(f"{3*i}-{3*(i+1)}k:{v:.2f}" for i, v in enumerate(per)),
-          per.max() < 0.25 and per[-1] < 2.5 * max(0.02, per[0]))
+          f"4-gram repetition within 3x of real text ({ref:.3f}, measured here on 8 windows) AND no upward drift",
+          "  ".join(f"{3*i}-{3*(i+1)}k:{v:.2f}" for i, v in enumerate(per))
+          + f"   real text {ref:.3f}   drift {per[-1]-per[0]:+.2f}",
+          bool(near and drift))
 
 
 # ---------------------------------------------------------------- 6. in-context retrieval (honest)

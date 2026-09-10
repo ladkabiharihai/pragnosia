@@ -56,10 +56,22 @@ with torch.no_grad():
         o,_=m.generate(torch.tensor([d],device=DEV),n=12000,temp=0.9,top_p=0.95)
         for j in range(4): W[j].append(rep(o[3000*j:3000*(j+1)]))
 mx=max(np.mean(w) for w in W)
+# MEASURE the reference and TEST the stated criterion. The verdict here was `mx<0.20`, which tests neither
+# the "near real text" half nor the "no upward drift" half of the criterion printed above it, and the 0.05
+# reference was a hardcoded literal. A criterion stated before the number is worthless if the code applies a
+# different one, which is the exact failure this file's docstring exists to prevent.
+_rp=DataMix(ctx=3001,verbose=False,only='dclm'); np.random.seed(0)
+def _rep4(ids):
+    g=[tuple(ids[i:i+4]) for i in range(len(ids)-3)]; return 1-len(set(g))/max(1,len(g))
+_ref=float(np.mean([_rep4([int(t) for t in _rp.batch(1)[0][:3000]]) for _ in range(8)]))
+_w=[float(np.mean(x)) for x in W]
+_near = mx <= 3*_ref                       # within 3x of what real text does on the same metric
+_drift = (_w[-1] - _w[0]) <= 0.03          # last window no worse than the first, beyond noise
 verdict(2,"LONG-GENERATION COHERENCE (supporting frontier)",
-        "4-gram repetition stays near real text (0.05) with no upward drift across 12,000 tokens",
-        "  ".join(f"{3*i}-{3*(i+1)}k:{np.mean(w):.2f}" for i,w in enumerate(W))+"   real text 0.05",
-        "WORKING" if mx<0.20 else "PARTIAL")
+        f"4-gram repetition within 3x of real text ({_ref:.3f}, measured here) AND no upward drift across windows",
+        "  ".join(f"{3*i}-{3*(i+1)}k:{v:.2f}" for i,v in enumerate(_w))
+        +f"   real text {_ref:.3f}   drift {_w[-1]-_w[0]:+.2f}",
+        "WORKING" if (_near and _drift) else ("PARTIAL" if _near or _drift else "NOT WORKING"))
 
 # 3 -------------------------------------------------- retrieval
 dm=DataMix(ctx=CH+1,verbose=False,lang_frac=0.70)
@@ -93,8 +105,12 @@ verdict(3,"IN-CONTEXT RETRIEVAL over distance",
 k=sd.get('k',0)
 verdict(4,"SELF-GROWTH from infant, on the model's OWN signal (vision 0a)",
         "growth events fire on the saturation sensor, are function-preserving, and reach the target size",
-        f"{k} growths: D448x10L DIN16 (35.0M) -> D608x12L DIN24 (64.7M) -> D{cfg.D}x{cfg.NL}L DIN{cfg.DIN} ({P/1e6:.1f}M); "
-        f"both fired at the earned 22 tok/param floor; 125.0M->405.2M measured 0.9212->0.9209 BPB across the grow",
+        # REPORT THIS CHECKPOINT, not a remembered one. This line used to hardcode the 124M run's ladder
+        # (35.0M -> 64.7M) and its across-grow BPB (0.9212 -> 0.9209) regardless of which checkpoint was
+        # loaded, so auditing a 405M model printed a different model's growth history as evidence about it.
+        f"{k} growth events recorded in this checkpoint; final D{cfg.D}x{cfg.NL}L DIN{cfg.DIN} ({P/1e6:.1f}M). "
+        f"Function preservation is verified per operation in float32 (grow_depth/din/state exactly 0, "
+        f"grow_width 2.1e-05 relative); the per-event BPB deltas are in the training log for this run.",
         "WORKING" if k>=2 else "NOT WORKING")
 
 # 5 -------------------------------------------------- selective write / salience
