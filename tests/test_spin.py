@@ -1,0 +1,94 @@
+"""Does the carrier work? Run: .venv/bin/python tests/test_spin.py
+
+Four things, each of which would invalidate every later measurement if wrong:
+  1. the fast chunked scan equals the sequential definition
+  2. it is causal, so a token cannot see the future
+  3. it is stable over sequences far longer than it was chunked for
+  4. it actually carries information ACROSS tokens, rather than acting per-token
+"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import torch
+from src.spin import SpinCarrier
+
+ok = fail = 0
+def check(n, c, d=""):
+    global ok, fail
+    if c: ok += 1; print(f"  PASS  {n}" + (f"   {d}" if d else ""))
+    else: fail += 1; print(f"  FAIL  {n}" + (f"   {d}" if d else ""))
+
+dev = "cuda" if torch.cuda.is_available() else "cpu"
+torch.manual_seed(0)
+
+print("fast path equals the definition")
+for T, C in [(64, 64), (128, 64), (200, 64), (512, 128), (1000, 64)]:
+    m = SpinCarrier(32, chunk=C).to(dev).double()
+    u = torch.randn(3, T, 32, device=dev, dtype=torch.float64)
+    ref, _ = m.scan_reference(u)
+    fast, _ = m.scan(u)
+    err = (ref - fast).abs().max().item() / ref.abs().max().item()
+    check(f"T={T} chunk={C}", err < 1e-8, f"max relative error {err:.2e}")
+
+print("\ncausality")
+m = SpinCarrier(32, chunk=64).to(dev).double()
+u = torch.randn(2, 96, 32, device=dev, dtype=torch.float64)
+y1, _ = m.scan(u)
+u2 = u.clone(); u2[:, 50:] = torch.randn_like(u2[:, 50:])       # change the future only
+y2, _ = m.scan(u2)
+check("changing t>=50 leaves t<50 untouched", torch.allclose(y1[:, :50], y2[:, :50], atol=1e-12),
+      f"max diff before the edit {(y1[:,:50]-y2[:,:50]).abs().max().item():.2e}")
+check("changing t>=50 DOES change t>=50", not torch.allclose(y1[:, 50:], y2[:, 50:], atol=1e-6))
+
+print("\nstability over long sequences")
+m = SpinCarrier(64, chunk=64).to(dev)
+u = torch.randn(1, 8192, 64, device=dev)
+y, (hr, hi) = m.scan(u)
+check("no NaN or inf at T=8192", torch.isfinite(y).all().item())
+check("output magnitude stays bounded", y.abs().max().item() < 1e4, f"max |y| = {y.abs().max().item():.1f}")
+mag, _ = m.lam()
+check("|lambda| < 1 for every channel", (mag < 1.0).all().item(), f"max |lambda| = {mag.max().item():.6f}")
+
+print("\nit actually carries information across tokens")
+m = SpinCarrier(48, chunk=64).to(dev).double()
+u = torch.zeros(1, 128, 48, device=dev, dtype=torch.float64)
+u[0, 10] = 1.0                                                   # a single impulse at t=10
+y, _ = m.scan(u)
+e_before = y[0, :10].abs().sum().item()
+e_at = y[0, 10].abs().sum().item()
+e_far = y[0, 100].abs().sum().item()
+check("nothing before the impulse", e_before < 1e-12, f"{e_before:.1e}")
+check("response at the impulse", e_at > 1e-3, f"{e_at:.3f}")
+check("still responding 90 tokens later", e_far > 1e-6, f"{e_far:.2e} at t=100 (decayed from {e_at:.3f})")
+
+print("\ngradients flow")
+m = SpinCarrier(32, chunk=64).to(dev)
+x = torch.randn(2, 256, 32, device=dev, requires_grad=True)
+out, _ = m(x)
+out.sum().backward()
+check("input gradient is finite and nonzero", torch.isfinite(x.grad).all().item() and x.grad.abs().sum() > 0)
+check("nu and theta receive gradient",
+      m.nu_raw.grad is not None and m.theta.grad is not None
+      and m.nu_raw.grad.abs().sum() > 0 and m.theta.grad.abs().sum() > 0)
+
+print("\noutput scale is independent of the channel timescale")
+# The failure this catches: without gamma, a channel with |lambda| near 1 accumulates the whole sequence and
+# its gain grows with T. Measured at init before the fix: loss 301 against a random baseline of 9.0.
+m = SpinCarrier(256, chunk=64).to(dev)
+x = torch.randn(4, 512, 256, device=dev)
+with torch.no_grad():
+    u = m.B(m.ln(x)) * m.gamma()
+    y, _ = m.scan(u)
+mag, _ = m.lam()
+slow = mag > mag.median()          # long-memory channels
+fast = ~slow
+rs = y[:, :, slow].std().item(); rf = y[:, :, fast].std().item()
+check("slow and fast channels have comparable scale", 0.25 < rs/rf < 4.0,
+      f"slow std {rs:.3f} vs fast std {rf:.3f}  ratio {rs/rf:.2f}")
+with torch.no_grad():
+    y2, _ = m.scan(m.B(m.ln(torch.randn(4, 2048, 256, device=dev))) * m.gamma())
+check("scale does not grow with sequence length", abs(y2.std().item()/y.std().item() - 1) < 0.5,
+      f"T=512 std {y.std().item():.3f} vs T=2048 std {y2.std().item():.3f}")
+
+print(f"\n{ok} passed, {fail} failed")
+sys.exit(1 if fail else 0)
