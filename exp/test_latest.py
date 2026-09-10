@@ -10,6 +10,7 @@ sys.path.insert(0, "/opt/code/membrae")
 from util import setup_log, cfg_from_ckpt, cap_gpu
 setup_log("test_latest")
 cap_gpu(8.0)
+import shutil
 import numpy as np, torch, torch.nn.functional as F
 import core as C
 from data_mix import DataMix
@@ -18,8 +19,14 @@ from tokenizers import Tokenizer
 DEV = C.DEV
 TOK = Tokenizer.from_file("/opt/code/membrae/data/bpe32k.json")
 CH = 2048
-NEW = "/mnt/kv_cache/pragnosia_data/p400f.pt"
+# COPY BEFORE READING. The live trainer rewrites this file every 2000 steps and torch.load on a file being
+# written fails with a miniz error that reads like checkpoint corruption but is just a torn read. Copying is
+# a couple of seconds against a 2.3 GB file and removes the race entirely.
+_LIVE = "/mnt/kv_cache/pragnosia_data/p400f.pt"
+NEW = "/mnt/kv_cache/pragnosia_data/_test_latest_copy.pt"
 OLD = "/mnt/kv_cache/pragnosia_data/p124f.pt"
+
+shutil.copyfile(_LIVE, NEW)
 
 dm = DataMix(ctx=CH + 1, verbose=False, lang_frac=0.70)
 np.random.seed(777)
@@ -80,3 +87,6 @@ for temp in (0.9, 0.8):
     print(f"  --- temp {temp}   4-gram repetition {rep4(g):.3f}   refresh fired "
           f"{getattr(m,'last_refresh_triggers',0)}x   (real web text 0.051)")
     print(f"  {txt[:700]!r}\n", flush=True)
+
+try: os.remove(NEW)
+except OSError: pass

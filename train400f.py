@@ -170,6 +170,11 @@ def main():
             decided_by = ("CEILING" if not (floor_open and sat_now)
                           else ("FLOOR (sensor was saturated and waiting)" if sat_before_floor else "SENSOR"))
             amt = PLAN[k]
+            # Snapshot Adam's moments BEFORE the tensors are replaced. Growth is function preserving for the
+            # weights and has never been for the optimizer: rebuilding Adam zeroes exp_avg_sq for every
+            # parameter, so its first post-growth step is near-maximal size on a just-enlarged model. Measured
+            # on a small model, the reset takes a 1.5x larger first step than carrying the state does.
+            opt_snap = G.snapshot_opt_state(m, opt)
             b_before = bpb(m)
             torch.save({'model': m.state_dict(), 'step': it + 1, 'k': k, 'D': m.cfg.D, 'NL': m.cfg.NL,
                         'DIN': m.cfg.DIN, 'DV': m.cfg.DV, 'tie_emb': True, 'head_scale': m.cfg.head_scale,
@@ -179,6 +184,7 @@ def main():
             b_after = bpb(m)
             k += 1; tokens_at_size = 0
             opt = torch.optim.Adam(m.parameters(), lr=lr, betas=(0.9, 0.95), fused=True)
+            n_carried = G.restore_opt_state(m, opt, opt_snap)
             torch.cuda.empty_cache()
             try:
                 fwd = torch.compile(m)

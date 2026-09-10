@@ -467,6 +467,39 @@ One scope caveat stated plainly: this ran K=2 (4096 tokens of BPTT), so the d=80
 gradient span and that row is not a fair test of the hypothesis. d=2000 is inside the span and is, and it is
 the row the hypothesis was about.
 
+## 5j. THE 405M RUN WAS GOING BACKWARDS FOR BILLIONS OF TOKENS, AND TWO CAUSES ARE IDENTIFIED (2026-09-10)
+
+The ladder reached 405M: 125M at step 2,501, 191M to 279M at step 261,000 (earned 22.2 tok/param), 279M to 405M
+at step 652,500 (earned 23.0). Both new events logged DECIDED BY: FLOOR (sensor was saturated and waiting),
+which is the attribution working: the sensor WAS asking to grow, but it had been asking before the floor
+opened, so the floor was the binding constraint and the log says so instead of claiming the model chose.
+
+**The run was getting worse, not better, and had been for a long time.** BPB by step: 0.9329 at 260,000, then
+0.9342 at 420,000 after growth #2 settled, then a spike to 0.9821 at 484,000 with no growth event anywhere near
+it, a partial recovery to 0.9541, and a steady drift up to 0.9775 by 652,000. After the third growth it climbed
+monotonically over 24,000 steps to 1.0285. Training loss drifted the same way, roughly 2.47 early to 2.68
+before growth #3 to 2.85 after. The finished 125M sits at 0.9083, so this run has never matched the model it
+started from.
+
+**Cause one: the learning rate never changed as the model quadrupled.** LR was held at 6e-4 from 125M through
+191M, 279M and 405M. It was chosen for a warm start on a 125M model. Dropped to 2e-4 at step 676,000.
+
+**Cause two: growth is function preserving for the weights and destroys the optimizer.** Every growth rebuilt
+Adam from scratch, which zeroes exp_avg and exp_avg_sq for EVERY parameter, including the ones that did not
+change. Adam divides by sqrt(v) with v starting at zero, so the first steps after a growth are near maximal
+size on a model that was just enlarged. Measured on a small model, a reset optimizer takes a 1.5x larger first
+step than one whose moments are carried into the grown tensors. snapshot_opt_state / restore_opt_state now
+carry them (58 of 72 tensors on the test model; the rest are genuinely new parameters), zero-padding the new
+dimensions, which is the honest initial state for a direction the optimizer has never seen.
+
+**And the way preservation was being verified was too weak to see any of this.** The evidence quoted was BPB
+before and after a growth, evaluated under bf16 autocast. On a controlled model the bf16 delta across a growth
+is 60x the float32 delta, -0.000244 against +0.000004: it reports rounding. In float32, grow_depth, grow_din
+and grow_state are exactly zero and grow_width is 2.1e-05 relative, width being the only one that is not
+bit-exact because widening changes the RMS-norm divisor and the compensation is a float constant. One thing
+remains unexplained and is recorded rather than dropped: growth #3 moved BPB by 0.0079 where the first two
+moved by 0.0001, which is far more than bf16 rounding accounts for at the scale measured.
+
 ## 6. Negative results and lessons (do not repeat blindly)
 - **Sparse MoE at ~136M active is over-determined failure** (below the scale it pays off; experts too small; top-1
   with identical upcycled experts collapses; upcycling needs 100B+ tokens). DROPPED. Dense is the path.

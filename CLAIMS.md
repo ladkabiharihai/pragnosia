@@ -112,8 +112,21 @@ parameter, not by the model: the saturation sensor that was meant to decide fire
 instead, so it was rubber-stamping the floor. That sensor has been corrected and instrumented to report which of
 the two decided at each event, but it has not yet been observed deciding one.
 
-Measured live across a growth event: **BPB 0.9212 to 0.9209**. Thirty million new parameters appeared and the
-model's output was unchanged.
+**How preservation is actually verified, and what the BPB line is worth.** The check that matters is a
+relative comparison of the model's outputs before and after a growth, in **float32**: across `grow_width` the
+loss moves by **4e-06**, and `grow_depth`, `grow_din` and `grow_state` are **exactly zero**. Width is the only
+operation that is not bit-exact, because widening changes what RMS normalisation divides by and the
+compensation is a floating-point constant; it is preserving to 2.1e-05 relative, not to machine precision.
+
+The "BPB unchanged across the grow" lines this sheet used to lead with are weaker evidence than they look. That
+evaluation runs under bf16 autocast, and measured on a controlled model the bf16 delta across a growth is
+**60x larger than the float32 delta** (-0.000244 against +0.000004): it is reporting rounding, not the growth.
+We now quote the float32 check and treat the bf16 line as an accompanying sanity check rather than proof.
+
+**An unexplained observation, recorded rather than omitted.** In the 405M run the across-growth BPB moved
+0.9755 to 0.9676 at the third growth, while the first two moved by +0.0001. A change of 0.0079 is far larger
+than bf16 rounding accounts for at the scale we measured, and the operation-level float32 checks say the
+operations preserve. We have not reconciled these and are not claiming the third growth was clean.
 
 ### 5. Sustains one continuous 20,000-token generation
 

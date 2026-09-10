@@ -415,7 +415,7 @@ class Core(nn.Module):
     @torch.no_grad()
     def generate(s,ids,n=40,temp=1.0,states=None,top_p=1.0,greedy=False,write_scale=0.25,
                  refresh_every=1000,refresh_blend=0.5,
-                 rep_thresh=0.35,rep_win=256,rep_check=64,rep_blend=0.75):
+                 rep_thresh=0.35,rep_win=256,rep_check=64,rep_blend=0.75,run_ban=0):
         """write_scale controls how much of its OWN output the model writes back into the recurrent state.
 REFRESH (refresh_every / refresh_blend) IS WHAT MAKES LONG GENERATION HOLD. Generated tokens
         accumulate in a fixed-size state; because the model's own output is far more self-similar than real text,
@@ -434,6 +434,14 @@ REFRESH (refresh_every / refresh_blend) IS WHAT MAKES LONG GENERATION HOLD. Gene
         with. rep_thresh closes the loop: every rep_check tokens, measure 4-gram repetition over the last rep_win
         generated tokens and, if it exceeds rep_thresh, refresh immediately with rep_blend. Cost is one set of
         256 tuples every 64 tokens, which is nothing next to a forward pass.
+
+        run_ban CLOSES A HOLE THE REFRESH CANNOT REACH. Refresh repairs the STATE, but the degenerate mode
+        seen at temperature 0.8 is driven by the CURRENT TOKEN: once the model emits a newline, "current token
+        is a newline" predicts another newline, and blending the state back toward the prompt does not change
+        that. Measured at 191M, temp 0.8: the trigger fired 3 times and the text still collapsed into a run of
+        newlines. run_ban=N zeroes the probability of a token that has just repeated N times in a row, for one
+        step only, which breaks an exact loop without touching the distribution in any other situation. Real
+        text does contain short runs (blank lines), so N must be well above what real text produces.
 
         MEASURED, 9000 generated tokens per cell, 4-gram repetition over 3000-token windows (exp/refresh_trigger.py):
             prompt              temp   off     on      fires
@@ -487,7 +495,7 @@ REFRESH (refresh_every / refresh_blend) IS WHAT MAKES LONG GENERATION HOLD. Gene
                      _t.zeros(x.shape[0],s.cfg.FE,device=x.device)) for _ in range(s.cfg.NL)]
         st,pv=(s.prefill(x[:,:-1],states) if x.shape[1]>1 else (states,None))
         _base=[(a.clone(),z.clone()) for a,z in st]      # the PROMPT's state, the anchor refresh returns to
-        out=[]; cur=x[:,-1:]; ntrig=0
+        out=[]; cur=x[:,-1:]; ntrig=0; nrun=0
         for i in range(n):
             b=None
             if refresh_every and i and i%refresh_every==0: b=refresh_blend
@@ -499,6 +507,9 @@ REFRESH (refresh_every / refresh_blend) IS WHAT MAKES LONG GENERATION HOLD. Gene
                 st=[((1-b)*a+b*a0,(1-b)*z+b*z0) for (a,z),(a0,z0) in zip(st,_base)]
             lg,st,pv=s.step(cur,st,pv,write_scale=write_scale)
             lg=lg[0].float()
+            if run_ban and len(out)>=run_ban and len(set(out[-run_ban:]))==1:
+                lg=lg.clone(); lg[out[-1]]=float('-inf')   # break an exact same-token loop, this step only
+                nrun+=1
             if greedy: nx=int(lg.argmax())
             else:
                 p=(lg/temp).softmax(-1)
@@ -507,7 +518,7 @@ REFRESH (refresh_every / refresh_blend) IS WHAT MAKES LONG GENERATION HOLD. Gene
                     p=_t.zeros_like(p).scatter_(0,si[keep],sp[keep]); p=p/p.sum()
                 nx=int(_t.multinomial(p,1))
             out.append(nx); cur=_t.tensor([[nx]],device=x.device)
-        s.last_refresh_triggers=ntrig
+        s.last_refresh_triggers=ntrig; s.last_run_bans=nrun
         return out,st
     @torch.no_grad()
     def prefill(s,X,states=None):

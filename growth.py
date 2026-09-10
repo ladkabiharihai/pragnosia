@@ -267,3 +267,60 @@ class SaturationSensor:
     def reset(s):
         """Call after a growth. The window would otherwise straddle the event and mix two different models."""
         s.hist=[]; s.ema=None; s.nsat=0
+
+
+def snapshot_opt_state(m, opt):
+    """Capture Adam's moments keyed by PARAMETER NAME, before a growth replaces the tensors.
+
+    WHY THIS EXISTS. Growth is function preserving for the WEIGHTS: new parameters appear and the model computes
+    the same function, verified to 2.3e-07. It has never been preserving for the OPTIMIZER. Every growth in
+    every run so far rebuilt Adam from scratch, which zeroes exp_avg and exp_avg_sq for every parameter,
+    including the ones that did not change. Adam then divides by sqrt(v) with v starting at zero, so the first
+    steps after a growth take near-maximal-size steps on a model that was just enlarged. The weights survive
+    the growth and the optimizer's entire estimate of the loss landscape does not.
+
+    Measured consequence in the 125M-to-405M run: BPB rose across the whole run rather than falling, from 0.9329
+    at step 260,000 to 1.0183 at step 672,000, with the steepest climbs immediately after each growth event.
+    That is not the only cause (the learning rate was also held at 6e-4 from 125M all the way to 405M) but it is
+    a real one and it is fixable exactly.
+    """
+    byname = {}
+    pid2name = {id(p): n for n, p in m.named_parameters()}
+    for group in opt.param_groups:
+        for p in group['params']:
+            st = opt.state.get(p)
+            if st is None or 'exp_avg' not in st: continue
+            n = pid2name.get(id(p))
+            if n is None: continue
+            byname[n] = (st['exp_avg'].detach().clone(),
+                         st['exp_avg_sq'].detach().clone(),
+                         st.get('step', None))
+    return byname
+
+
+def restore_opt_state(m, opt, byname):
+    """Copy the snapshotted moments into the grown tensors, zero-padding the new dimensions.
+
+    A grown parameter keeps its old values in the leading slice (that is what makes growth function preserving),
+    so the old moments belong in exactly the same slice. New rows and columns start at zero, which is the honest
+    initial state for a direction the optimizer has never seen. Returns how many tensors were carried, so the
+    caller can log it rather than assume it worked."""
+    carried = 0
+    for n, p in m.named_parameters():
+        old = byname.get(n)
+        if old is None: continue
+        ea, eas, step = old
+        if ea.dim() != p.dim(): continue                     # shape class changed: no honest mapping
+        if any(o > s for o, s in zip(ea.shape, p.shape)): continue   # shrank: not a growth we understand
+        st = opt.state[p]                                    # opt.state is a defaultdict: this creates {}
+        new_ea = torch.zeros_like(p); new_eas = torch.zeros_like(p)
+        sl = tuple(slice(0, s) for s in ea.shape)
+        new_ea[sl] = ea.to(new_ea.dtype); new_eas[sl] = eas.to(new_eas.dtype)
+        st['exp_avg'] = new_ea; st['exp_avg_sq'] = new_eas
+        # 'step' must ALWAYS be populated. Adam only runs its own initialisation when the state dict is empty,
+        # so a state carrying moments but no step is not re-initialised and raises on the next step. Fused Adam
+        # additionally wants step as a device tensor rather than a Python number.
+        st['step'] = (step.detach().clone() if torch.is_tensor(step)
+                      else torch.tensor(float(step or 0.0), device=p.device))
+        carried += 1
+    return carried
