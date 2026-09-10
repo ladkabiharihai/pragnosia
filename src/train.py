@@ -49,6 +49,8 @@ def main():
     ap.add_argument("--save-every", type=int, default=5000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--compile", type=int, default=1)
+    ap.add_argument("--resume", default="")
+    ap.add_argument("--spike", type=float, default=4.0)
     ap.add_argument("--eval-every", type=int, default=2000)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -74,8 +76,17 @@ def main():
         r.log(f"{P/1e6:.1f}M params, carrier {100*car/P:.1f}%, "
               f"{tok_total/1e9:.2f}B tokens = {tok_total/P:.1f} tok/param")
 
+        # RESUME. The last run diverged at step 14,400 and the trainer then wrote NaN weights over a healthy
+        # checkpoint, so the only survivor was a copy taken by accident for a probe.
+        start = 0
+        if a.resume and os.path.exists(a.resume):
+            sd = torch.load(a.resume, map_location="cuda")
+            m.load_state_dict(sd["model"]); start = sd["step"]
+            r.log(f"resumed from {a.resume} at step {start}, loss {sd['loss']:.4f}")
+
         t0 = time.time(); ema = None
-        for i in range(a.steps):
+        gnorms = []; skipped = 0
+        for i in range(start, a.steps):
             w = min(1.0, (i + 1) / a.warm)
             # cosine over the whole budget: a flat rate lets a model equilibrate at that rate's noise floor,
             # which is what drove the previous project's BPB upward for hundreds of thousands of steps.
@@ -88,14 +99,36 @@ def main():
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 loss = F.cross_entropy(fwd(x[:, :a.ctx]).reshape(-1, 8192), x[:, 1:a.ctx + 1].reshape(-1))
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)
-            opt.step()
-            v = loss.item(); ema = v if ema is None else 0.99 * ema + 0.01 * v
+            gn = float(torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0))
+            # SPIKE GUARD. The previous run went from loss 4.0998 to NaN between step 14,200 and 14,400, a
+            # sudden spike rather than a drift. Clipping bounds the step but still applies a direction taken
+            # from a pathological batch, and the optimizer then carries that direction in its state for
+            # thousands of steps. Compared against a running median so it needs no retuning as loss scale
+            # changes. This guard existed in the previous project's trainer and I failed to carry it here.
+            skip = len(gnorms) >= 200 and (not math.isfinite(gn) or gn > a.spike * float(np.median(gnorms)))
+            if skip:
+                opt.zero_grad(set_to_none=True); skipped += 1
+                if skipped <= 10 or skipped % 200 == 0:
+                    r.log(f"    spike at step {i+1}: |g|={gn:.2f} vs median {float(np.median(gnorms)):.2f}"
+                          f" -- SKIPPED (total {skipped})")
+            else:
+                opt.step()
+                if math.isfinite(gn):
+                    gnorms.append(gn)
+                    if len(gnorms) > 1000: gnorms.pop(0)
+            v = loss.item()
+            if not math.isfinite(v):
+                r.log(f"    NON-FINITE LOSS at step {i+1}; stopping rather than burning the card on NaN")
+                break
+            ema = v if ema is None else 0.99 * ema + 0.01 * v
             if (i + 1) % 200 == 0:
                 el = time.time() - t0
+                # Rate and ETA must count from the RESUME point, not from step zero, or a resumed run
+                # reports a throughput it never achieved and an ETA that is wildly optimistic.
+                done = i + 1 - start
                 r.log(f"{i+1}/{a.steps} loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f} "
-                      f"lr {opt.param_groups[0]['lr']:.2e} {(i+1)*a.batch*a.ctx/el/1e3:.0f} ktok/s "
-                      f"eta {(a.steps-i-1)*el/(i+1)/60:.0f}m")
+                      f"lr {opt.param_groups[0]['lr']:.2e} {done*a.batch*a.ctx/el/1e3:.0f} ktok/s "
+                      f"eta {(a.steps-i-1)*el/max(1,done)/60:.0f}m")
             if (i + 1) % a.eval_every == 0:
                 # BITS PER BYTE, not loss per token. Per-token loss depends on the vocabulary and is
                 # comparable to nothing; bits per byte removes the tokenizer and is the only number that can
@@ -104,10 +137,19 @@ def main():
                                  n_batches=8, B=8, T=a.ctx)
                 r.log(f"  eval step {i+1}: BPB {b:.4f}  ({nb/1e3:.0f}k bytes)")
             if (i + 1) % a.save_every == 0 or i + 1 == a.steps:
-                torch.save({"model": m.state_dict(), "step": i + 1, "loss": ema,
-                            "cfg": dict(vocab=8192, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx)},
-                           f"{a.out}/ckpt.pt")
-        r.log(f"final loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f}")
+                # NEVER OVERWRITE A GOOD CHECKPOINT WITH A BROKEN ONE. The previous run saved NaN weights over
+                # a healthy checkpoint and only a stray copy survived. Verify before writing, and keep the
+                # previous file as last-known-good.
+                bad = sum(1 for v in m.state_dict().values() if not torch.isfinite(v).all())
+                if bad:
+                    r.log(f"    refusing to checkpoint: {bad} non-finite tensors")
+                else:
+                    if os.path.exists(f"{a.out}/ckpt.pt"):
+                        os.replace(f"{a.out}/ckpt.pt", f"{a.out}/ckpt_prev.pt")
+                    torch.save({"model": m.state_dict(), "step": i + 1, "loss": ema,
+                                "cfg": dict(vocab=8192, d=a.d, layers=a.layers,
+                                            mlp_mult=a.mlp, ctx=a.ctx)}, f"{a.out}/ckpt.pt")
+        r.log(f"final loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f}, {skipped} spike-skips")
 
 
 if __name__ == "__main__":
