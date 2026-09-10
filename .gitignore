@@ -5,3 +5,6 @@ data/
 __pycache__/
 logs/
 .venv/
+# never commit credentials
+*.token
+.hf_token
