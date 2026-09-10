@@ -15,3 +15,5 @@
 7. **Continuous growth and continuous learning.**
 
 8. **Everything intrinsic to the model, instead of scaffolding.**
+
+9. **Solve context rot.**

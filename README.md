@@ -13,6 +13,7 @@ chosen architecture, and the vision file deliberately does not propose one.
 | `src/common.py` | shared infrastructure: production safety, GPU capping, pid identification, determinism, logging, corpus access. |
 | `tests/test_common.py` | verifies the guards actually guard. |
 | `logs/` | one file per run, not tracked. |
+| `.venv/` | this project's environment, python 3.12.3 + torch 2.14.0+cu130. Not tracked. Do not use `parakeet_env`. |
 
 Five files. A sixth needs a reason.
 
@@ -27,7 +28,7 @@ tokenized. Each of those is a decision to be made deliberately rather than inher
 ## Running things
 
 ```bash
-/opt/code/parakeet_env/bin/python tests/test_common.py     # verify the guards
+.venv/bin/python tests/test_common.py      # verify the guards
 ```
 
 Every run should use `src/common.py:Run`, which writes one log file and appends a dated entry to PROGRESS.md

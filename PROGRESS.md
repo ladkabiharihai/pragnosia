@@ -40,3 +40,15 @@ the same way as results, because a log that only records wins cannot be used to 
 
 **Current state: the repository is five files and a set of rules. There is no data, no tokenizer, no
 checkpoint, and no architecture. Nothing is running. Nothing proceeds without approval.**
+- `2026-09-10 10:04 UTC` **Project venv created** at `.venv`: python 3.12.3, torch 2.14.0+cu130, numpy 2.5.3,
+  tokenizers 0.23.2. Verified rather than assumed: CUDA available, bf16 supported, device reported as NVIDIA
+  H100 NVL, a matmul executed on the device. 5.4 GB, on `/` which has 266 GB free. `parakeet_env` belongs to
+  production tooling and is no longer used or modified by this project. `src/common.py`, CONSTRAINTS.md and
+  README.md all switched to the new interpreter; tests re-run against it, 13 of 13 pass.
+- `2026-09-10 10:04 UTC` **VISION.md gained a ninth goal: solve context rot.** Stated as a goal only, with no
+  proposed mechanism, consistent with the other eight.
+- `2026-09-10 10:04 UTC` Standing instruction recorded: **all research restarts from scratch, and nothing is
+  downloaded, built or run until explicitly asked.** The previous data mix is recorded in CONSTRAINTS.md as a
+  historical record of what was used, not as a plan.
+
+**Waiting on instruction. Nothing is running. No data will be downloaded until asked.**

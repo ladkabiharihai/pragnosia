@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LOGS = ROOT / "logs"
 PROGRESS = ROOT / "PROGRESS.md"
-PYTHON = "/opt/code/parakeet_env/bin/python"
+PYTHON = str(ROOT / ".venv" / "bin" / "python")   # this project's own venv, not parakeet_env
 DATA = Path("/mnt/kv_cache/pragnosia_data")
 VOCAB = 32768
 PROD_URL = "http://localhost:8000/v1/models"

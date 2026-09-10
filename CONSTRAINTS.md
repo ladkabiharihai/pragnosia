@@ -25,7 +25,19 @@ GPU access is time limited. Treat throughput as a deliverable, not a detail.
 
 ## Software
 
-Python 3.10.20, torch 2.11.0+cu130, CUDA 13.0, bf16 supported. Interpreter: `/opt/code/parakeet_env/bin/python`.
+This project has **its own virtual environment** at `.venv`, created 2026-09-10. Use it and nothing else.
+`/opt/code/parakeet_env` belongs to production tooling and is not to be used or modified.
+
+| | |
+|---|---|
+| interpreter | `/opt/code/membrae/.venv/bin/python` |
+| python | 3.12.3 |
+| torch | 2.14.0+cu130, CUDA 13.0 |
+| numpy | 2.5.3 |
+| tokenizers | 0.23.2 |
+| verified | bf16 supported, device visible as NVIDIA H100 NVL, matmul on device executed |
+
+The venv is 5.4 GB and sits on `/`, which has 266 GB free. It is not tracked.
 
 ## Storage
 
