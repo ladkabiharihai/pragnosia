@@ -181,5 +181,81 @@ worst = max((a - b).abs().max().item() / (b.abs().max().item() + 1e-30) for a, b
 check("carrier gradients (nu, theta, B, C, gate) match the sequential definition", worst < 1e-8,
       f"worst relative diff {worst:.1e}")
 
+print("\nper-token decay: the gated scan against the definition")
+# lambda_t differs at every token; the reference is the literal recurrence. Includes a channel whose decay is
+# extreme (logmag -8 on some tokens, |lambda|=3e-4: a near-reset) and one near 1, and a carried state.
+torch.manual_seed(5)
+B2, T2, D2 = 2, 45, 6
+u2 = torch.randn(B2, T2, D2, device=dev, dtype=torch.float64)
+lm2 = -torch.rand(B2, T2, D2, device=dev, dtype=torch.float64) * 8.0
+lm2[:, :, 0] = -1e-3                                                      # a slow channel
+an2 = torch.randn(B2, T2, D2, device=dev, dtype=torch.float64)
+h0r = torch.randn(B2, D2, device=dev, dtype=torch.float64); h0i = torch.randn(B2, D2, device=dev, dtype=torch.float64)
+def ref_gated(u, lm, an, hr, hi):
+    out = []
+    for t in range(u.shape[1]):
+        lr, li = torch.exp(lm[:, t]) * torch.cos(an[:, t]), torch.exp(lm[:, t]) * torch.sin(an[:, t])
+        hr, hi = hr * lr - hi * li + u[:, t], hr * li + hi * lr
+        out.append(hr)
+    return torch.stack(out, 1), (hr, hi)
+yr, (rr, ri) = ref_gated(u2, lm2, an2, h0r.clone(), h0i.clone())
+yg, (gr, gi) = SpinCarrier.scan_gated(u2, lm2, an2, (h0r, h0i), chunk=8)
+check("gated scan matches the definition (fp64, T=45, chunk 8, carried state)", torch.allclose(yg, yr, atol=1e-12),
+      f"max diff {(yg-yr).abs().max().item():.1e}")
+check("final complex state matches", torch.allclose(gr, rr, atol=1e-12) and torch.allclose(gi, ri, atol=1e-12))
+yg2, _ = SpinCarrier.scan_gated(u2, lm2, an2, (h0r, h0i), chunk=45)
+check("chunk size does not change the answer", torch.allclose(yg2, yr, atol=1e-12))
+a, st = SpinCarrier.scan_gated(u2[:, :20], lm2[:, :20], an2[:, :20], (h0r, h0i), chunk=8)
+b, _ = SpinCarrier.scan_gated(u2[:, 20:], lm2[:, 20:], an2[:, 20:], st, chunk=8)
+check("two windows carried == one", torch.allclose(torch.cat([a, b], 1), yr, atol=1e-12))
+# gradients through it, against the reference
+for t_ in (u2, lm2, an2): t_.requires_grad_(True)
+(SpinCarrier.scan_gated(u2, lm2, an2, None, chunk=8)[0] ** 2).sum().backward()
+g1 = [t_.grad.clone() for t_ in (u2, lm2, an2)]
+for t_ in (u2, lm2, an2): t_.grad = None
+(ref_gated(u2, lm2, an2, torch.zeros_like(h0r), torch.zeros_like(h0i))[0] ** 2).sum().backward()
+g2 = [t_.grad.clone() for t_ in (u2, lm2, an2)]
+worst = max((x - y).abs().max().item() / (y.abs().max().item() + 1e-30) for x, y in zip(g1, g2))
+check("gradients w.r.t. u, logmag, angle match the definition", worst < 1e-9, f"worst rel diff {worst:.1e}")
+# nothing can overflow: extreme decays, long sequence, fp32
+uf = torch.randn(2, 512, 8, device=dev); lmf = -torch.rand(2, 512, 8, device=dev) * 30.0; anf = torch.randn(2, 512, 8, device=dev)
+yf, _ = SpinCarrier.scan_gated(uf, lmf, anf, None, chunk=16)
+check("fp32, T=512, decays down to exp(-30): finite", torch.isfinite(yf).all().item())
+
+if dev == "cuda":
+    print("\nthe Triton scan kernel against the definition")
+    from src.scan_kernel import scan_triton
+    torch.manual_seed(5)
+    Bk, Tk, Dk = 2, 45, 300                              # D not a multiple of the block, T odd
+    uk = torch.randn(Bk, Tk, Dk, device=dev); lmk = -torch.rand(Bk, Tk, Dk, device=dev) * 8; ank = torch.randn(Bk, Tk, Dk, device=dev)
+    h0k = (torch.randn(Bk, Dk, device=dev), torch.randn(Bk, Dk, device=dev))
+    yr, (rr, ri) = SpinCarrier.scan_gated(uk.double(), lmk.double(), ank.double(), (h0k[0].double(), h0k[1].double()), chunk=8)
+    yt, (tr, ti) = scan_triton(uk, lmk, ank, h0k)
+    check("forward matches the fp64 definition to fp32 precision", (yt - yr.float()).abs().max().item() < 1e-5
+          and (tr - rr.float()).abs().max().item() < 1e-5 and (ti - ri.float()).abs().max().item() < 1e-5,
+          f"max diff {(yt-yr.float()).abs().max().item():.1e}")
+    w = torch.randn(Bk, Tk, Dk, device=dev); wl = torch.randn(Bk, Dk, device=dev); wi = torch.randn(Bk, Dk, device=dev)
+    def lossf(fn, *a):
+        y, (r, i) = fn(*a); return (y * w).sum() + (r * wl).sum() + (i * wi).sum()
+    a64 = [t.double().requires_grad_(True) for t in (uk, lmk, ank)] + [t.double().requires_grad_(True) for t in h0k]
+    lossf(lambda a, b, c, d, e: SpinCarrier.scan_gated(a, b, c, (d, e), chunk=8), *a64).backward()
+    a32 = [t.clone().requires_grad_(True) for t in (uk, lmk, ank)] + [t.clone().requires_grad_(True) for t in h0k]
+    lossf(lambda a, b, c, d, e: scan_triton(a, b, c, (d, e)), *a32).backward()
+    worst = max(((a.grad - b.grad.float()).abs().max() / (b.grad.abs().max() + 1e-30)).item() for a, b in zip(a32, a64))
+    check("backward (u, logmag, angle, h0 real and imaginary; gradient through the final Im state too) matches", worst < 1e-5,
+          f"worst rel diff {worst:.1e}")
+    yt0, _ = scan_triton(uk, lmk, ank, None); yr0, _ = SpinCarrier.scan_gated(uk.double(), lmk.double(), ank.double(), None, chunk=8)
+    check("without a carried state", (yt0 - yr0.float()).abs().max().item() < 1e-5)
+    m = SpinCarrier(48, gated="rf").to(dev); xg = torch.randn(2, 70, 48, device=dev)
+    yA, _ = m(xg)
+    import src.spin as _sp
+    z = m.ln(xg); mag, ang = m.lam(); lg = -m.gate_c * torch.sigmoid(m.Wr(z)) * (-torch.log(mag))
+    ug = m.B(z) * torch.sqrt(1 - torch.exp(2 * lg)).clamp_min(1e-4) * torch.sigmoid(m.Wi(z))
+    yB = xg + torch.sigmoid(m.gate) * m.C(_sp.SpinCarrier.scan_gated(ug.double(), lg.double(), ang.double().expand_as(lg), None)[0].float())
+    check("the forget-gated carrier through the kernel equals it through the chunked fp64 scan", (yA - yB).abs().max().item() < 1e-5,
+          f"max diff {(yA-yB).abs().max().item():.1e}")
+    lmx = torch.full((2, 512, 8), -40.0, device=dev); yx, _ = scan_triton(torch.randn(2, 512, 8, device=dev), lmx, torch.randn(2, 512, 8, device=dev))
+    check("decay exp(-40) at every token, T=512: finite", torch.isfinite(yx).all().item())
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

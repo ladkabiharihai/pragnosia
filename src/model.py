@@ -60,12 +60,14 @@ class MLP(nn.Module):
 
 class LM(nn.Module):
     def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512, mixer="spin"):
-        """mixer: "spin" (plain carrier), "gspin" (carrier with input and output gates), "attn" (control)."""
+        """mixer: "spin" (plain carrier), "gspin" (input and output gates), "fspin" (input and recurrence
+        gates: per-token forgetting), "attn" (control)."""
         super().__init__()
         self.vocab, self.d, self.layers, self.ctx, self.mixer = vocab, d, layers, ctx, mixer
         self.e = nn.Embedding(vocab, d)
         self.p = nn.Embedding(ctx, d)
-        mk = {"spin": lambda d: SpinCarrier(d), "gspin": lambda d: SpinCarrier(d, gated=True), "attn": Attn}[mixer]
+        mk = {"spin": lambda d: SpinCarrier(d), "gspin": lambda d: SpinCarrier(d, gated="io"),
+              "fspin": lambda d: SpinCarrier(d, gated="rf"), "attn": Attn}[mixer]
         self.mix = nn.ModuleList([mk(d) for _ in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
@@ -148,7 +150,7 @@ class LM(nn.Module):
         whose mean is already near zero; the test measures it. (RMSNorm would make it exact; LayerNorm is kept
         so the grown model stays the same architecture as the runs it is compared with.)"""
         d, dn = self.d, d_new
-        assert dn > d and self.mixer in ("spin", "gspin")
+        assert dn > d and self.mixer in ("spin", "gspin", "fspin")
         fresh = LM(self.vocab, dn, self.layers, self.mlp[0].a.weight.shape[0] // d, self.ctx, self.mixer)
         fresh = fresh.to(self.e.weight.device)
         grown = {}
@@ -186,7 +188,8 @@ class LM(nn.Module):
                                                                               # cols: readers of the stream, random
             widen(mx.C, "weight", fx.C.weight, zero_rows=True, zero_cols=True)  # rows: writers into stream; cols: readers of new state
             if mx.gated:
-                for g_, fg in ((mx.Wi, fx.Wi), (mx.Wo, fx.Wo)):           # readers of the stream: random
+                second = ("Wo", "Wr")[mx.gated == "rf"]
+                for g_, fg in ((mx.Wi, fx.Wi), (getattr(mx, second), getattr(fx, second))):  # readers: random
                     widen(g_, "weight", fg.weight); widen(g_, "bias", fg.bias, zero_rows=True)
                     g_.in_features = g_.out_features = dn
             widen_ln(mx.ln)

@@ -57,7 +57,7 @@ class _CausalConv(torch.autograd.Function):
 
 
 class SpinCarrier(nn.Module):
-    def __init__(self, d: int, chunk: int = 128, nu_min: float = 1e-3, nu_max: float = 0.3, gated: bool = False):
+    def __init__(self, d: int, chunk: int = 128, nu_min: float = 1e-3, nu_max: float = 0.3, gated: str | None = None):
         # chunk=128 measured: 53.3 ms/step compiled against 61.5 at chunk=64 and 204 eager, because the
         # cross-chunk loop is sequential and halving its length halves the kernel-launch rounds. Accuracy is
         # unaffected: relative error in float32 is 9.6e-6 at chunk 32, 64, 128 and 256 alike, since within a
@@ -75,14 +75,23 @@ class SpinCarrier(nn.Module):
         self.ln = nn.LayerNorm(d)
         self.gate = nn.Parameter(torch.zeros(()))
         # SELECTIVITY (optional). The plain carrier writes every token into the state with the same weight and
-        # reads the state out the same way at every position; attention decides per token what to read. An
-        # input gate i_t = sigmoid(W_i z_t) chooses what is written, an output gate o_t = sigmoid(W_o z_t) what
-        # is read, both per channel per token. The recurrence itself stays time-invariant, so the FFT path and
-        # its guarantees are untouched. Costs 2d^2 more per layer: B, C, W_i, W_o make 4d^2, the same as
-        # attention's q, k, v, o, so a gated carrier at width d matches an attention block at width d exactly.
+        # reads the state out the same way at every position; attention decides per token what to read.
+        #   "io": an input gate i_t = sigmoid(W_i z_t) chooses what is written and an output gate
+        #         o_t = sigmoid(W_o z_t) what is read, per channel per token. The recurrence stays
+        #         time-invariant, so the FFT path and its guarantees are untouched.
+        #   "rf": an input gate and a RECURRENCE gate: lambda_t = exp(-c sigmoid(W_r z_t) nu + i theta), so a
+        #         token can hold the state (gate near 0) or reset it (gate near 1), per channel. Time-varying,
+        #         so it runs through scan_gated instead of the FFT. This is the forgetting that the Griffin
+        #         RG-LRU showed matters; c=8 as there.
+        # Either costs 2d^2 more per layer: with B and C that is 4d^2, the same as attention's q, k, v, o, so a
+        # gated carrier at width d matches an attention block at width d exactly.
+        assert gated in (None, "io", "rf")
         self.gated = gated
-        if gated:
+        if gated == "io":
             self.Wi = nn.Linear(d, d); self.Wo = nn.Linear(d, d)
+        elif gated == "rf":
+            self.Wi = nn.Linear(d, d); self.Wr = nn.Linear(d, d)
+            self.gate_c = 8.0
 
     NU_MIN = 1e-3            # bounds |lambda| <= exp(-1e-3) = 0.999
 
@@ -169,6 +178,42 @@ class SpinCarrier(nn.Module):
             hi_last = hi_last + dT * torch.sin(aT) * hr0 + dT * torch.cos(aT) * hi0
         return hr.to(u.dtype), (hr[:, -1].to(u.dtype), hi_last.to(u.dtype))
 
+    @staticmethod
+    def scan_gated(u: torch.Tensor, logmag: torch.Tensor, ang: torch.Tensor, h0=None, chunk: int = 16):
+        """h_t = lambda_t h_{t-1} + u_t with a PER-TOKEN lambda_t = exp(logmag_t + i ang_t), logmag_t <= 0.
+
+        Time-varying, so no FFT. Chunked: within a chunk of C tokens the closed form is
+            h_t = sum_{s<=t} exp(L_t - L_s) u_s + exp(L_t) h_prev,   L_t = sum_{r<=t} log lambda_r,
+        and every exponent has real part <= 0 because logmag <= 0 and s <= t. That is the whole point: the
+        retired scan_chunked computed lambda^(-s), a POSITIVE exponent that overflowed once nu grew; this
+        computes differences of cumulative sums and can never exceed magnitude 1. Chunks are sequential (T/C
+        of them), the C x C decay matrix inside a chunk is formed per channel and reduced against u. Only the
+        real part is emitted; the imaginary part is formed for the last position of each chunk, for carrying.
+        Returns (Re h, (Re h_last, Im h_last))."""
+        B_, T, D = u.shape
+        rt = torch.float64 if u.dtype == torch.float64 else torch.float32
+        u, logmag, ang = u.to(rt), logmag.to(rt), ang.to(rt)
+        hr = torch.zeros(B_, D, device=u.device, dtype=rt) if h0 is None else h0[0].to(rt)
+        hi = torch.zeros(B_, D, device=u.device, dtype=rt) if h0 is None else h0[1].to(rt)
+        outs = []
+        for s0 in range(0, T, chunk):
+            uc, lc, ac = u[:, s0:s0 + chunk], logmag[:, s0:s0 + chunk], ang[:, s0:s0 + chunk]
+            C = uc.shape[1]
+            Lr, Li = lc.cumsum(1), ac.cumsum(1)                                          # (B,C,D), Lr <= 0
+            dr = Lr.unsqueeze(2) - Lr.unsqueeze(1)                                       # (B,C,C,D): t, s
+            di = Li.unsqueeze(2) - Li.unsqueeze(1)
+            mask = torch.ones(C, C, device=u.device, dtype=torch.bool).tril().view(1, C, C, 1)
+            mag = torch.exp(dr.clamp(max=0.0)) * mask                                    # exact: dr <= 0 on the mask
+            hr_c = (mag * torch.cos(di) * uc.unsqueeze(1)).sum(2)                        # (B,C,D)
+            er, ei = torch.exp(Lr), Li
+            hr_c = hr_c + er * (torch.cos(ei) * hr.unsqueeze(1) - torch.sin(ei) * hi.unsqueeze(1))
+            hi_last = (mag[:, -1] * torch.sin(di[:, -1]) * uc).sum(1) \
+                      + er[:, -1] * (torch.sin(ei[:, -1]) * hr + torch.cos(ei[:, -1]) * hi)
+            hr, hi = hr_c[:, -1], hi_last
+            outs.append(hr_c)
+        y = torch.cat(outs, 1)
+        return y.to(u.dtype), (hr.to(u.dtype), hi.to(u.dtype))
+
     def gamma(self):
         """Input normalisation, and it is not optional.
 
@@ -183,10 +228,22 @@ class SpinCarrier(nn.Module):
 
     def forward(self, x: torch.Tensor, h0=None):
         z = self.ln(x)
-        u = self.B(z) * self.gamma()
-        if self.gated:
-            u = u * torch.sigmoid(self.Wi(z))
-        y, h = self.scan(u, h0)
-        if self.gated:
-            y = y * torch.sigmoid(self.Wo(z))
+        if self.gated == "rf":
+            mag, ang = self.lam()
+            # per-token log-magnitude, always <= 0; per-token gamma so every channel stays unit variance
+            logmag = -self.gate_c * torch.sigmoid(self.Wr(z)) * (-torch.log(mag))
+            gam = torch.sqrt(1.0 - torch.exp(2.0 * logmag)).clamp_min(1e-4)
+            u = self.B(z) * gam * torch.sigmoid(self.Wi(z))
+            if u.is_cuda:
+                from .scan_kernel import scan_triton
+                y, h = scan_triton(u, logmag, ang.expand_as(logmag), h0)
+            else:
+                y, h = self.scan_gated(u, logmag, ang.expand_as(logmag), h0)
+        else:
+            u = self.B(z) * self.gamma()
+            if self.gated == "io":
+                u = u * torch.sigmoid(self.Wi(z))
+            y, h = self.scan(u, h0)
+            if self.gated == "io":
+                y = y * torch.sigmoid(self.Wo(z))
         return x + torch.sigmoid(self.gate) * self.C(y), h

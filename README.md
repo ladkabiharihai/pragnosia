@@ -12,17 +12,18 @@ architecture; what is being tested and why is recorded, dated, in [PROGRESS.md](
 | [PROGRESS.md](PROGRESS.md) | dated log of everything that happens, including failures and corrections. Append only. |
 | `src/common.py` | shared infrastructure: production safety, GPU capping, pid identification, determinism, the `Run` logger that also journals, corpus access, bits-per-byte evaluation. |
 | `src/corpus.py` | the eight source corpora, their measured sizes, the mix, and streaming access to the raw text. |
-| `src/spin.py` | the carrier: a diagonal-complex linear recurrence, `h_t = lambda h_{t-1} + gamma u_t`, evaluated as a causal convolution by FFT with a hand-written backward. Our own implementation. |
+| `src/spin.py` | the carrier: a diagonal-complex linear recurrence, `h_t = lambda h_{t-1} + gamma u_t`, evaluated as a causal convolution by FFT with a hand-written backward; optional input/output gates (`gspin`) and per-token forgetting (`fspin`). Our own implementation. |
+| `src/scan_kernel.py` | one Triton kernel per direction for the recurrence with a per-token `lambda_t`: the literal sequential form, so nothing can overflow. What `fspin` trains through, and the inference form for every variant. |
 | `src/model.py` | the language model around the carrier (`LM`), the attention control (`Attn`, baseline only), `forward_carried` for state across windows. |
 | `src/optim.py` | `Fabric`: factored second moment, trust-ratio steps, growth-aware state, fused and CUDA-graph replayed. |
 | `src/train.py` | the trainer: cosine schedule, spike guard, divergence abort, verified checkpoints, resume with optimizer state, BPB eval. |
 | `src/calib.py` | the goal probes: calibration (goal 4), real-vs-fabricated confidence (goal 5), needle retrieval through the carried state (goal 9), BPB against GPT-2. |
 | `src/facts.py` | 48 factual multiple-choice items used by the goal-5 probe. |
-| `tests/` | `test_common.py` (13), `test_optim.py` (21), `test_spin.py` (32), `test_model.py` (13, growth). All must pass before a run. |
+| `tests/` | `test_common.py` (13), `test_optim.py` (21), `test_spin.py` (43), `test_model.py` (13, growth). All must pass before a run. |
 | `logs/` | one file per run, not tracked. |
 | `.venv/` | this project's environment, python 3.12.3 + torch 2.14.0+cu130. Not tracked. Do not use `parakeet_env`. |
 
-Twelve source files. A thirteenth needs a reason.
+Thirteen source files. A fourteenth needs a reason.
 
 ## Current state, 2026-09-11
 
