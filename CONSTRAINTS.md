@@ -41,35 +41,27 @@ The venv is 5.4 GB and sits on `/`, which has 266 GB free. It is not tracked.
 
 ## Storage
 
-- `/mnt/kv_cache` 3.5 TB, 2.6 TB free. Everything large lives here.
+- `/mnt/kv_cache` 3.5 TB, 2.7 TB free. Everything large lives here.
 - `/` 495 GB, 266 GB free.
 
 ## Data: what we actually have
 
-**Nothing. As of 2026-09-10 09:55 UTC there is no training data, no tokenizer and no checkpoint on this
-machine.** All of it was deleted deliberately to start clean. Stated plainly so that no plan is built on
-something that is not here.
+Updated 2026-09-11. The clean of 2026-09-10 deleted everything; this is what has been re-acquired since,
+measured, not planned.
 
 | what | state |
 |---|---|
-| tokenizer | gone. There is no 32k vocab file anywhere on disk. |
-| tokenized corpora | gone. 12 streams, 580 GB, 290.2B tokens, deleted. |
-| raw text | never on this disk. The corpora were tokenized elsewhere. |
-| checkpoints | gone. 46 files, 29 GB, including the only model with verified claims. |
+| raw corpora | `/mnt/kv_cache/hf_dl`, 470 GB, 200.8B tokens by streaming length measurement (`src/corpus.py`). Eight sources: dclm .413, fineweb-edu .322, starcoderdata .130, finemath .036, open-web-math .030, arxiv .030, wikipedia .023, algebraic-stack .015 (achieved token shares). No Gutenberg, by instruction. |
+| tokenizers | `/mnt/kv_cache/tok_v{2048,4096,8192,16384,32768,65536}.json`, BPE, trained on a held-out slice. Compression 2.653 / 3.017 / 3.374 / 3.677 / 3.906 / 4.061 bytes per token. Compute-optimal choice by width: 8192 at d512, 16384 at d768 to 1024, 32768 at d1536 and up. |
+| tokenized | `/mnt/kv_cache/tok1b_v8192/<source>.bin`, uint16, 1.01B tokens in the achieved mix. This is the ONLY tokenized slice; the 200B corpus is raw. |
+| checkpoints | `/mnt/kv_cache/run1` (spin 77.6M, 120k steps, `ckpt.pt` plus `snaps/step_*.pt` every 5k, 12 GB) and `/mnt/kv_cache/run2` (attention control, same schedule). Trajectory probes in `<run>/probe_suite.json`. |
+| baselines | `/mnt/kv_cache/hf_home`, `hf_cache`: GPT-2 124M (the BPB anchor), Pythia-160M, SmolLM2, Qwen2.5-0.5B. |
 
-Everything therefore has to be re-acquired before any training can happen:
+**Not ours to delete:** `/mnt/kv_cache/lmcache_disk` (153 GB) is production's vLLM KV-cache offload.
+**Not to be used:** `/mnt/kv_cache/spin` holds the previous spin lineage's HF repo for reference only; nothing
+is taken from it (instruction of 2026-09-10).
 
-1. Download the source corpora. The previous mix was window2 (169.7B), dclm (96.8B), finemath (10.0B),
-   opencode (5.9B), openmath (5.6B), tulu3 (0.9B), numina (0.5B), hermes (0.4B), recall (0.3B), and small
-   code sets, for 290.2B tokens at a 32768 vocab. That mix is a record of what was used, not a recommendation.
-2. Build a tokenizer, then tokenize. Both are decisions to make deliberately rather than to inherit.
-
-**Kept, and not ours to delete:** `/mnt/kv_cache/lmcache_disk` (153 GB) is production's vLLM KV-cache offload
-for gpt-oss-20b. **Kept, and useful:** `/mnt/kv_cache/hf_home` and `hf_cache` (17 GB) hold HuggingFace dataset
-caches (fineweb-edu, smollm-corpus, NuminaMath) and baseline models (Pythia-160M, SmolLM2-135M/360M,
-Qwen2.5-0.5B). Deleting those would save 17 GB of a 3.5 TB disk and make re-downloading slower.
-
-Disk after the clean: 3.1 TB free of 3.5 TB.
+Disk: 2.7 TB free of 3.5 TB.
 
 ## Working rules
 
