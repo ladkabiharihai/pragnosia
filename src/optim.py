@@ -309,9 +309,12 @@ class Fabric(Optimizer):
 
     # ---------------------------------------------------------------------------------- growth support
     @torch.no_grad()
-    def grew(self, p: torch.Tensor, old_shape: tuple[int, ...], fill: str = "median") -> None:
-        self._graph = None; self._warm = False   # state tensors change shape and address
-        """Tell the optimizer a parameter was enlarged in place, so new slots inherit statistics.
+    def grew(self, p: torch.Tensor, old_shape: tuple[int, ...], fill: str = "median", replaces=None) -> None:
+        """Tell the optimizer a parameter was enlarged, so new slots inherit statistics.
+
+        `replaces` is the old Parameter object when the model made a new one (LM.grow does, because autograd
+        caches a per-parameter accumulator with the creation-time shape): its state moves to `p` and it is
+        swapped out of the param groups, so the groups keep their order and their settings.
 
         Zeroing them is the default elsewhere and it is wrong: the second moment appears in a denominator, so
         a zero means an unboundedly large first step on exactly the new capacity. New rows and columns take the
@@ -321,6 +324,12 @@ class Fabric(Optimizer):
         `fill` exists so the alternative is testable rather than asserted. Note there is no do-nothing option:
         carrying state across a growth WITHOUT resizing it does not degrade gracefully, it raises, because the
         factored state is still the old width. Zeroing new slots is a deliberate act, not a default."""
+        self._graph = None; self._warm = False   # state tensors change shape and address
+        if replaces is not None:
+            for gp in self.param_groups:
+                gp["params"] = [p if q is replaces else q for q in gp["params"]]
+            if replaces in self.state:
+                self.state[p] = self.state.pop(replaces)
         st = self.state.get(p)
         if not st:
             return

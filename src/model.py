@@ -9,6 +9,7 @@ loss 4.850, 5.5% gives 4.921, 3.4% gives 4.943. Loss rises monotonically as the 
 mlp_mult defaults to 4 rather than to the 27 the previous lineage grew to.
 """
 from __future__ import annotations
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -118,6 +119,85 @@ class LM(nn.Module):
                 h = mp(h)
             logits = F.linear(self.n(h), self.e.weight)
         return logits
+
+    @torch.no_grad()
+    def grow(self, d_new: int):
+        """Widen the model IN PLACE from d to d_new, preserving the function it computes (vision goal 7).
+
+        Every grown parameter becomes a NEW Parameter object. Replacing .data in place looked cleaner and was
+        wrong: autograd caches an accumulator per parameter with the shape at its creation, and the next
+        backward after an in-place widening failed with "invalid gradient ... got [8192, 256] but expected
+        [8192, 192]". Returns {new_param: (old_param, old_shape)} for Fabric.grew, which moves the optimizer
+        state from the old object to the new one and resizes it.
+
+        The rule that makes it work: in the residual stream, every WRITER of a new dimension starts at zero and
+        every READER starts random. Writers zero means the new dimensions are exactly zero everywhere, so the
+        logits do not change. Readers random means the writers receive a non-zero gradient on the very first
+        step (grad of a writer is the upstream sensitivity, which flows through the readers), so the new
+        capacity begins learning immediately instead of sitting at a zero-gradient fixed point, which is what
+        zero-zero initialisation produces. Writers into the stream: the token and position embeddings' new
+        columns, C's new rows, the MLP down-projection's new rows. Readers: LayerNorm entries, B's new columns,
+        the MLP up-projection's new columns. Inside a layer the same rule holds for new carrier channels and
+        new MLP units: B rows and MLP-up rows random (writers into a private space), C columns and MLP-down
+        columns zero (readers of that space into the stream).
+
+        LayerNorm is the one place preservation is approximate rather than exact: it normalises over all d_new
+        entries, and the appended zeros shrink the variance by d/d_new, so the old affine weights are scaled by
+        sqrt(d/d_new) to compensate. The residual error is the shift in the mean, second order for a stream
+        whose mean is already near zero; the test measures it. (RMSNorm would make it exact; LayerNorm is kept
+        so the grown model stays the same architecture as the runs it is compared with.)"""
+        d, dn = self.d, d_new
+        assert dn > d and self.mixer == "spin"
+        fresh = LM(self.vocab, dn, self.layers, self.mlp[0].a.weight.shape[0] // d, self.ctx, self.mixer)
+        fresh = fresh.to(self.e.weight.device)
+        grown = {}
+        def put(mod, name, new):
+            old = getattr(mod, name)
+            newp = nn.Parameter(new)
+            setattr(mod, name, newp)
+            grown[newp] = (old, tuple(old.shape))
+        def widen(mod, name, src, zero_rows=False, zero_cols=False):
+            old = getattr(mod, name).data
+            new = src.detach().clone().to(old.dtype)
+            sl = tuple(slice(0, s) for s in old.shape)
+            if zero_rows: new[old.shape[0]:] = 0
+            if zero_cols and new.dim() == 2: new[:, old.shape[1]:] = 0
+            new[sl] = old
+            put(mod, name, new)
+        def widen_ln(ln):
+            old_w, old_b = ln.weight.data, ln.bias.data
+            # new affine weights ZERO: LayerNorm maps the zero new dimensions to -mean/std, not to zero, and
+            # random readers would see that. With the weight at zero the readers see exactly zero; the weight
+            # itself gets a gradient on step one (readers are random), and the writers on step two.
+            w = torch.zeros(dn, device=old_w.device, dtype=old_w.dtype); w[:d] = old_w * math.sqrt(d / dn)
+            b = torch.zeros(dn, device=old_b.device, dtype=old_b.dtype); b[:d] = old_b
+            put(ln, "weight", w); put(ln, "bias", b); ln.normalized_shape = (dn,)
+        widen(self.e, "weight", fresh.e.weight, zero_cols=True)              # writer (and tied reader): zero
+        widen(self.p, "weight", fresh.p.weight, zero_cols=True)              # writer: zero
+        self.e.embedding_dim = self.p.embedding_dim = dn
+        for mx, fx in zip(self.mix, fresh.mix):
+            # new channels span the whole timescale and frequency range, not the tail of a longer linspace
+            k = dn - d
+            nu_new = torch.linspace(float(mx.nu_raw.data.min()), float(mx.nu_raw.data.max()), k, device=mx.nu_raw.device)
+            th_new = torch.linspace(0.0, math.pi, k, device=mx.theta.device)
+            put(mx, "nu_raw", torch.cat([mx.nu_raw.data, nu_new])); put(mx, "theta", torch.cat([mx.theta.data, th_new]))
+            widen(mx.B, "weight", fx.B.weight)                                # rows: writers into new state, random;
+                                                                              # cols: readers of the stream, random
+            widen(mx.C, "weight", fx.C.weight, zero_rows=True, zero_cols=True)  # rows: writers into stream; cols: readers of new state
+            widen_ln(mx.ln)
+            mx.B.in_features = mx.B.out_features = mx.C.in_features = mx.C.out_features = dn
+            mx.d = dn
+        for mp, fp in zip(self.mlp, fresh.mlp):
+            widen(mp.a, "weight", fp.a.weight)                                # new units random, new stream readers random
+            widen(mp.a, "bias", fp.a.bias, zero_rows=True)
+            widen(mp.b, "weight", fp.b.weight, zero_rows=True, zero_cols=True)  # writers into stream zero, readers of new units zero
+            widen(mp.b, "bias", fp.b.bias, zero_rows=True)
+            widen_ln(mp.n)
+            mp.a.in_features = dn; mp.a.out_features = fp.a.out_features
+            mp.b.in_features = fp.b.in_features; mp.b.out_features = dn
+        widen_ln(self.n)
+        self.d = dn
+        return grown
 
     def param_groups(self, lr=6e-3, spectral_lr=1e-3):
         """Spectral parameters take small ABSOLUTE steps, everything else takes trust-ratio steps.

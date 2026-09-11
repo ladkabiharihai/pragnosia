@@ -49,6 +49,8 @@ def main():
     ap.add_argument("--save-every", type=int, default=5000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--compile", type=int, default=1)
+    ap.add_argument("--grow-at", type=int, default=0, help="step at which to widen the model in place (0: never)")
+    ap.add_argument("--grow-to", type=int, default=0, help="width to grow to at --grow-at")
     ap.add_argument("--fused", type=int, default=1, help="one compiled kernel group per parameter update")
     ap.add_argument("--graph", type=int, default=1, help="replay the optimizer step as a CUDA graph")
     ap.add_argument("--resume", default="")
@@ -87,6 +89,10 @@ def main():
         start = 0
         if a.resume and os.path.exists(a.resume):
             sd = torch.load(a.resume, map_location="cuda")
+            if sd["cfg"]["d"] != m.d:                      # a grown run: rebuild at the checkpoint's width
+                m = LM(vocab=8192, d=sd["cfg"]["d"], layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
+                fwd = torch.compile(m) if a.compile else m
+                opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), cuda_graph=bool(a.graph and a.fused))
             m.load_state_dict(sd["model"]); start = sd["step"]
             # RESTORE THE OPTIMIZER TOO. Loading only the weights leaves the optimizer cold, with its second
             # moment at zero, so its first steps after a resume are near-maximal on a model that was already
@@ -113,6 +119,22 @@ def main():
             sched = 0.05 + 0.95 * 0.5 * (1 + math.cos(math.pi * f))
             for gi, g in enumerate(opt.param_groups):
                 g["lr"] = base[gi] * sched * w
+            if a.grow_at and i == a.grow_at and m.d < a.grow_to:
+                # GROWTH (vision goal 7): widen in place, function preserved, optimizer state carried. The
+                # loss right before and right after is logged so the cost of the event is a number.
+                xg = batch(bins, ks, ps, np.random.default_rng(7), a.batch, a.ctx)
+                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    lb = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, 8192), xg[:, 1:a.ctx + 1].reshape(-1)).item()
+                for p_, (old_p, sh) in m.grow(a.grow_to).items():
+                    opt.grew(p_, sh, replaces=old_p)
+                opt.zero_grad(set_to_none=True)             # grad buffers are the old shape
+                torch._dynamo.reset()                        # compiled graphs hold the old parameters
+                fwd = torch.compile(m) if a.compile else m
+                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    la = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, 8192), xg[:, 1:a.ctx + 1].reshape(-1)).item()
+                P = sum(p.numel() for p in m.parameters())
+                r.log(f"    GREW to d={m.d} at step {i}: {P/1e6:.1f}M params, same batch loss {lb:.4f} -> {la:.4f}, "
+                      f"optimizer state {opt.state_bytes()/2**20:.0f} MiB carried")
             x = batch(bins, ks, ps, rng, a.batch, a.ctx)
             opt.zero_grad(set_to_none=set_none)
             with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -175,7 +197,7 @@ def main():
                         os.replace(f"{a.out}/ckpt.pt", f"{a.out}/ckpt_prev.pt")
                     torch.save({"model": m.state_dict(), "opt": opt.state_dict(),
                                 "step": i + 1, "loss": ema,
-                                "cfg": dict(vocab=8192, d=a.d, layers=a.layers,
+                                "cfg": dict(vocab=8192, d=m.d, layers=a.layers,
                                             mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer)},
                                f"{a.out}/ckpt.pt")
         r.log(f"final loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f}, {skipped} spike-skips")
