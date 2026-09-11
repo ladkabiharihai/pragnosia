@@ -57,7 +57,7 @@ class _CausalConv(torch.autograd.Function):
 
 
 class SpinCarrier(nn.Module):
-    def __init__(self, d: int, chunk: int = 128, nu_min: float = 1e-3, nu_max: float = 0.3):
+    def __init__(self, d: int, chunk: int = 128, nu_min: float = 1e-3, nu_max: float = 0.3, gated: bool = False):
         # chunk=128 measured: 53.3 ms/step compiled against 61.5 at chunk=64 and 204 eager, because the
         # cross-chunk loop is sequential and halving its length halves the kernel-launch rounds. Accuracy is
         # unaffected: relative error in float32 is 9.6e-6 at chunk 32, 64, 128 and 256 alike, since within a
@@ -74,6 +74,15 @@ class SpinCarrier(nn.Module):
         self.C = nn.Linear(d, d, bias=False)
         self.ln = nn.LayerNorm(d)
         self.gate = nn.Parameter(torch.zeros(()))
+        # SELECTIVITY (optional). The plain carrier writes every token into the state with the same weight and
+        # reads the state out the same way at every position; attention decides per token what to read. An
+        # input gate i_t = sigmoid(W_i z_t) chooses what is written, an output gate o_t = sigmoid(W_o z_t) what
+        # is read, both per channel per token. The recurrence itself stays time-invariant, so the FFT path and
+        # its guarantees are untouched. Costs 2d^2 more per layer: B, C, W_i, W_o make 4d^2, the same as
+        # attention's q, k, v, o, so a gated carrier at width d matches an attention block at width d exactly.
+        self.gated = gated
+        if gated:
+            self.Wi = nn.Linear(d, d); self.Wo = nn.Linear(d, d)
 
     NU_MIN = 1e-3            # bounds |lambda| <= exp(-1e-3) = 0.999
 
@@ -173,6 +182,11 @@ class SpinCarrier(nn.Module):
         return torch.sqrt(1.0 - mag * mag).clamp_min(1e-4)
 
     def forward(self, x: torch.Tensor, h0=None):
-        u = self.B(self.ln(x)) * self.gamma()
+        z = self.ln(x)
+        u = self.B(z) * self.gamma()
+        if self.gated:
+            u = u * torch.sigmoid(self.Wi(z))
         y, h = self.scan(u, h0)
+        if self.gated:
+            y = y * torch.sigmoid(self.Wo(z))
         return x + torch.sigmoid(self.gate) * self.C(y), h
