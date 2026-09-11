@@ -90,8 +90,14 @@ class SpinCarrier(nn.Module):
         model may learn, which vision goal 8 forbids. The FFT path below needs no cap."""
         raise RuntimeError("scan_chunked is retired; it overflows once nu grows. use scan()")
 
+    @torch.compiler.disable
     def scan(self, u: torch.Tensor, h0=None):
-        """Causal convolution with kernel lambda^t, by FFT.
+        """Causal convolution with kernel lambda^t, by FFT. Excluded from torch.compile.
+
+        Measured: under torch.compile the forward of this function is correct and the BACKWARD produces
+        non-finite gradients, in float32 and under autocast alike, while eager is correct in both. Inductor's
+        autograd through complex FFT is the culprit, not the maths. The rest of the model still compiles; this
+        one function runs eager, and it is fast enough that way (214 ktok/s for the whole model uncompiled).
 
         Because lambda is constant in time, h_t = sum_{s<=t} lambda^(t-s) u_s is exactly a causal convolution
         with the kernel k[t] = lambda^t. Every entry of that kernel has magnitude |lambda|^t <= 1, so nothing
