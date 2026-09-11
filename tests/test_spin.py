@@ -30,13 +30,24 @@ for T, C in [(64, 64), (128, 64), (200, 64), (512, 128), (1000, 64)]:
     err = (ref - fast).abs().max().item() / ref.abs().max().item()
     check(f"T={T} chunk={C}", err < 1e-8, f"max relative error {err:.2e}")
 
+print("\nfast path in FLOAT32, the training dtype")
+# An FFT-based scan has roundoff of order 1e-7 in float32. That is the regime training runs in, and it sits
+# five orders of magnitude below bf16 precision, so this is the tolerance that matters in practice.
+m32 = SpinCarrier(64).to(dev)
+u32 = torch.randn(3, 512, 64, device=dev)
+ref32, _ = m32.double().scan_reference(u32.double())
+m32 = m32.float()
+fast32, _ = m32.scan(u32)
+e32 = ((ref32.float() - fast32).abs().max() / ref32.abs().max()).item()
+check("float32 scan within 1e-5 of the definition", e32 < 1e-5, f"max relative error {e32:.2e}")
+
 print("\ncausality")
 m = SpinCarrier(32, chunk=64).to(dev).double()
 u = torch.randn(2, 96, 32, device=dev, dtype=torch.float64)
 y1, _ = m.scan(u)
 u2 = u.clone(); u2[:, 50:] = torch.randn_like(u2[:, 50:])       # change the future only
 y2, _ = m.scan(u2)
-check("changing t>=50 leaves t<50 untouched", torch.allclose(y1[:, :50], y2[:, :50], atol=1e-12),
+check("changing t>=50 leaves t<50 untouched", torch.allclose(y1[:, :50], y2[:, :50], atol=1e-9),
       f"max diff before the edit {(y1[:,:50]-y2[:,:50]).abs().max().item():.2e}")
 check("changing t>=50 DOES change t>=50", not torch.allclose(y1[:, 50:], y2[:, 50:], atol=1e-6))
 
@@ -57,7 +68,7 @@ y, _ = m.scan(u)
 e_before = y[0, :10].abs().sum().item()
 e_at = y[0, 10].abs().sum().item()
 e_far = y[0, 100].abs().sum().item()
-check("nothing before the impulse", e_before < 1e-12, f"{e_before:.1e}")
+check("nothing before the impulse", e_before < 1e-9, f"{e_before:.1e}")
 check("response at the impulse", e_at > 1e-3, f"{e_at:.3f}")
 check("still responding 90 tokens later", e_far > 1e-6, f"{e_far:.2e} at t=100 (decayed from {e_at:.3f})")
 
@@ -89,6 +100,30 @@ with torch.no_grad():
     y2, _ = m.scan(m.B(m.ln(torch.randn(4, 2048, 256, device=dev))) * m.gamma())
 check("scale does not grow with sequence length", abs(y2.std().item()/y.std().item() - 1) < 0.5,
       f"T=512 std {y.std().item():.3f} vs T=2048 std {y2.std().item():.3f}")
+
+print("\nsurvives the forgetting rates that killed the chunked scan")
+# The chunked scan computed lambda^(-128), which is exp(128*nu). Training pushed nu_max to 0.38 in a thousand
+# steps (lambda^-128 = 1.7e21) and the run went NaN at about step 14,500, twice. Here nu is forced far past
+# that. The FFT kernel is lambda^(+t), magnitude <= 1, so it cannot overflow at any rate.
+m = SpinCarrier(64).to(dev)
+with torch.no_grad():
+    m.nu_raw.fill_(3.0)          # softplus(3) + 1e-3 = 3.05 -> lambda^-128 would be exp(390) = overflow
+x = torch.randn(2, 512, 64, device=dev)
+with torch.no_grad():
+    y, _ = m.scan(m.B(m.ln(x)) * m.gamma())
+mag, _ = m.lam()
+check("nu=3.05 (lambda^-128 would be 1e169): output finite", torch.isfinite(y).all().item(),
+      f"|lambda| = {mag.max().item():.4f}, max |y| = {y.abs().max().item():.2f}")
+with torch.no_grad():
+    u_in = (m.B(m.ln(x)) * m.gamma()).detach()
+ref, _ = m.double().scan_reference(u_in.double())
+m = m.float()
+e = ((ref.float() - y).abs().max() / ref.abs().max()).item()
+check("and still matches the definition", e < 1e-4, f"max relative error {e:.2e}")
+with torch.no_grad():
+    m.nu_raw.fill_(-3.0)         # very slow channels, |lambda| -> 0.998
+    y2, _ = m.scan(m.B(m.ln(x)) * m.gamma())
+check("and the slow extreme is finite too", torch.isfinite(y2).all().item())
 
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

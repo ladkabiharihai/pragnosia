@@ -78,53 +78,52 @@ class SpinCarrier(nn.Module):
             out.append(hr)
         return torch.stack(out, 1), (hr, hi)
 
-    # ------------------------------------------------------------------ fast: chunked, same recurrence
+    # ------------------------------------------------------------------ fast: FFT, no inverse powers
+    def scan_chunked(self, u: torch.Tensor, h0=None):
+        """RETIRED. Kept only so the reason survives.
+
+        This computed within-chunk prefix sums of lambda^(-s) u_s and then multiplied by lambda^t. The inverse
+        power lambda^(-s) is exp(nu*s), and nu is LEARNED with no upper bound: the optimizer pushed nu_max from
+        0.345 to 0.382 in a thousand steps, taking lambda^-128 from 1.5e19 to 1.7e21. Under bf16 autocast an
+        8-bit mantissa cannot hold a cumsum whose terms span twenty orders of magnitude, and the run went NaN
+        twice at around step 14,500. Capping nu would fix it and would also be a hand-set bound on what the
+        model may learn, which vision goal 8 forbids. The FFT path below needs no cap."""
+        raise RuntimeError("scan_chunked is retired; it overflows once nu grows. use scan()")
+
     def scan(self, u: torch.Tensor, h0=None):
-        """Chunked parallel scan. Within a chunk the largest power of lambda is `chunk`, so exp(nu*chunk)
-        stays finite; across chunks the state is threaded sequentially, which is O(T/chunk) steps."""
+        """Causal convolution with kernel lambda^t, by FFT.
+
+        Because lambda is constant in time, h_t = sum_{s<=t} lambda^(t-s) u_s is exactly a causal convolution
+        with the kernel k[t] = lambda^t. Every entry of that kernel has magnitude |lambda|^t <= 1, so nothing
+        here can overflow at ANY forgetting rate: a fast channel's kernel simply underflows to zero past its
+        horizon, which is the correct answer. No inverses, no chunk loop, O(T log T), and the model is free to
+        learn whatever nu it likes.
+
+        The scan runs in float32 regardless of autocast. torch.fft requires it, and a scan that spans many
+        orders of magnitude is exactly where bf16 rounding does damage. It is a small fraction of the layer's
+        cost."""
         mag, ang = self.lam()
         B_, T, D = u.shape
-        C = self.chunk
-        pad = (C - T % C) % C
-        if pad:
-            u = torch.nn.functional.pad(u, (0, 0, 0, pad))
-        N = u.shape[1] // C
-        uc = u.view(B_, N, C, D)
-
-        k = torch.arange(C, device=u.device).view(1, 1, C, 1)
-        logmag = torch.log(mag).view(1, 1, 1, D)
-        # decay^(t) and its inverse, both bounded because t < chunk
-        dec = torch.exp(logmag * k)                                 # |lambda|^k
-        ph = ang.view(1, 1, 1, D) * k                               # k*theta
-        wr, wi = dec * torch.cos(ph), dec * torch.sin(ph)           # lambda^k
-        inv = torch.exp(-logmag * k)
-        ir, ii = inv * torch.cos(-ph), inv * torch.sin(-ph)         # lambda^-k
-
-        # within-chunk prefix sums of lambda^-s u_s, then multiplied by lambda^t
-        ar = torch.cumsum(uc * ir, dim=2)
-        ai = torch.cumsum(uc * ii, dim=2)
-        yr = ar * wr - ai * wi
-        yi = ar * wi + ai * wr
-
-        # thread chunk-final states forward
-        hr = torch.zeros(B_, D, device=u.device, dtype=u.dtype) if h0 is None else h0[0]
-        hi = torch.zeros(B_, D, device=u.device, dtype=u.dtype) if h0 is None else h0[1]
-        outs = []
-        cr, ci = wr[:, :, :, :], wi[:, :, :, :]
-        for n in range(N):
-            # carried state decays by lambda^(k+1) across the chunk
-            gr = cr[0, 0] * hr.unsqueeze(1) - ci[0, 0] * hi.unsqueeze(1)
-            gi = cr[0, 0] * hi.unsqueeze(1) + ci[0, 0] * hr.unsqueeze(1)
-            # lambda^(k+1) not lambda^k, since the carried state is one step older
-            mr = mag * torch.cos(ang); mi = mag * torch.sin(ang)
-            br = gr * mr - gi * mi
-            bi = gr * mi + gi * mr
-            r = yr[:, n] + br
-            i_ = yi[:, n] + bi
-            outs.append(r)
-            hr, hi = r[:, -1], i_[:, -1]
-        y = torch.cat(outs, 1)
-        return (y[:, :T] if pad else y), (hr, hi)
+        # Precision follows the input: float64 in gets a complex128 transform, so the reference tests can hold
+        # the scan to 1e-14; everything else runs in float32/complex64, which is where training lives and
+        # where the 1e-7 FFT roundoff sits five orders of magnitude below bf16 noise.
+        rt = torch.float64 if u.dtype == torch.float64 else torch.float32
+        ct = torch.complex128 if rt == torch.float64 else torch.complex64
+        uf = u.to(rt); mag = mag.to(rt); ang = ang.to(rt)
+        t = torch.arange(T, device=u.device, dtype=rt).unsqueeze(1)                  # (T,1)
+        logk = t * torch.log(mag).unsqueeze(0)                                       # (T,D), all <= 0
+        k = torch.polar(torch.exp(logk), t * ang.unsqueeze(0))                        # lambda^t
+        n = 2 * T
+        U = torch.fft.fft(uf.to(ct), n=n, dim=1)
+        K = torch.fft.fft(k, n=n, dim=0).unsqueeze(0)
+        h = torch.fft.ifft(U * K, n=n, dim=1)[:, :T]                                  # (B,T,D) complex
+        if h0 is not None:
+            # carried state decays as lambda^(t+1): a genuinely separate term, added exactly
+            hr0, hi0 = h0
+            kp = torch.polar(torch.exp(logk + torch.log(mag).unsqueeze(0)), (t + 1) * ang.unsqueeze(0))
+            h = h + torch.complex(hr0.to(rt), hi0.to(rt)).unsqueeze(1) * kp.unsqueeze(0)
+        hr, hi = h.real, h.imag
+        return hr.to(u.dtype), (hr[:, -1].to(u.dtype), hi[:, -1].to(u.dtype))
 
     def gamma(self):
         """Input normalisation, and it is not optional.
