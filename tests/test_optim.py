@@ -85,5 +85,65 @@ check("old slots preserved exactly", torch.allclose(vr[:64], vr_before))
 check("new slots are NOT zero", (vr[64:] > 0).all().item(), f"new slots = {vr[64:].mean():.3e}")
 check("new slots equal the median of the old", abs(vr[64:].mean().item() - vr_before.median().item()) < 1e-6)
 
+print("\nfused and CUDA-graph paths compute the same step as eager")
+# The fused path runs the SAME function through torch.compile; the graph path replays the fused step. A
+# small model with 2D (factored), 1D and 0-d parameters in two groups (trust on / off), like the LM's.
+import copy
+def make():
+    torch.manual_seed(1)
+    ps = {"W": torch.randn(96, 48, device=dev), "b": torch.randn(48, device=dev), "g": torch.randn((), device=dev),
+          "V": torch.randn(48, 96, device=dev)}
+    return {k: torch.nn.Parameter(v.clone()) for k, v in ps.items()}
+def groups(ps, lr):
+    return [dict(params=[ps["W"], ps["b"], ps["V"]], lr=lr, trust=True),
+            dict(params=[ps["g"]], lr=lr / 6, trust=False, factored=False)]
+def grads(ps, seed):
+    torch.manual_seed(seed)
+    for p in ps.values():
+        g = torch.randn_like(p)
+        if p.grad is None: p.grad = g
+        else: p.grad.copy_(g)
+def run(ps, opt, n, lrs):
+    for i in range(n):
+        for gp in opt.param_groups: gp["lr"] = lrs[i] * (gp["lr"] / lrs[0] if i else 1) if False else gp["lr"]
+        grads(ps, i); opt.step()
+def compare(a, b):
+    return max(((a[k].detach() - b[k].detach()).abs().max() / (b[k].detach().abs().max() + 1e-12)).item() for k in a)
+if dev == "cuda":
+    for mom in (False, True):
+        pe, pf, pg = make(), make(), make()
+        oe = Fabric(groups(pe, 3e-3), lr=3e-3, momentum=mom)
+        of = Fabric(groups(pf, 3e-3), lr=3e-3, momentum=mom, fused=True)
+        og = Fabric(groups(pg, 3e-3), lr=3e-3, momentum=mom, fused=True, cuda_graph=True)
+        for i in range(6):
+            for o in (oe, of, og):                       # a changing schedule, as in training
+                for gp in o.param_groups: gp["lr"] = gp["lr"] * 0.9
+            grads(pe, i); grads(pf, i); grads(pg, i)
+            oe.step(); of.step(); og.step()
+        torch.cuda.synchronize()
+        d_ef, d_fg = compare(pf, pe), compare(pg, pf)
+        tol = 5e-3 if mom else 1e-5      # bf16 momentum rounds once in the fused kernel, twice in eager
+        check(f"fused == eager after 6 steps of a decaying schedule (momentum={mom})", d_ef < tol, f"rel diff {d_ef:.1e}")
+        check(f"graph replay == fused, bit for bit (momentum={mom})", d_fg == 0.0, f"rel diff {d_fg:.1e}")
+    check("graph was captured once and never recaptured", og._graph is not None and og.recaptures == 0,
+          f"recaptures {og.recaptures}")
+    # a grad tensor moving (as set_to_none=True would do every step) is detected and the graph recaptured
+    pg["W"].grad = pg["W"].grad.clone(); grads(pg, 9); og.step(); torch.cuda.synchronize()
+    check("a moved grad address triggers recapture rather than a stale read", og.recaptures == 1)
+    pf["W"].grad = pf["W"].grad.clone(); grads(pf, 9); of.step(); torch.cuda.synchronize()
+    check("and the recaptured step is still exact", compare(pg, pf) == 0.0)
+    # loading state invalidates the graph
+    og.load_state_dict(copy.deepcopy(og.state_dict()))
+    check("load_state_dict drops the captured graph", og._graph is None)
+    check("bf16 momentum stays bf16 across a state reload (torch's default cast it to fp32)",
+          og.state[pg["W"]]["m"].dtype == torch.bfloat16, str(og.state[pg["W"]]["m"].dtype))
+    grads(pg, 10); og.step(); grads(pf, 10); of.step(); torch.cuda.synchronize()
+    check("and the step after a reload is exact", compare(pg, pf) == 0.0, f"rel diff {compare(pg, pf):.1e}")
+    try:
+        Fabric([torch.nn.Parameter(torch.zeros(2, device=dev))], fused=True, intrinsic_lr=True); bad = False
+    except ValueError:
+        bad = True
+    check("intrinsic_lr cannot be fused (it is python per step)", bad)
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

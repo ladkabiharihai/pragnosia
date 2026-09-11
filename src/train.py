@@ -49,6 +49,8 @@ def main():
     ap.add_argument("--save-every", type=int, default=5000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--compile", type=int, default=1)
+    ap.add_argument("--fused", type=int, default=1, help="one compiled kernel group per parameter update")
+    ap.add_argument("--graph", type=int, default=1, help="replay the optimizer step as a CUDA graph")
     ap.add_argument("--resume", default="")
     ap.add_argument("--mixer", default="spin", choices=["spin", "attn"])
     ap.add_argument("--spike", type=float, default=4.0)
@@ -71,7 +73,10 @@ def main():
         P = sum(p.numel() for p in m.parameters())
         car = sum(p.numel() for n, p in m.named_parameters() if "mix." in n)
         base = [a.lr, 1e-3]
-        opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr)
+        # The eager optimizer was CPU-bound: 19.5 ms issuing ~4,500 kernels per step. Fused and graphed it is
+        # a few hundred kernels replayed without python; grads must then be zeroed in place, not set to None.
+        opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), cuda_graph=bool(a.graph and a.fused))
+        set_none = not opt.cuda_graph
         rng = np.random.default_rng(a.seed)
         tok_total = a.steps * a.batch * a.ctx
         r.log(f"{P/1e6:.1f}M params, carrier {100*car/P:.1f}%, "
@@ -109,7 +114,7 @@ def main():
             for gi, g in enumerate(opt.param_groups):
                 g["lr"] = base[gi] * sched * w
             x = batch(bins, ks, ps, rng, a.batch, a.ctx)
-            opt.zero_grad(set_to_none=True)
+            opt.zero_grad(set_to_none=set_none)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 loss = F.cross_entropy(fwd(x[:, :a.ctx]).reshape(-1, 8192), x[:, 1:a.ctx + 1].reshape(-1))
             loss.backward()
@@ -121,7 +126,7 @@ def main():
             # changes. This guard existed in the previous project's trainer and I failed to carry it here.
             skip = len(gnorms) >= 200 and (not math.isfinite(gn) or gn > a.spike * float(np.median(gnorms)))
             if skip:
-                opt.zero_grad(set_to_none=True); skipped += 1
+                opt.zero_grad(set_to_none=set_none); skipped += 1
                 if skipped <= 10 or skipped % 200 == 0:
                     r.log(f"    spike at step {i+1}: |g|={gn:.2f} vs median {float(np.median(gnorms)):.2f}"
                           f" -- SKIPPED (total {skipped})")
@@ -142,7 +147,8 @@ def main():
                 done = i + 1 - start
                 r.log(f"{i+1}/{a.steps} loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f} "
                       f"lr {opt.param_groups[0]['lr']:.2e} {done*a.batch*a.ctx/el/1e3:.0f} ktok/s "
-                      f"eta {(a.steps-i-1)*el/max(1,done)/60:.0f}m")
+                      f"eta {(a.steps-i-1)*el/max(1,done)/60:.0f}m"
+                      + (f" recaptures {opt.recaptures}" if opt.recaptures else ""))
             if (i + 1) % a.eval_every == 0:
                 # BITS PER BYTE, not loss per token. Per-token loss depends on the vocabulary and is
                 # comparable to nothing; bits per byte removes the tokenizer and is the only number that can

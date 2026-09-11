@@ -27,6 +27,50 @@ import math
 from torch.optim import Optimizer
 
 
+def _update(p, g, vr, vc, v, m, lr, b1: float, b2: float, eps: float, wd: float,
+            min_norm: float, clip: float, trust: bool):
+    """One parameter's update, in place on p (pass p.detach()). THE math; eager and fused paths both run it.
+
+    vr/vc are the factored second moment (2D), else v is the dense one. m is the momentum or None. lr is a
+    0-d tensor so the same compiled kernel serves every step of a schedule."""
+    gf = g.float()
+    if vr is not None:
+        sq = gf.square().add(eps)
+        vr.mul_(b2).add_(sq.mean(dim=1), alpha=1 - b2)
+        vc.mul_(b2).add_(sq.mean(dim=0), alpha=1 - b2)
+        # reconstruct: outer product renormalised by the row mean, which is the Adafactor estimator
+        r = vr / vr.mean().clamp_min(eps)
+        vv = (r.unsqueeze(1) * vc.unsqueeze(0)).clamp_min(eps)
+    else:
+        v.mul_(b2).addcmul_(gf, gf, value=1 - b2)
+        vv = v.clamp_min(eps)
+    u = gf / vv.sqrt()
+    if m is not None:
+        m.mul_(b1).add_(u.bfloat16(), alpha=1 - b1)
+        u = m.float()
+    if wd:
+        u = u.add(p.float(), alpha=wd)
+    if trust:
+        # Move a fixed fraction of the parameter's OWN norm, so |dp| = lr * |w| exactly and the step is
+        # invariant to how the weights happen to be scaled.
+        #
+        # trust_clip defaults high enough not to bind. A tight clip (10.0 was tried) destroys the very
+        # invariance this exists for: measured, a parameter at norm 100 took a relative step of 0.0010 where
+        # one at norm 1 took 0.0100, because the ratio hit the clip. The runaway case a clip is meant to
+        # catch, |u| near zero, is already handled by clamp_min(eps): the resulting step has norm lr*|w| no
+        # matter how small |u| is.
+        #
+        # min_norm lets zero-initialised capacity move at all. Without it a freshly grown tensor has |w| = 0,
+        # so the step is 0, and new capacity would be frozen forever.
+        wn = p.float().norm().clamp_min(min_norm)
+        un = u.norm().clamp_min(eps)
+        u = u * (wn / un).clamp(max=clip)
+    p.sub_(u.to(p.dtype) * lr)
+
+
+_fused = None      # torch.compile(_update), built on first use
+
+
 class Fabric(Optimizer):
     """Factored second moment + trust-ratio step.
 
@@ -37,59 +81,169 @@ class Fabric(Optimizer):
         trust: scale-free stepping. Off, this is close to Adafactor with momentum.
         factored: factor the second moment for 2D parameters. Off, this stores v densely like Adam.
         momentum: keep a first moment. Off, this halves state again at some cost in stability.
+        fused: run each parameter's update as one torch.compile'd kernel group instead of ~28 eager kernels.
+            Same math, one rounding fewer on the bf16 momentum (measured 3e-3 relative on the step).
+        cuda_graph: with fused, capture the whole step once and replay it. The eager step is CPU-bound:
+            measured 19.5 ms of CPU issuing 4,500 kernels for 160 tensors, against a 35 ms model step, so
+            the optimizer was ~40% of every training step. Replay needs grads and state at fixed addresses;
+            the trainer must zero grads in place (set_to_none=False). Addresses are checked before every
+            replay and the graph is recaptured if any moved, so a silent stale read cannot happen.
     """
 
     def __init__(self, params, lr=2e-3, betas=(0.9, 0.99), eps=1e-30, weight_decay=0.0,
                  trust=True, factored=True, momentum=True, trust_clip=1e4, min_norm=1e-3,
-                 intrinsic_lr=False, adapt=0.02, lr_bounds=(1e-4, 3e-2)):
+                 intrinsic_lr=False, adapt=0.02, lr_bounds=(1e-4, 3e-2), fused=False, cuda_graph=False):
         # intrinsic_lr defaults OFF. Three designs were tried on 2026-09-10 and all three produced NaN. They
         # are kept in the code because the failure modes are the useful part; see the comment in step().
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay,
                                       trust=trust, factored=factored, momentum=momentum,
                                       trust_clip=trust_clip, min_norm=min_norm,
                                       intrinsic_lr=intrinsic_lr, adapt=adapt, lr_bounds=lr_bounds))
+        if cuda_graph and not fused:
+            raise ValueError("cuda_graph needs fused=True")
+        if fused and intrinsic_lr:
+            raise ValueError("the intrinsic-rate path is python per step and cannot be fused")
+        self.fused, self.cuda_graph = fused, cuda_graph
+        self._graph = None; self._ptrs = None; self._warm = False; self.recaptures = 0
+        for gp in self.param_groups:
+            gp["lr_t"] = None
 
-    # ---------------------------------------------------------------------------------- second moment
-    @staticmethod
-    def _factored(p, g, st, b2, eps):
-        """v ~ outer(row, col). Store O(R+C) instead of O(R*C)."""
-        sq = g.float().square().add_(eps)
-        st["vr"].mul_(b2).add_(sq.mean(dim=1), alpha=1 - b2)
-        st["vc"].mul_(b2).add_(sq.mean(dim=0), alpha=1 - b2)
-        # reconstruct: outer product renormalised by the row mean, which is the Adafactor estimator
-        r = st["vr"] / st["vr"].mean().clamp_min(eps)
-        return (r.unsqueeze(1) * st["vc"].unsqueeze(0)).clamp_min(eps)
+    def state_dict(self):
+        sd = super().state_dict()
+        for g in sd["param_groups"]:
+            g.pop("lr_t", None)                  # a device scalar rebuilt on the next step; not state
+        return sd
 
-    @staticmethod
-    def _dense(p, g, st, b2, eps):
-        st["v"].mul_(b2).addcmul_(g.float(), g.float(), value=1 - b2)
-        return st["v"].clamp_min(eps)
+    def load_state_dict(self, sd):
+        super().load_state_dict(sd)
+        self._graph = None; self._warm = False   # state tensors were replaced; a captured graph is stale
+        for gp in self.param_groups:
+            gp["lr_t"] = None
+            for p in gp["params"]:
+                st = self.state.get(p)
+                # torch casts every floating state tensor to the PARAMETER's dtype on load, which silently
+                # turned the bf16 momentum into fp32 on every --resume: 2x the state memory and a different
+                # rounding from the run being resumed. bf16 -> fp32 -> bf16 is exact, so restoring it is free.
+                if st and "m" in st and st["m"].dtype != torch.bfloat16:
+                    st["m"] = st["m"].to(torch.bfloat16)
+
+    # ---------------------------------------------------------------------------------- the step
+    def _init_state(self, p, gp):
+        st = self.state[p]
+        st["step"] = 0
+        if gp["factored"] and p.dim() == 2:
+            st["vr"] = torch.zeros(p.shape[0], device=p.device, dtype=torch.float32)
+            st["vc"] = torch.zeros(p.shape[1], device=p.device, dtype=torch.float32)
+        else:
+            st["v"] = torch.zeros_like(p, dtype=torch.float32)
+        if gp["momentum"]:
+            st["m"] = torch.zeros_like(p, dtype=torch.bfloat16)
+        st["lr"] = gp["lr"]
+        return st
+
+    def _lr_t(self, gp, device):
+        if gp["lr_t"] is None or gp["lr_t"].device != device:
+            gp["lr_t"] = torch.zeros((), device=device)
+        gp["lr_t"].fill_(gp["lr"])
+        return gp["lr_t"]
+
+    def _apply(self, p, gp, st, lr_t):
+        global _fused
+        fn = _update
+        if self.fused:
+            if _fused is None:
+                import torch._dynamo
+                torch._dynamo.config.cache_size_limit = max(torch._dynamo.config.cache_size_limit, 64)
+                _fused = torch.compile(_update, dynamic=True, fullgraph=True)
+            fn = _fused
+        fn(p.detach(), p.grad, st.get("vr"), st.get("vc"), st.get("v"), st.get("m"), lr_t,
+           gp["betas"][0], gp["betas"][1], gp["eps"], gp["weight_decay"], gp["min_norm"],
+           gp["trust_clip"], gp["trust"])
+
+    def _run(self, fill_lr=True):
+        """One step over all groups, through _update (eager or fused).
+
+        fill_lr=False while capturing: a fill_(float) recorded inside the graph would bake the capture-time
+        rate into every replay. The graph reads lr_t; the caller fills it before each replay."""
+        for gp in self.param_groups:
+            for p in gp["params"]:
+                if p.grad is None:
+                    continue
+                st = self.state[p] or self._init_state(p, gp)
+                st["step"] += 1
+                if fill_lr:
+                    self._lr_t(gp, p.device)
+                self._apply(p, gp, st, gp["lr_t"])
+
+    def _addresses(self):
+        out = []
+        for gp in self.param_groups:
+            for p in gp["params"]:
+                if p.grad is None:
+                    out.append(None); continue
+                st = self.state[p]
+                out.append((p.data_ptr(), p.grad.data_ptr()) + tuple(st[k].data_ptr() for k in ("vr", "vc", "v", "m") if k in st))
+        return out
 
     @torch.no_grad()
     def step(self, closure=None):
         loss = closure() if closure is not None else None
+        if any(gp["intrinsic_lr"] for gp in self.param_groups):
+            self._step_intrinsic(); return loss
+        if not self.cuda_graph:
+            self._run(); return loss
+        # CUDA-graph path. First call: run for real on a side stream (compiles and warms the allocator).
+        # Second: capture, then replay to perform the step. After: replay, unless an address moved.
+        if not self._warm:
+            s = torch.cuda.Stream(); s.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(s):
+                self._run()
+            torch.cuda.current_stream().wait_stream(s)
+            self._warm = True
+            return loss
+        if self._graph is None or self._ptrs != self._addresses():
+            if self._graph is not None:
+                self.recaptures += 1
+            for gp in self.param_groups:                       # lr tensors filled OUTSIDE the capture
+                for p in gp["params"]:
+                    if p.grad is not None:
+                        self._lr_t(gp, p.device); break
+            self._graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(self._graph):
+                self._run(fill_lr=False)
+            self._ptrs = self._addresses()
+            # capture executes nothing; the step counters advanced inside _run, which is what one step needs
+        else:
+            for gp in self.param_groups:
+                if gp["lr_t"] is not None:
+                    gp["lr_t"].fill_(gp["lr"])
+                for p in gp["params"]:
+                    if p.grad is not None:
+                        self.state[p]["step"] += 1
+        self._graph.replay()
+        return loss
+
+    @torch.no_grad()
+    def _step_intrinsic(self):
+        """The eager loop with the intrinsic-rate experiment. Kept verbatim because its failures are documented
+        in place and are the useful part; it is not fused and not graphed."""
         for gp in self.param_groups:
             b1, b2 = gp["betas"]; eps = gp["eps"]
             for p in gp["params"]:
                 if p.grad is None:
                     continue
                 g = p.grad
-                st = self.state[p]
-                if not st:
-                    st["step"] = 0
-                    fac = gp["factored"] and p.dim() == 2
-                    if fac:
-                        st["vr"] = torch.zeros(p.shape[0], device=p.device, dtype=torch.float32)
-                        st["vc"] = torch.zeros(p.shape[1], device=p.device, dtype=torch.float32)
-                    else:
-                        st["v"] = torch.zeros_like(p, dtype=torch.float32)
-                    if gp["momentum"]:
-                        st["m"] = torch.zeros_like(p, dtype=torch.bfloat16)
-                    st["lr"] = gp["lr"]
+                st = self.state[p] or self._init_state(p, gp)
                 st["step"] += 1
-
-                fac = "vr" in st
-                v = self._factored(p, g, st, b2, eps) if fac else self._dense(p, g, st, b2, eps)
+                if "vr" in st:
+                    sq = g.float().square().add_(eps)
+                    st["vr"].mul_(b2).add_(sq.mean(dim=1), alpha=1 - b2)
+                    st["vc"].mul_(b2).add_(sq.mean(dim=0), alpha=1 - b2)
+                    r = st["vr"] / st["vr"].mean().clamp_min(eps)
+                    v = (r.unsqueeze(1) * st["vc"].unsqueeze(0)).clamp_min(eps)
+                else:
+                    st["v"].mul_(b2).addcmul_(g.float(), g.float(), value=1 - b2)
+                    v = st["v"].clamp_min(eps)
                 u = g.float() / v.sqrt()
 
                 if gp["momentum"]:
@@ -144,17 +298,6 @@ class Fabric(Optimizer):
                     step_lr = gp["lr"]
 
                 if gp["trust"]:
-                    # Move a fixed fraction of the parameter's OWN norm, so |dp| = lr * |w| exactly and the
-                    # step is invariant to how the weights happen to be scaled.
-                    #
-                    # trust_clip defaults high enough not to bind. A tight clip (10.0 was tried) destroys the
-                    # very invariance this exists for: measured, a parameter at norm 100 took a relative step
-                    # of 0.0010 where one at norm 1 took 0.0100, because the ratio hit the clip. The runaway
-                    # case a clip is meant to catch, |u| near zero, is already handled by clamp_min(eps): the
-                    # resulting step has norm lr*|w| no matter how small |u| is.
-                    #
-                    # min_norm lets zero-initialised capacity move at all. Without it a freshly grown tensor
-                    # has |w| = 0, so the step is 0, and new capacity would be frozen forever.
                     wn = p.float().norm().clamp_min(gp["min_norm"])
                     un = u.norm().clamp_min(eps)
                     u = u * (wn / un).clamp(max=gp["trust_clip"])
@@ -163,11 +306,11 @@ class Fabric(Optimizer):
                 if gp["intrinsic_lr"]:
                     # record the relative step actually taken; it is the numerator of the next ratio
                     st["last_rel"] = step_lr
-        return loss
 
     # ---------------------------------------------------------------------------------- growth support
     @torch.no_grad()
     def grew(self, p: torch.Tensor, old_shape: tuple[int, ...], fill: str = "median") -> None:
+        self._graph = None; self._warm = False   # state tensors change shape and address
         """Tell the optimizer a parameter was enlarged in place, so new slots inherit statistics.
 
         Zeroing them is the default elsewhere and it is wrong: the second moment appears in a denominator, so
