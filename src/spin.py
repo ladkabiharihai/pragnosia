@@ -24,6 +24,38 @@ import torch
 import torch.nn as nn
 
 
+class _CausalConv(torch.autograd.Function):
+    """y[b,t,d] = sum_{s<=t} k[t-s,d] u[b,s,d], by FFT with zero padding to 2T (linear, not circular).
+
+    Backward, derived once and checked against autograd in fp64 (tests/test_spin.py):
+      dL/du[b,s,d] = sum_{t>=s} k[t-s,d] g[b,t,d]      = correlation of g with k at lag s   -> irfft(G conj(K))
+      dL/dk[tau,d] = sum_b sum_s g[b,s+tau,d] u[b,s,d] = correlation of g with u at lag tau -> irfft(G conj(U))
+    With zero padding to 2T the non-negative lags occupy indices 0..T-1 and nothing wraps. Only u and k are
+    saved; the spectra are recomputed in backward, which costs one extra rfft of u and keeps memory flat in T."""
+
+    @staticmethod
+    def forward(ctx, u, k):
+        B_, T, D = u.shape
+        n = 2 * T
+        U = torch.fft.rfft(u, n=n, dim=1)
+        K = torch.fft.rfft(k, n=n, dim=0).unsqueeze(0)
+        y = torch.fft.irfft(U * K, n=n, dim=1)[:, :T]
+        ctx.save_for_backward(u, k)
+        return y
+
+    @staticmethod
+    def backward(ctx, g):
+        u, k = ctx.saved_tensors
+        B_, T, D = u.shape
+        n = 2 * T
+        G = torch.fft.rfft(g, n=n, dim=1)
+        K = torch.fft.rfft(k, n=n, dim=0).unsqueeze(0)
+        U = torch.fft.rfft(u, n=n, dim=1)
+        gu = torch.fft.irfft(G * K.conj(), n=n, dim=1)[:, :T]
+        gk = torch.fft.irfft((G * U.conj()).sum(0), n=n, dim=0)[:T]
+        return gu, gk
+
+
 class SpinCarrier(nn.Module):
     def __init__(self, d: int, chunk: int = 128, nu_min: float = 1e-3, nu_max: float = 0.3):
         # chunk=128 measured: 53.3 ms/step compiled against 61.5 at chunk=64 and 204 eager, because the
@@ -90,21 +122,20 @@ class SpinCarrier(nn.Module):
         model may learn, which vision goal 8 forbids. The FFT path below needs no cap."""
         raise RuntimeError("scan_chunked is retired; it overflows once nu grows. use scan()")
 
-    @torch.compiler.disable
     def scan(self, u: torch.Tensor, h0=None):
-        """Causal convolution with kernel lambda^t, by REAL FFT. Excluded from torch.compile.
+        """Causal convolution with kernel lambda^t, by REAL FFT, through a hand-written backward.
 
         Only the real part of the complex state is emitted within a window; the imaginary part exists solely
         to carry the recurrence across windows. So the per-window output is Re(h_t) = sum Re(lambda^(t-s)) u_s,
-        a REAL convolution, which rfft/irfft evaluates at half the transforms and half the intermediate memory
-        of the complex version this replaced. Measured before: spin 1.83x slower than FlashAttention at T=512
-        with memory growing in T because complex64 intermediates were saved for backward.
+        a REAL convolution, which rfft/irfft evaluates at half the transforms of the complex version.
 
         Every kernel entry has magnitude |lambda|^t <= 1, so nothing here can overflow at any forgetting rate.
         The final imaginary state is recovered separately as one weighted sum, only when a caller carries it.
 
-        Excluded from torch.compile: inductor's backward through FFT produced non-finite gradients while eager
-        was correct, in fp32 and under autocast alike."""
+        The convolution itself is _CausalConv, a custom autograd Function: autograd's own backward through FFT
+        saved every complex intermediate (memory grew with T, 4.83 -> 6.69 GiB from T=512 to 8192) and inductor
+        miscompiled it to non-finite gradients, which forced the whole scan out of torch.compile. The Function
+        saves only u and the kernel, and its backward is two more correlations by the same FFT."""
         mag, ang = self.lam()
         B_, T, D = u.shape
         rt = torch.float64 if u.dtype == torch.float64 else torch.float32
@@ -113,11 +144,7 @@ class SpinCarrier(nn.Module):
         logk = t * torch.log(mag).unsqueeze(0)                                       # (T,D), all <= 0
         decay = torch.exp(logk)
         kr = decay * torch.cos(t * ang.unsqueeze(0))                                 # Re(lambda^t)
-        n = 2 * T
-        U = torch.fft.rfft(uf, n=n, dim=1)
-        Kr = torch.fft.rfft(kr, n=n, dim=0).unsqueeze(0)
-        hr = torch.fft.irfft(U * Kr, n=n, dim=1)[:, :T]
-        need_state = True
+        hr = _CausalConv.apply(uf, kr)
         if h0 is not None:
             hr0, hi0 = h0[0].to(rt), h0[1].to(rt)
             d1 = torch.exp(logk + torch.log(mag).unsqueeze(0))                      # |lambda|^(t+1)

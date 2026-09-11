@@ -143,5 +143,43 @@ with torch.no_grad():
     y2, _ = m.scan(m.B(m.ln(x)) * m.gamma())
 check("and the slow extreme is finite too", torch.isfinite(y2).all().item())
 
+print("\nhand-written backward of the causal convolution")
+# The Function's backward is two correlations derived by hand. Autograd through the same forward (with the
+# Function bypassed) is the reference; in fp64 they must agree to round-off, on u AND on the kernel.
+from src.spin import _CausalConv
+torch.manual_seed(3)
+u64 = torch.randn(2, 37, 5, device=dev, dtype=torch.float64, requires_grad=True)
+k64 = torch.randn(37, 5, device=dev, dtype=torch.float64, requires_grad=True)
+w = torch.randn(2, 37, 5, device=dev, dtype=torch.float64)
+(_CausalConv.apply(u64, k64) * w).sum().backward()
+gu_f, gk_f = u64.grad.clone(), k64.grad.clone(); u64.grad = None; k64.grad = None
+# reference: the same convolution by autograd through plain FFT ops
+n = 74
+yr = torch.fft.irfft(torch.fft.rfft(u64, n=n, dim=1) * torch.fft.rfft(k64, n=n, dim=0).unsqueeze(0), n=n, dim=1)[:, :37]
+(yr * w).sum().backward()
+check("dL/du matches autograd (fp64)", torch.allclose(gu_f, u64.grad, atol=1e-12, rtol=1e-10),
+      f"max diff {(gu_f-u64.grad).abs().max().item():.1e}")
+check("dL/dk matches autograd (fp64)", torch.allclose(gk_f, k64.grad, atol=1e-12, rtol=1e-10),
+      f"max diff {(gk_f-k64.grad).abs().max().item():.1e}")
+check("torch.autograd.gradcheck passes", torch.autograd.gradcheck(_CausalConv.apply, (u64, k64), eps=1e-6, atol=1e-6))
+# odd T, T=1, and B=1 edge shapes
+for (B_, T) in [(1, 1), (3, 2), (1, 129)]:
+    a = torch.randn(B_, T, 4, device=dev, dtype=torch.float64, requires_grad=True)
+    b = torch.randn(T, 4, device=dev, dtype=torch.float64, requires_grad=True)
+    check(f"gradcheck at B={B_} T={T}", torch.autograd.gradcheck(_CausalConv.apply, (a, b), eps=1e-6, atol=1e-6))
+# and end to end: the whole carrier's gradient on its spectral parameters through the Function equals the
+# gradient through the sequential definition
+m = SpinCarrier(16).double().to(dev)
+x = torch.randn(2, 64, 16, device=dev, dtype=torch.float64)
+m.zero_grad(); (m(x)[0] ** 2).sum().backward()
+g1 = [p.grad.clone() for p in m.parameters()]
+m.zero_grad()
+u_ = m.B(m.ln(x)) * m.gamma(); y_, _ = m.scan_reference(u_)
+((x + torch.sigmoid(m.gate) * m.C(y_)) ** 2).sum().backward()
+g2 = [p.grad.clone() for p in m.parameters()]
+worst = max((a - b).abs().max().item() / (b.abs().max().item() + 1e-30) for a, b in zip(g1, g2))
+check("carrier gradients (nu, theta, B, C, gate) match the sequential definition", worst < 1e-8,
+      f"worst relative diff {worst:.1e}")
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)
