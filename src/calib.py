@@ -199,32 +199,44 @@ def confidence_real_vs_fake(model, tok, facts, device="cuda", vocab=8192):
 # --------------------------------------------------------------- goal 9: does retrieval survive past training
 @torch.no_grad()
 def needle(model, tok, distances=(0, 64, 256, 512, 1024, 2048), trials=12, device="cuda", filler=None):
-    """Paired in-context retrieval lift at increasing distance.
+    """Paired in-context retrieval lift at increasing distance, through the CARRIED state past the window.
 
     The same query is scored with the fact present and with a DIFFERENT fact present, so token frequency
     priors cancel exactly and what remains is the lift attributable to the fact being in context.
 
-    WHY THIS MATTERS HERE. Both previous architectures in this project lost retrieval at roughly their
-    TRAINING WINDOW: spin trained at 256 and died past 256, the linear-recurrent core trained at 2048 and died
-    near 2000. This model trains at 512, and its carrier holds per-channel timescales whose slowest half-life
-    is about 693 tokens, so whether retrieval reaches past 512 is a real question rather than a formality."""
+    A FIRST VERSION OF THIS TEST WAS WRONG in a way that produced clean-looking zeros: it truncated the input
+    to the last ctx tokens, so at any distance past about ctx-20 the fact itself was cut out of the input, and
+    the reported lift of exactly 0.000 meant "fact absent", not "fact forgotten". Distances beyond the window
+    are now evaluated by carrying the carrier state across windows, which is the path the architecture exists
+    for, and a distance that would still not fit is an error rather than a silent zero.
+
+    WHY THIS MATTERS. Both previous architectures in this project lost retrieval at roughly their training
+    window. This model trains at 512 and its carrier's slowest half-life is about 693 tokens, so whether
+    retrieval crosses 512 is a real question."""
     import numpy as np
     model.eval()
     out = []
     fill = filler if filler is not None else list(range(100, 4200))
+    cue = tok.encode(" The vault keeper is").ids
+    ans = tok.encode(" Okonkwo").ids
     for d in distances:
         lifts = []
         for t in range(trials):
             pad = [fill[(t * 977 + i) % len(fill)] for i in range(d)]
-            cue = tok.encode(" The vault keeper is").ids
-            ans = tok.encode(" Okonkwo").ids
             def sc(pre):
                 ids = tok.encode(pre).ids + pad + cue + ans
-                x = torch.tensor([ids[-model.ctx:]], device=device)
+                x = torch.tensor([ids], device=device)
+                if x.shape[1] <= model.ctx:
+                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                        lp = model(x[:, :-1]).float().log_softmax(-1)
+                    n = len(ans)
+                    return float(lp[0, -n:].gather(-1, x[0, 1:][-n:].unsqueeze(-1)).mean())
+                # longer than the window: carry state, score the answer inside the final window
                 with torch.autocast("cuda", dtype=torch.bfloat16):
-                    lp = model(x[:, :-1]).float().log_softmax(-1)
+                    lp = model.forward_carried(x[:, :-1]).float().log_softmax(-1)
                 n = len(ans)
-                return float(lp[0, -n:].gather(-1, x[0, 1:][-n:].unsqueeze(-1)).mean())
+                tgt = x[0, 1:][-n:]
+                return float(lp[0, -n:].gather(-1, tgt.unsqueeze(-1)).mean())
             lifts.append(sc(" The vault keeper is Okonkwo. ") - sc(" The vault keeper is Vandermeer. "))
         out.append((d, float(np.mean(lifts)), float(np.std(lifts) / np.sqrt(len(lifts)))))
     model.train()

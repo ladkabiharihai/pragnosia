@@ -64,6 +64,30 @@ class LM(nn.Module):
             return logits
         return logits, (h if grab is None else grab)
 
+    @torch.no_grad()
+    def forward_carried(self, x, window=None):
+        """Process a sequence LONGER than ctx by carrying the carrier state across windows.
+
+        This is the path that makes the carrier worth having: attention would need a KV cache that grows with
+        the sequence, whereas the carrier's state is a fixed (B, d) complex vector per layer, so a 4096-token
+        input costs the same memory as a 512-token one. Positional embeddings restart at each window, which is
+        the only positional signal the model was trained with.
+
+        Returns logits for the FINAL window only, which is what a retrieval probe scores."""
+        window = window or self.ctx
+        B_, T = x.shape
+        states = [None] * self.layers
+        pos = torch.arange(window, device=x.device)
+        logits = None
+        for s in range(0, T, window):
+            xw = x[:, s:s + window]
+            h = self.e(xw) + self.p(pos[: xw.shape[1]])
+            for i, (mx, mp) in enumerate(zip(self.mix, self.mlp)):
+                h, states[i] = mx(h, states[i])
+                h = mp(h)
+            logits = F.linear(self.n(h), self.e.weight)
+        return logits
+
     def param_groups(self, lr=6e-3, spectral_lr=1e-3):
         """Spectral parameters take small ABSOLUTE steps, everything else takes trust-ratio steps.
 
