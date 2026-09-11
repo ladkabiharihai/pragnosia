@@ -82,6 +82,19 @@ def main():
         if a.resume and os.path.exists(a.resume):
             sd = torch.load(a.resume, map_location="cuda")
             m.load_state_dict(sd["model"]); start = sd["step"]
+            # RESTORE THE OPTIMIZER TOO. Loading only the weights leaves the optimizer cold, with its second
+            # moment at zero, so its first steps after a resume are near-maximal on a model that was already
+            # converged to that point. This project measured the same failure at growth events: a rebuilt
+            # optimizer takes a 1.5x larger first step and costs about a nat of shock. A resume is the same
+            # event. Recorded because the first version of this resume shipped without it.
+            if "opt" in sd:
+                try:
+                    opt.load_state_dict(sd["opt"])
+                    r.log(f"resumed optimizer state ({len(sd['opt'].get('state', {}))} tensors)")
+                except Exception as e:
+                    r.log(f"optimizer state present but not loadable ({type(e).__name__}); starting cold")
+            else:
+                r.log("WARNING: checkpoint carries no optimizer state; the first steps will be a shock")
             r.log(f"resumed from {a.resume} at step {start}, loss {sd['loss']:.4f}")
 
         t0 = time.time(); ema = None
@@ -146,7 +159,8 @@ def main():
                 else:
                     if os.path.exists(f"{a.out}/ckpt.pt"):
                         os.replace(f"{a.out}/ckpt.pt", f"{a.out}/ckpt_prev.pt")
-                    torch.save({"model": m.state_dict(), "step": i + 1, "loss": ema,
+                    torch.save({"model": m.state_dict(), "opt": opt.state_dict(),
+                                "step": i + 1, "loss": ema,
                                 "cfg": dict(vocab=8192, d=a.d, layers=a.layers,
                                             mlp_mult=a.mlp, ctx=a.ctx)}, f"{a.out}/ckpt.pt")
         r.log(f"final loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f}, {skipped} spike-skips")
