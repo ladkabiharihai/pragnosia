@@ -257,5 +257,22 @@ if dev == "cuda":
     lmx = torch.full((2, 512, 8), -40.0, device=dev); yx, _ = scan_triton(torch.randn(2, 512, 8, device=dev), lmx, torch.randn(2, 512, 8, device=dev))
     check("decay exp(-40) at every token, T=512: finite", torch.isfinite(yx).all().item())
 
+print("\nforget-gated carrier: finite gradients when a gate saturates")
+# A closed recurrence gate means lambda_t = 1 and gamma_t = 0; sqrt'(0) is infinite and the first fspin run went
+# to NaN gradients at step 520. Force both saturations and check every gradient is finite.
+m = SpinCarrier(32, gated="rf").to(dev)
+with torch.no_grad():
+    m.Wr.bias.fill_(-30.0)                           # gate closed everywhere: hold
+xs = torch.randn(2, 40, 32, device=dev, requires_grad=True)
+(m(xs)[0] ** 2).sum().backward()
+check("gate closed (lambda_t = 1, gamma_t = 0): all gradients finite",
+      all(torch.isfinite(p.grad).all().item() for p in m.parameters() if p.grad is not None) and torch.isfinite(xs.grad).all().item())
+m.zero_grad(); xs.grad = None
+with torch.no_grad():
+    m.Wr.bias.fill_(30.0)                            # gate open everywhere: fastest forgetting
+(m(xs)[0] ** 2).sum().backward()
+check("gate open (fastest decay): all gradients finite",
+      all(torch.isfinite(p.grad).all().item() for p in m.parameters() if p.grad is not None))
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

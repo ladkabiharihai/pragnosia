@@ -232,7 +232,12 @@ class SpinCarrier(nn.Module):
             mag, ang = self.lam()
             # per-token log-magnitude, always <= 0; per-token gamma so every channel stays unit variance
             logmag = -self.gate_c * torch.sigmoid(self.Wr(z)) * (-torch.log(mag))
-            gam = torch.sqrt(1.0 - torch.exp(2.0 * logmag)).clamp_min(1e-4)
+            # gamma_t = sqrt(1 - |lambda_t|^2). When the recurrence gate closes (sigmoid -> 0) the channel holds,
+            # |lambda_t| -> 1 and gamma_t -> 0, which is the intended behaviour, but sqrt has an infinite
+            # derivative at zero. Measured: NaN gradients from step 520, the first steps at full rate. The
+            # clamp is on the ARGUMENT, which bounds the derivative at 500; clamping the output does nothing
+            # for the gradient. (The plain carrier never meets this because NU_MIN keeps 1 - |lambda|^2 >= 2e-3.)
+            gam = torch.sqrt((1.0 - torch.exp(2.0 * logmag)).clamp_min(1e-6))
             u = self.B(z) * gam * torch.sigmoid(self.Wi(z))
             if u.is_cuda:
                 from .scan_kernel import scan_triton
