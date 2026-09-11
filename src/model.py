@@ -16,6 +16,28 @@ import torch.nn.functional as F
 from .spin import SpinCarrier
 
 
+class Attn(nn.Module):
+    """Causal self-attention. BASELINE ONLY.
+
+    The vision rules out attention as the architecture. It is here because "spin is better" is unfalsifiable
+    without a matched control trained on identical data with identical everything else, and the 45M allocation
+    test was too short to settle it. Costs 4d^2 per layer against the carrier's 2d^2, so at matched parameters
+    the attention control is slightly narrower."""
+    def __init__(self, d: int, heads: int = 8):
+        super().__init__()
+        self.n = nn.LayerNorm(d); self.h = heads
+        self.q = nn.Linear(d, d); self.k = nn.Linear(d, d); self.v = nn.Linear(d, d); self.o = nn.Linear(d, d)
+
+    def forward(self, x, h0=None):
+        B_, T_, D = x.shape; z = self.n(x)
+        q, k, v = [t(z).view(B_, T_, self.h, D // self.h).transpose(1, 2) for t in (self.q, self.k, self.v)]
+        a = F.scaled_dot_product_attention(q, k, v, is_causal=True).transpose(1, 2).reshape(B_, T_, D)
+        return x + self.o(a), None
+
+    def spectral_parameters(self):
+        return []
+
+
 class MLP(nn.Module):
     def __init__(self, d: int, mult: int = 4):
         super().__init__()
@@ -28,12 +50,13 @@ class MLP(nn.Module):
 
 
 class LM(nn.Module):
-    def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512):
+    def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512, mixer="spin"):
         super().__init__()
-        self.vocab, self.d, self.layers, self.ctx = vocab, d, layers, ctx
+        self.vocab, self.d, self.layers, self.ctx, self.mixer = vocab, d, layers, ctx, mixer
         self.e = nn.Embedding(vocab, d)
         self.p = nn.Embedding(ctx, d)
-        self.mix = nn.ModuleList([SpinCarrier(d) for _ in range(layers)])
+        mk = SpinCarrier if mixer == "spin" else Attn
+        self.mix = nn.ModuleList([mk(d) for _ in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
         self.apply(self._init)

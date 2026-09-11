@@ -50,6 +50,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--compile", type=int, default=1)
     ap.add_argument("--resume", default="")
+    ap.add_argument("--mixer", default="spin", choices=["spin", "attn"])
     ap.add_argument("--spike", type=float, default=4.0)
     ap.add_argument("--eval-every", type=int, default=2000)
     a = ap.parse_args()
@@ -63,7 +64,7 @@ def main():
         tok = Tokenizer.from_file("/mnt/kv_cache/tok_v8192.json")
         bins, ks, ps = loaders(a.data)
         r.log(f"corpora {ks}")
-        m = LM(vocab=8192, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx).cuda()
+        m = LM(vocab=8192, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
         # The carrier is 94% of an uncompiled step (195 ms of 206), because its cross-chunk pass is a python
         # loop issuing many tiny kernels. Compiling fuses them: 40 -> 154 ktok/s measured, a 3.8x speedup.
         fwd = torch.compile(m) if a.compile else m
@@ -162,7 +163,8 @@ def main():
                     torch.save({"model": m.state_dict(), "opt": opt.state_dict(),
                                 "step": i + 1, "loss": ema,
                                 "cfg": dict(vocab=8192, d=a.d, layers=a.layers,
-                                            mlp_mult=a.mlp, ctx=a.ctx)}, f"{a.out}/ckpt.pt")
+                                            mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer)},
+                               f"{a.out}/ckpt.pt")
         r.log(f"final loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f}, {skipped} spike-skips")
 
 

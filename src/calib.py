@@ -241,3 +241,51 @@ def needle(model, tok, distances=(0, 64, 256, 512, 1024, 2048), trials=12, devic
         out.append((d, float(np.mean(lifts)), float(np.std(lifts) / np.sqrt(len(lifts)))))
     model.train()
     return out
+
+
+# ------------------------------------------------------------------------ external anchor: GPT-2 on same bytes
+@torch.no_grad()
+def bpb_vs_gpt2(model, tok, bins, ks, ps, seed=1234, n_batches=12, B=8, T=512, device="cuda"):
+    """Bits per byte for our model and GPT-2 124M on the SAME text at the SAME context length.
+
+    This is the only comparison that means anything across tokenizers. GPT-2 cuts the text into different
+    pieces than we do; per-token loss is incomparable, bits per byte of the identical UTF-8 is not. Context is
+    matched to OUR window (512) rather than GPT-2's (1024) because the smaller of the two is the fair one:
+    giving one model more context than the other measures the context, not the model.
+
+    GPT-2 124M was trained on roughly 9B tokens of web text; this model at 120k steps has seen 0.98B tokens of
+    a mixed corpus. The comparison is therefore not matched on budget and is not claimed to be. It anchors the
+    number, nothing more."""
+    import numpy as np
+    from src.common import bpb_from_nats
+    from transformers import GPT2LMHeadModel, GPT2TokenizerFast
+    g = GPT2LMHeadModel.from_pretrained("gpt2").to(device).eval()
+    gt = GPT2TokenizerFast.from_pretrained("gpt2")
+    rng = np.random.default_rng(seed)
+    ours_n = gpt_n = 0.0; ours_b = gpt_b = 0
+    model.eval()
+    for _ in range(n_batches):
+        for _b in range(B):
+            a = bins[ks[rng.choice(len(ks), p=ps)]]
+            j = rng.integers(0, len(a) - T - 2)
+            ids = [int(t) for t in a[j:j + T + 1]]
+            text = tok.decode(ids)
+            # OURS: on our tokens, over the bytes those targets decode to
+            x = torch.tensor([ids], device=device)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                lp = model(x[:, :T]).float().log_softmax(-1)
+            y = x[0, 1:T + 1]
+            ours_n += float(-lp[0].gather(-1, y.unsqueeze(-1)).sum())
+            ours_b += len(tok.decode([int(t) for t in y]).encode("utf-8"))
+            # GPT-2: on ITS tokens of the same text, truncated to the same window, over ITS target bytes
+            gid = gt(text).input_ids[: T + 1]
+            if len(gid) < 8:
+                continue
+            gx = torch.tensor([gid], device=device)
+            glp = g(gx[:, :-1]).logits.float().log_softmax(-1)
+            gy = gx[0, 1:]
+            gpt_n += float(-glp[0].gather(-1, gy.unsqueeze(-1)).sum())
+            gpt_b += len(gt.decode(gy.tolist()).encode("utf-8"))
+    model.train()
+    return dict(ours=bpb_from_nats(ours_n, ours_b), gpt2=bpb_from_nats(gpt_n, gpt_b),
+                ours_bytes=ours_b, gpt2_bytes=gpt_b)
