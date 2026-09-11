@@ -110,7 +110,7 @@ def main():
             r.log(f"resumed from {a.resume} at step {start}, loss {sd['loss']:.4f}")
 
         t0 = time.time(); ema = None
-        gnorms = []; skipped = 0; recent = []
+        gnorms = []; skipped = 0; recent = []; bpbs = []
         for i in range(start, a.steps):
             w = min(1.0, (i + 1) / a.warm)
             # cosine over the whole budget: a flat rate lets a model equilibrate at that rate's noise floor,
@@ -185,6 +185,13 @@ def main():
                 b, nb = eval_bpb(m, tok, bins, ks, ps, np.random.default_rng(1234),
                                  n_batches=8, B=8, T=a.ctx)
                 r.log(f"  eval step {i+1}: BPB {b:.4f}  ({nb/1e3:.0f}k bytes)")
+                # DEGRADING, not frozen: fspin at 6e-3 went 1.7075 -> 1.7534 -> 2.1130 over three evals while
+                # the skip guard saw only 200 skips in 15k steps. Three consecutive rises, each above the
+                # eval's own noise (measured spread ~0.005 on this fixed sample), is a run going backwards.
+                bpbs.append(b)
+                if len(bpbs) >= 4 and all(bpbs[-k] > bpbs[-k-1] + 0.01 for k in (1, 2, 3)):
+                    r.log(f"    DEGRADING: BPB rose over the last three evals {bpbs[-4:]}; stopping")
+                    break
             if (i + 1) % a.save_every == 0 or i + 1 == a.steps:
                 # NEVER OVERWRITE A GOOD CHECKPOINT WITH A BROKEN ONE. The previous run saved NaN weights over
                 # a healthy checkpoint and only a stray copy survived. Verify before writing, and keep the
