@@ -101,6 +101,24 @@ with torch.no_grad():
 check("scale does not grow with sequence length", abs(y2.std().item()/y.std().item() - 1) < 0.5,
       f"T=512 std {y.std().item():.3f} vs T=2048 std {y2.std().item():.3f}")
 
+print("\ncarried state is exact: two windows equal one long one")
+# The real-FFT scan only emits Re(h); the imaginary state is recovered separately for carrying. If that
+# recovery is wrong, every distance beyond the window in the goal-9 test is measured against a corrupted
+# state and reads as a clean architectural limit. So: split a sequence, carry, and demand equality.
+m = SpinCarrier(48, chunk=64).to(dev).double()
+u = torch.randn(2, 300, 48, device=dev, dtype=torch.float64)
+full, (fr, fi) = m.scan(u)
+ref_full, (rr, ri) = m.scan_reference(u)
+check("final real state matches reference", torch.allclose(fr, rr, atol=1e-10), f"{(fr-rr).abs().max().item():.1e}")
+check("final IMAGINARY state matches reference", torch.allclose(fi, ri, atol=1e-10), f"{(fi-ri).abs().max().item():.1e}")
+a, st = m.scan(u[:, :128])
+b, _ = m.scan(u[:, 128:], h0=st)
+joined = torch.cat([a, b], 1)
+check("scan(first) then scan(rest, carried) == scan(all)", torch.allclose(joined, full, atol=1e-10),
+      f"max diff {(joined-full).abs().max().item():.1e}")
+a2, st2 = m.scan(u[:, :100]); b2, st3 = m.scan(u[:, 100:200], h0=st2); c2, _ = m.scan(u[:, 200:], h0=st3)
+check("three windows carried == one", torch.allclose(torch.cat([a2, b2, c2], 1), full, atol=1e-10))
+
 print("\nsurvives the forgetting rates that killed the chunked scan")
 # The chunked scan computed lambda^(-128), which is exp(128*nu). Training pushed nu_max to 0.38 in a thousand
 # steps (lambda^-128 = 1.7e21) and the run went NaN at about step 14,500, twice. Here nu is forced far past

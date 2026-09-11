@@ -92,44 +92,46 @@ class SpinCarrier(nn.Module):
 
     @torch.compiler.disable
     def scan(self, u: torch.Tensor, h0=None):
-        """Causal convolution with kernel lambda^t, by FFT. Excluded from torch.compile.
+        """Causal convolution with kernel lambda^t, by REAL FFT. Excluded from torch.compile.
 
-        Measured: under torch.compile the forward of this function is correct and the BACKWARD produces
-        non-finite gradients, in float32 and under autocast alike, while eager is correct in both. Inductor's
-        autograd through complex FFT is the culprit, not the maths. The rest of the model still compiles; this
-        one function runs eager, and it is fast enough that way (214 ktok/s for the whole model uncompiled).
+        Only the real part of the complex state is emitted within a window; the imaginary part exists solely
+        to carry the recurrence across windows. So the per-window output is Re(h_t) = sum Re(lambda^(t-s)) u_s,
+        a REAL convolution, which rfft/irfft evaluates at half the transforms and half the intermediate memory
+        of the complex version this replaced. Measured before: spin 1.83x slower than FlashAttention at T=512
+        with memory growing in T because complex64 intermediates were saved for backward.
 
-        Because lambda is constant in time, h_t = sum_{s<=t} lambda^(t-s) u_s is exactly a causal convolution
-        with the kernel k[t] = lambda^t. Every entry of that kernel has magnitude |lambda|^t <= 1, so nothing
-        here can overflow at ANY forgetting rate: a fast channel's kernel simply underflows to zero past its
-        horizon, which is the correct answer. No inverses, no chunk loop, O(T log T), and the model is free to
-        learn whatever nu it likes.
+        Every kernel entry has magnitude |lambda|^t <= 1, so nothing here can overflow at any forgetting rate.
+        The final imaginary state is recovered separately as one weighted sum, only when a caller carries it.
 
-        The scan runs in float32 regardless of autocast. torch.fft requires it, and a scan that spans many
-        orders of magnitude is exactly where bf16 rounding does damage. It is a small fraction of the layer's
-        cost."""
+        Excluded from torch.compile: inductor's backward through FFT produced non-finite gradients while eager
+        was correct, in fp32 and under autocast alike."""
         mag, ang = self.lam()
         B_, T, D = u.shape
-        # Precision follows the input: float64 in gets a complex128 transform, so the reference tests can hold
-        # the scan to 1e-14; everything else runs in float32/complex64, which is where training lives and
-        # where the 1e-7 FFT roundoff sits five orders of magnitude below bf16 noise.
         rt = torch.float64 if u.dtype == torch.float64 else torch.float32
-        ct = torch.complex128 if rt == torch.float64 else torch.complex64
         uf = u.to(rt); mag = mag.to(rt); ang = ang.to(rt)
         t = torch.arange(T, device=u.device, dtype=rt).unsqueeze(1)                  # (T,1)
         logk = t * torch.log(mag).unsqueeze(0)                                       # (T,D), all <= 0
-        k = torch.polar(torch.exp(logk), t * ang.unsqueeze(0))                        # lambda^t
+        decay = torch.exp(logk)
+        kr = decay * torch.cos(t * ang.unsqueeze(0))                                 # Re(lambda^t)
         n = 2 * T
-        U = torch.fft.fft(uf.to(ct), n=n, dim=1)
-        K = torch.fft.fft(k, n=n, dim=0).unsqueeze(0)
-        h = torch.fft.ifft(U * K, n=n, dim=1)[:, :T]                                  # (B,T,D) complex
+        U = torch.fft.rfft(uf, n=n, dim=1)
+        Kr = torch.fft.rfft(kr, n=n, dim=0).unsqueeze(0)
+        hr = torch.fft.irfft(U * Kr, n=n, dim=1)[:, :T]
+        need_state = True
         if h0 is not None:
-            # carried state decays as lambda^(t+1): a genuinely separate term, added exactly
-            hr0, hi0 = h0
-            kp = torch.polar(torch.exp(logk + torch.log(mag).unsqueeze(0)), (t + 1) * ang.unsqueeze(0))
-            h = h + torch.complex(hr0.to(rt), hi0.to(rt)).unsqueeze(1) * kp.unsqueeze(0)
-        hr, hi = h.real, h.imag
-        return hr.to(u.dtype), (hr[:, -1].to(u.dtype), hi[:, -1].to(u.dtype))
+            hr0, hi0 = h0[0].to(rt), h0[1].to(rt)
+            d1 = torch.exp(logk + torch.log(mag).unsqueeze(0))                      # |lambda|^(t+1)
+            a1 = (t + 1) * ang.unsqueeze(0)
+            # Re(lambda^(t+1) * h0) = Re*hr0 - Im*hi0, all real arithmetic
+            hr = hr + (d1 * torch.cos(a1)).unsqueeze(0) * hr0.unsqueeze(1) \
+                    - (d1 * torch.sin(a1)).unsqueeze(0) * hi0.unsqueeze(1)
+        # final imaginary state: Im(h_{T-1}) = sum_s Im(lambda^(T-1-s)) u_s, one weighted sum, real ops
+        rev = torch.flip(decay * torch.sin(t * ang.unsqueeze(0)), dims=[0])          # Im(lambda^(T-1-s))
+        hi_last = (uf * rev.unsqueeze(0)).sum(1)
+        if h0 is not None:
+            dT = mag ** T; aT = T * ang
+            hi_last = hi_last + dT * torch.sin(aT) * hr0 + dT * torch.cos(aT) * hi0
+        return hr.to(u.dtype), (hr[:, -1].to(u.dtype), hi_last.to(u.dtype))
 
     def gamma(self):
         """Input normalisation, and it is not optional.
