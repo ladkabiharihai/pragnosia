@@ -104,7 +104,7 @@ def main():
             r.log(f"resumed from {a.resume} at step {start}, loss {sd['loss']:.4f}")
 
         t0 = time.time(); ema = None
-        gnorms = []; skipped = 0
+        gnorms = []; skipped = 0; recent = []
         for i in range(start, a.steps):
             w = min(1.0, (i + 1) / a.warm)
             # cosine over the whole budget: a flat rate lets a model equilibrate at that rate's noise floor,
@@ -127,6 +127,13 @@ def main():
             skip = len(gnorms) >= 200 and (not math.isfinite(gn) or gn > a.spike * float(np.median(gnorms)))
             if skip:
                 opt.zero_grad(set_to_none=set_none); skipped += 1
+                recent.append(i)
+                # DIVERGED, not spiking: the attention control blew up at step ~11,000 and the guard then
+                # skipped every one of the next 27,000 steps while the log showed a healthy-looking rate.
+                # A guard that skips everything is a frozen model burning the card; stop and say so.
+                if len(recent) >= 250 and i - recent[-250] < 500:
+                    r.log(f"    DIVERGED: {len(recent)} skips, 250 of them within the last 500 steps; stopping")
+                    break
                 if skipped <= 10 or skipped % 200 == 0:
                     r.log(f"    spike at step {i+1}: |g|={gn:.2f} vs median {float(np.median(gnorms)):.2f}"
                           f" -- SKIPPED (total {skipped})")

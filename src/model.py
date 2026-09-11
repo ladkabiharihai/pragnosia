@@ -22,15 +22,23 @@ class Attn(nn.Module):
     The vision rules out attention as the architecture. It is here because "spin is better" is unfalsifiable
     without a matched control trained on identical data with identical everything else, and the 45M allocation
     test was too short to settle it. Costs 4d^2 per layer against the carrier's 2d^2, so at matched parameters
-    the attention control is slightly narrower."""
+    the attention control is slightly narrower.
+
+    QK-norm (RMS-normalised queries and keys per head, learned scale) is standard in current transformers and
+    is here because the first matched run at the sweep-optimal rate 6e-3 diverged at step ~11,000: gradient
+    norm median rose 1.15 -> 5.0 and every step from 15,400 on was skipped by the spike guard while the spin
+    run at identical settings took 57 skips in 120,000. The control must be the strongest attention I can
+    field, or "spin wins" means nothing."""
     def __init__(self, d: int, heads: int = 8):
         super().__init__()
         self.n = nn.LayerNorm(d); self.h = heads
         self.q = nn.Linear(d, d); self.k = nn.Linear(d, d); self.v = nn.Linear(d, d); self.o = nn.Linear(d, d)
+        self.qn = nn.RMSNorm(d // heads); self.kn = nn.RMSNorm(d // heads)
 
     def forward(self, x, h0=None):
         B_, T_, D = x.shape; z = self.n(x)
         q, k, v = [t(z).view(B_, T_, self.h, D // self.h).transpose(1, 2) for t in (self.q, self.k, self.v)]
+        q, k = self.qn(q), self.kn(k)
         a = F.scaled_dot_product_attention(q, k, v, is_causal=True).transpose(1, 2).reshape(B_, T_, D)
         return x + self.o(a), None
 
