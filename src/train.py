@@ -56,7 +56,7 @@ def main():
     ap.add_argument("--fused", type=int, default=1, help="one compiled kernel group per parameter update")
     ap.add_argument("--graph", type=int, default=1, help="replay the optimizer step as a CUDA graph")
     ap.add_argument("--resume", default="")
-    ap.add_argument("--mixer", default="spin", choices=["spin", "gspin", "fspin", "attn"])
+    ap.add_argument("--mixer", default="spin", choices=["spin", "gspin", "fspin", "aspin", "attn"])
     ap.add_argument("--spike", type=float, default=4.0)
     ap.add_argument("--eval-every", type=int, default=2000)
     a = ap.parse_args()

@@ -13,6 +13,7 @@ architecture; what is being tested and why is recorded, dated, in [PROGRESS.md](
 | `src/common.py` | shared infrastructure: production safety, GPU capping, pid identification, determinism, the `Run` logger that also journals, corpus access, bits-per-byte evaluation. |
 | `src/corpus.py` | the eight source corpora, their measured sizes, the mix, and streaming access to the raw text. |
 | `src/spin.py` | the carrier: a diagonal-complex linear recurrence, `h_t = lambda h_{t-1} + gamma u_t`, evaluated as a causal convolution by FFT with a hand-written backward; optional input/output gates (`gspin`) and per-token forgetting (`fspin`). Our own implementation. |
+| `src/assoc.py` | the associative carrier (`aspin`): a per-head memory of key-value outer products with input-dependent forgetting and learned rotation frequencies, read by content, constant in size, carried across windows. Built after the diagonal carrier was measured unable to retrieve by content; mathematically in the linear-attention family, and says so. |
 | `src/scan_kernel.py` | one Triton kernel per direction for the recurrence with a per-token `lambda_t`: the literal sequential form, so nothing can overflow. What `fspin` trains through, and the inference form for every variant. |
 | `src/model.py` | the language model around the carrier (`LM`), the attention control (`Attn`, baseline only), `forward_carried` for state across windows. |
 | `src/optim.py` | `Fabric`: factored second moment, trust-ratio steps, growth-aware state, fused and CUDA-graph replayed. |

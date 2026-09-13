@@ -1,0 +1,80 @@
+"""Verify the associative carrier before a run depends on it. Run: .venv/bin/python tests/test_assoc.py"""
+import sys, math, warnings; warnings.filterwarnings("ignore")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import torch, torch.nn.functional as F
+from src.assoc import assoc_scan, AssocCarrier, rotate
+from src.model import LM
+
+ok = fail = 0
+def check(name, cond, detail=""):
+    global ok, fail
+    if cond: ok += 1; print(f"  PASS  {name}" + (f"   {detail}" if detail else ""))
+    else:    fail += 1; print(f"  FAIL  {name}" + (f"   {detail}" if detail else ""))
+dev = "cuda" if torch.cuda.is_available() else "cpu"
+torch.manual_seed(0)
+
+print("the chunked scan against the literal recurrence")
+B, H, T, D = 2, 3, 45, 8
+q = torch.randn(B, H, T, D, device=dev, dtype=torch.float64); k = torch.randn_like(q); v = torch.randn_like(q)
+la = -torch.rand(B, H, T, device=dev, dtype=torch.float64) * 3.0
+S0 = torch.randn(B, H, D, D, device=dev, dtype=torch.float64)
+def ref(q, k, v, la, S):
+    out = []
+    for t in range(q.shape[2]):
+        S = torch.exp(la[:, :, t])[..., None, None] * S + k[:, :, t].unsqueeze(-1) @ v[:, :, t].unsqueeze(-2)
+        out.append((q[:, :, t].unsqueeze(-2) @ S).squeeze(-2))
+    return torch.stack(out, 2), S
+yr, Sr = ref(q, k, v, la, S0.clone())
+yc, Sc = assoc_scan(q, k, v, la, S0, chunk=8)
+check("outputs match (fp64, T=45, chunk 8, carried state)", torch.allclose(yc, yr, atol=1e-11), f"max diff {(yc-yr).abs().max().item():.1e}")
+check("final state matches", torch.allclose(Sc, Sr, atol=1e-11), f"max diff {(Sc-Sr).abs().max().item():.1e}")
+yc2, _ = assoc_scan(q, k, v, la, S0, chunk=45); yc3, _ = assoc_scan(q, k, v, la, S0, chunk=1)
+check("chunk size does not change the answer (45, 8, 1)", torch.allclose(yc2, yr, atol=1e-11) and torch.allclose(yc3, yr, atol=1e-11))
+y0, _ = assoc_scan(q, k, v, la, None, chunk=8); yr0, _ = ref(q, k, v, la, torch.zeros_like(S0))
+check("without a carried state", torch.allclose(y0, yr0, atol=1e-11))
+a, st = assoc_scan(q[:, :, :20], k[:, :, :20], v[:, :, :20], la[:, :, :20], S0, chunk=8)
+b, _ = assoc_scan(q[:, :, 20:], k[:, :, 20:], v[:, :, 20:], la[:, :, 20:], st, chunk=8)
+check("two windows carried == one", torch.allclose(torch.cat([a, b], 2), yr, atol=1e-11))
+for t_ in (q, k, v, la): t_.requires_grad_(True)
+(assoc_scan(q, k, v, la, None, chunk=8)[0] ** 2).sum().backward(); g1 = [t_.grad.clone() for t_ in (q, k, v, la)]
+for t_ in (q, k, v, la): t_.grad = None
+(ref(q, k, v, la, torch.zeros_like(S0))[0] ** 2).sum().backward(); g2 = [t_.grad.clone() for t_ in (q, k, v, la)]
+worst = max((x - y).abs().max().item() / (y.abs().max().item() + 1e-30) for x, y in zip(g1, g2))
+check("gradients w.r.t. q, k, v, log-decay match the definition", worst < 1e-9, f"worst rel diff {worst:.1e}")
+qf = torch.randn(2, 4, 512, 64, device=dev); yf, _ = assoc_scan(qf, torch.randn_like(qf), torch.randn_like(qf), -torch.rand(2, 4, 512, device=dev) * 40, chunk=64)
+check("fp32, T=512, decays down to exp(-40): finite", torch.isfinite(yf).all().item())
+
+print("\nthe carrier")
+m = AssocCarrier(64).to(dev); x = torch.randn(2, 70, 64, device=dev)
+y, (S, p) = m(x)
+check("output shape and state shape", tuple(y.shape) == (2, 70, 64) and tuple(S.shape) == (2, 1, 64, 64) and p == 70)
+ya, sa = m(x[:, :30]); yb, _ = m(x[:, 30:], h0=sa)
+check("carried across windows == one pass (rotation positions continue)", torch.allclose(torch.cat([ya, yb], 1), y, atol=1e-4),
+      f"max diff {(torch.cat([ya, yb], 1) - y).abs().max().item():.1e}")
+x2 = x.clone(); x2[:, 50] += 3.0
+y2, _ = m(x2)
+check("causal: editing token 50 changes nothing before it", torch.equal(y2[:, :50], y[:, :50]) or (y2[:, :50] - y[:, :50]).abs().max().item() == 0.0,
+      f"max change before 50: {(y2[:, :50]-y[:, :50]).abs().max().item():.1e}; at/after: {(y2[:, 50:]-y[:, 50:]).abs().max().item():.1e}")
+xs = torch.randn(2, 40, 64, device=dev, requires_grad=True)
+(m(xs)[0] ** 2).sum().backward()
+check("all gradients finite", all(torch.isfinite(p.grad).all().item() for p in m.parameters() if p.grad is not None))
+# rotation is a relative-position code: q_t . k_s depends on t - s only
+th = torch.rand(1, 4, device=dev) * 0.3; qq = torch.randn(1, 1, 1, 8, device=dev); kk = torch.randn(1, 1, 1, 8, device=dev)
+s1 = (rotate(qq, th, torch.tensor([10], device=dev)) * rotate(kk, th, torch.tensor([3], device=dev))).sum()
+s2 = (rotate(qq, th, torch.tensor([107], device=dev)) * rotate(kk, th, torch.tensor([100], device=dev))).sum()
+check("rotation makes q.k depend on t - s only", abs(s1.item() - s2.item()) < 1e-4, f"{s1.item():.5f} vs {s2.item():.5f}")
+
+print("\nin the model")
+for mx, d in (("aspin", 704), ("attn", 704), ("fspin", 704)):
+    print(f"  {mx} d{d}: {sum(p.numel() for p in LM(d=d, layers=12, mixer=mx).parameters())/1e6:.2f}M")
+m = LM(vocab=512, d=64, layers=2, ctx=32, mixer="aspin").to(dev); xi = torch.randint(0, 512, (2, 33), device=dev)
+l = F.cross_entropy(m(xi[:, :-1]).reshape(-1, 512), xi[:, 1:].reshape(-1)); l.backward()
+check("LM forward/backward with the associative mixer", torch.isfinite(l).item() and all(torch.isfinite(p.grad).all().item() for p in m.parameters() if p.grad is not None), f"loss {l.item():.3f}")
+lg = m.forward_carried(torch.randint(0, 512, (2, 96), device=dev))
+check("forward_carried threads the memory across windows", tuple(lg.shape) == (2, 32, 512))
+g = m.param_groups(); spec = sum(p.numel() for p in g[1]["params"])
+check("timescales, frequencies and gates are in the spectral (absolute-step) group", spec == sum(p.numel() for mx_ in m.mix for p in mx_.spectral_parameters()))
+
+print(f"\n{ok} passed, {fail} failed")
+sys.exit(1 if fail else 0)

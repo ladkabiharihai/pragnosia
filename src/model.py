@@ -16,6 +16,7 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 
 from .spin import SpinCarrier
+from .assoc import AssocCarrier
 
 
 class Attn(nn.Module):
@@ -62,13 +63,13 @@ class MLP(nn.Module):
 class LM(nn.Module):
     def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512, mixer="spin"):
         """mixer: "spin" (plain carrier), "gspin" (input and output gates), "fspin" (input and recurrence
-        gates: per-token forgetting), "attn" (control)."""
+        gates: per-token forgetting), "aspin" (associative: content-addressed memory), "attn" (control)."""
         super().__init__()
         self.vocab, self.d, self.layers, self.ctx, self.mixer = vocab, d, layers, ctx, mixer
         self.e = nn.Embedding(vocab, d)
         self.p = nn.Embedding(ctx, d)
         mk = {"spin": lambda d: SpinCarrier(d), "gspin": lambda d: SpinCarrier(d, gated="io"),
-              "fspin": lambda d: SpinCarrier(d, gated="rf"), "attn": Attn}[mixer]
+              "fspin": lambda d: SpinCarrier(d, gated="rf"), "aspin": AssocCarrier, "attn": Attn}[mixer]
         self.mix = nn.ModuleList([mk(d) for _ in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
