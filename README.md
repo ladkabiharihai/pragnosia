@@ -20,11 +20,11 @@ architecture; what is being tested and why is recorded, dated, in [PROGRESS.md](
 | `src/train.py` | the trainer: cosine schedule, spike guard, divergence abort, verified checkpoints, resume with optimizer state, BPB eval. |
 | `src/calib.py` | the goal probes: calibration (goal 4), real-vs-fabricated confidence (goal 5), needle retrieval through the carried state (goal 9), BPB against GPT-2. |
 | `src/facts.py` | 48 factual multiple-choice items used by the goal-5 probe. |
-| `tests/` | `test_common.py` (13), `test_optim.py` (21), `test_spin.py` (43), `test_model.py` (13, growth). All must pass before a run. |
+| `tests/` | `test_common.py` (13), `test_optim.py` (21), `test_spin.py` (45), `test_model.py` (13, growth), `test_assoc.py` (15). All must pass before a run. |
 | `logs/` | one file per run, not tracked. |
 | `.venv/` | this project's environment, python 3.12.3 + torch 2.14.0+cu130. Not tracked. Do not use `parakeet_env`. |
 
-Thirteen source files. A fourteenth needs a reason.
+Fourteen source files. A fifteenth needs a reason.
 
 ## Current state, 2026-09-11
 
