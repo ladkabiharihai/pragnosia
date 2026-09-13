@@ -44,6 +44,8 @@ def main():
     ap.add_argument("--lr", type=float, default=6e-3)
     ap.add_argument("--warm", type=int, default=500)
     ap.add_argument("--data", default="/mnt/kv_cache/tok1b_v8192")
+    ap.add_argument("--vocab", type=int, default=8192, help="must match the tokenizer the data was made with")
+    ap.add_argument("--chunks", type=int, default=1, help="head chunks for the loss; >1 never holds all logits at once")
     ap.add_argument("--out", default="/mnt/kv_cache/run1")
     ap.add_argument("--cap", type=float, default=20.0)
     ap.add_argument("--save-every", type=int, default=5000)
@@ -65,13 +67,15 @@ def main():
                            f"{a.steps} steps -> {a.out}", seed=a.seed) as r:
         cap_gpu(a.cap)
         from tokenizers import Tokenizer
-        tok = Tokenizer.from_file("/mnt/kv_cache/tok_v8192.json")
+        tok = Tokenizer.from_file(f"/mnt/kv_cache/tok_v{a.vocab}.json")
+        assert tok.get_vocab_size() == a.vocab, (tok.get_vocab_size(), a.vocab)
         bins, ks, ps = loaders(a.data)
         r.log(f"corpora {ks}")
-        m = LM(vocab=8192, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
+        m = LM(vocab=a.vocab, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
         # The carrier is 94% of an uncompiled step (195 ms of 206), because its cross-chunk pass is a python
         # loop issuing many tiny kernels. Compiling fuses them: 40 -> 154 ktok/s measured, a 3.8x speedup.
         fwd = torch.compile(m) if a.compile else m
+        trunk = torch.compile(m.trunk) if a.compile else m.trunk
         P = sum(p.numel() for p in m.parameters())
         car = sum(p.numel() for n, p in m.named_parameters() if "mix." in n)
         base = [a.lr, 1e-3]
@@ -90,8 +94,9 @@ def main():
         if a.resume and os.path.exists(a.resume):
             sd = torch.load(a.resume, map_location="cuda")
             if sd["cfg"]["d"] != m.d:                      # a grown run: rebuild at the checkpoint's width
-                m = LM(vocab=8192, d=sd["cfg"]["d"], layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
+                m = LM(vocab=a.vocab, d=sd["cfg"]["d"], layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
                 fwd = torch.compile(m) if a.compile else m
+                trunk = torch.compile(m.trunk) if a.compile else m.trunk
                 opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), cuda_graph=bool(a.graph and a.fused))
             m.load_state_dict(sd["model"]); start = sd["step"]
             # RESTORE THE OPTIMIZER TOO. Loading only the weights leaves the optimizer cold, with its second
@@ -124,21 +129,27 @@ def main():
                 # loss right before and right after is logged so the cost of the event is a number.
                 xg = batch(bins, ks, ps, np.random.default_rng(7), a.batch, a.ctx)
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    lb = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, 8192), xg[:, 1:a.ctx + 1].reshape(-1)).item()
+                    lb = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
                 for p_, (old_p, sh) in m.grow(a.grow_to).items():
                     opt.grew(p_, sh, replaces=old_p)
                 opt.zero_grad(set_to_none=True)             # grad buffers are the old shape
                 torch._dynamo.reset()                        # compiled graphs hold the old parameters
                 fwd = torch.compile(m) if a.compile else m
+                trunk = torch.compile(m.trunk) if a.compile else m.trunk
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    la = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, 8192), xg[:, 1:a.ctx + 1].reshape(-1)).item()
+                    la = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
                 P = sum(p.numel() for p in m.parameters())
                 r.log(f"    GREW to d={m.d} at step {i}: {P/1e6:.1f}M params, same batch loss {lb:.4f} -> {la:.4f}, "
                       f"optimizer state {opt.state_bytes()/2**20:.0f} MiB carried")
             x = batch(bins, ks, ps, rng, a.batch, a.ctx)
             opt.zero_grad(set_to_none=set_none)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss = F.cross_entropy(fwd(x[:, :a.ctx]).reshape(-1, 8192), x[:, 1:a.ctx + 1].reshape(-1))
+            if a.chunks > 1:
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    h = trunk(x[:, :a.ctx])
+                loss = m.loss(h, x[:, 1:a.ctx + 1], chunks=a.chunks)
+            else:
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    loss = F.cross_entropy(fwd(x[:, :a.ctx]).reshape(-1, a.vocab), x[:, 1:a.ctx + 1].reshape(-1))
             loss.backward()
             gn = float(torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0))
             # SPIKE GUARD. The previous run went from loss 4.0998 to NaN between step 14,200 and 14,400, a
@@ -183,7 +194,7 @@ def main():
                 # comparable to nothing; bits per byte removes the tokenizer and is the only number that can
                 # be set against another model.
                 b, nb = eval_bpb(m, tok, bins, ks, ps, np.random.default_rng(1234),
-                                 n_batches=8, B=8, T=a.ctx)
+                                 n_batches=8, B=8, T=a.ctx, vocab=a.vocab)
                 r.log(f"  eval step {i+1}: BPB {b:.4f}  ({nb/1e3:.0f}k bytes)")
                 # DEGRADING, not frozen: fspin at 6e-3 went 1.7075 -> 1.7534 -> 2.1130 over three evals while
                 # the skip guard saw only 200 skips in 15k steps. Three consecutive rises, each above the
@@ -204,7 +215,7 @@ def main():
                         os.replace(f"{a.out}/ckpt.pt", f"{a.out}/ckpt_prev.pt")
                     torch.save({"model": m.state_dict(), "opt": opt.state_dict(),
                                 "step": i + 1, "loss": ema,
-                                "cfg": dict(vocab=8192, d=m.d, layers=a.layers,
+                                "cfg": dict(vocab=a.vocab, d=m.d, layers=a.layers,
                                             mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer)},
                                f"{a.out}/ckpt.pt")
         r.log(f"final loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f}, {skipped} spike-skips")

@@ -13,6 +13,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 
 from .spin import SpinCarrier
 
@@ -83,6 +84,32 @@ class LM(nn.Module):
             nn.init.normal_(m.weight, 0.0, 0.02)
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
+
+    def trunk(self, x):
+        """Everything but the output head: the normalised final representation, (B, T, d)."""
+        h = self.e(x) + self.p(torch.arange(x.shape[1], device=x.device))
+        for mx, mp in zip(self.mix, self.mlp):
+            h = mp(mx(h)[0])
+        return self.n(h)
+
+    def loss(self, h, y, chunks=4):
+        """Cross-entropy from the trunk output WITHOUT materialising all the logits at once (goal 6).
+
+        The logits are B x T x V; at B32 T1024 V16384 that is 2.1 GB in fp32 and several copies of it live
+        through softmax and its backward, which is what ran a 36 GiB cap out of memory. The head is applied to
+        the batch in chunks under activation checkpointing, so at most one chunk's logits exist at a time and
+        they are recomputed in backward. The trunk is compiled; this is not, and need not be."""
+        y = y.reshape(-1); hf = h.reshape(-1, h.shape[-1]); n = hf.shape[0]
+        E = self.e.weight
+        def piece(hc, yc):
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                lg = F.linear(hc, E)
+            return F.cross_entropy(lg.float(), yc, reduction="sum")
+        total = 0.0
+        for i in range(chunks):
+            sl = slice(i * n // chunks, (i + 1) * n // chunks)
+            total = total + torch.utils.checkpoint.checkpoint(piece, hf[sl], y[sl], use_reentrant=False)
+        return total / n
 
     def forward(self, x, return_hidden=False, hidden_layer=None):
         """hidden_layer selects WHICH representation to return. The final one is what the output head reads,
