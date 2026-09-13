@@ -9,8 +9,9 @@ mechanism, and it is also the mathematics of the linear-attention family (RetNet
 efficient forms). The user was told this plainly and delegated the decision; this file is that decision.
 
 What is ours. Per head, the memory S in R^{dk x dv} evolves as
-    S_t = alpha_t S_{t-1} + k_t v_t^T,        o_t = S_t^T q_t,
-with alpha_t in (0, 1] an input-dependent per-head forgetting (a token can hold or clear a head's memory, as
+    S_t = alpha_t S_{t-1} + i_t k_t v_t^T,    o_t = S_t^T q_t,
+with q, k, v unit vectors, i_t in (0, 1) an input-dependent per-head write gate (so |S| is bounded by the number
+of tokens remembered), alpha_t in (0, 1] an input-dependent per-head forgetting (a token can hold or clear a head's memory, as
 fspin's gate did per channel) with a learned per-head timescale, and the keys and queries carrying the spin:
 a per-channel-pair rotation R(theta_i t), learned frequencies, so that q_t . k_s picks up cos(theta_i (t - s))
 per pair. The state is constant in size (H x dk x dv per layer, 360 KB at d704), carries across windows, and
@@ -27,6 +28,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 
 
 def rotate(x, theta, pos):
@@ -37,7 +39,22 @@ def rotate(x, theta, pos):
     return torch.stack([x1 * c - x2 * s, x1 * s + x2 * c], dim=-1).flatten(-2)
 
 
-def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64):
+def _chunk(qc, kc, vc, lc, S):
+    """One chunk: outputs and the next state. Factored out so it can be recomputed in backward."""
+    C = qc.shape[2]
+    L = lc.cumsum(2)                                                              # (B,H,C), <= 0 and decreasing
+    mask = torch.ones(C, C, device=qc.device, dtype=torch.bool).tril()
+    dec = torch.exp((L.unsqueeze(3) - L.unsqueeze(2)).clamp(max=0.0)) * mask     # exp(L_t - L_s), s <= t
+    A = (qc @ kc.transpose(2, 3)) * dec                                          # (B,H,C,C)
+    eL = torch.exp(L).unsqueeze(3)                                                # exp(L_t): decay from chunk start
+    o = A @ vc + (qc * eL) @ S                                                    # intra + carried
+    # S_new = exp(L_C) S + sum_s exp(L_C - L_s) k_s v_s^T
+    w = torch.exp((L[:, :, -1:] - L).clamp(max=0.0)).unsqueeze(3)                 # (B,H,C,1)
+    S = eL[:, :, -1:] * S + (kc * w).transpose(2, 3) @ vc                        # eL[:, :, -1:] is (B,H,1,1)
+    return o, S
+
+
+def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = False):
     """o_t = sum_{s<=t} exp(L_t - L_s) (q_t . k_s) v_s  [+ exp(L_t) q_t . S0], chunked and stable.
 
     q, k, v: (B, H, T, D); logalpha: (B, H, T) <= 0 (log of the per-token forgetting); S0: (B, H, D, D) or None.
@@ -49,24 +66,20 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64):
     outs = []
     for s0 in range(0, T, chunk):
         qc, kc, vc, lc = q[:, :, s0:s0 + chunk], k[:, :, s0:s0 + chunk], v[:, :, s0:s0 + chunk], la[:, :, s0:s0 + chunk]
-        C = qc.shape[2]
-        L = lc.cumsum(2)                                                          # (B,H,C), <= 0 and decreasing
-        mask = torch.ones(C, C, device=q.device, dtype=torch.bool).tril()
-        dec = torch.exp((L.unsqueeze(3) - L.unsqueeze(2)).clamp(max=0.0)) * mask # exp(L_t - L_s), s <= t
-        A = (qc @ kc.transpose(2, 3)) * dec                                      # (B,H,C,C)
-        eL = torch.exp(L).unsqueeze(3)                                            # exp(L_t): decay from chunk start
-        o = A @ vc + (qc * eL) @ S                                                # intra + carried
+        if recompute and torch.is_grad_enabled():
+            # activation checkpointing per chunk: the C x C decay and score matrices of every chunk of every
+            # layer otherwise stay alive for backward (the 219M model at B32 T1024 ran a 36 GiB cap out)
+            o, S = torch.utils.checkpoint.checkpoint(_chunk, qc, kc, vc, lc, S, use_reentrant=False)
+        else:
+            o, S = _chunk(qc, kc, vc, lc, S)
         outs.append(o)
-        # S_new = exp(L_C) S + sum_s exp(L_C - L_s) k_s v_s^T
-        w = torch.exp((L[:, :, -1:] - L).clamp(max=0.0)).unsqueeze(3)             # (B,H,C,1)
-        S = eL[:, :, -1:] * S + (kc * w).transpose(2, 3) @ vc                    # eL[:, :, -1:] is (B,H,1,1)
     return torch.cat(outs, 2).to(q.dtype), S
 
 
 class AssocCarrier(nn.Module):
-    def __init__(self, d: int, heads: int | None = None, chunk: int = 64):
+    def __init__(self, d: int, heads: int | None = None, chunk: int = 64, recompute: bool = False):
         super().__init__()
-        self.d = d
+        self.d = d; self.recompute = recompute
         self.h = heads or max(1, d // 64)
         assert d % self.h == 0 and (d // self.h) % 2 == 0
         self.dk = d // self.h
@@ -78,6 +91,11 @@ class AssocCarrier(nn.Module):
         # timescales at init (half-lives from ~7 to ~7000 tokens at the gate's resting point); the gate moves it.
         self.wa = nn.Linear(d, self.h)
         nn.init.zeros_(self.wa.weight); nn.init.constant_(self.wa.bias, 0.0)      # softplus(0) = 0.69
+        # write gate per head: how much of this token goes into the memory. With k and v both unit-normalised
+        # every write has magnitude sigmoid(.) <= 1, so |S| is bounded by the number of tokens remembered.
+        # Measured without it (run7, step 20k): |S| per head up to 193,000, most tokens' forgetting learned to
+        # zero, gradient spikes of 24x the median on 5% of batches, and divergence at 23k.
+        self.wi = nn.Linear(d, self.h)
         self.A = nn.Parameter(torch.linspace(math.log(0.1 / 0.69), math.log(1e-4 / 0.69), self.h))
         # the spin: rotation frequencies per channel pair, learned; geometric init like RoPE (base 10000)
         base = 10000.0 ** (-torch.arange(0, self.dk, 2).float() / self.dk)
@@ -97,11 +115,12 @@ class AssocCarrier(nn.Module):
         B, T, D = x.shape
         z = self.ln(x)
         q, k, v = [t(z).view(B, T, self.h, self.dk).transpose(1, 2) for t in (self.q, self.k, self.v)]
-        q, k = F.normalize(q, dim=-1), F.normalize(k, dim=-1)                     # scores in [-1, 1]
+        q, k, v = F.normalize(q, dim=-1), F.normalize(k, dim=-1), F.normalize(v, dim=-1)   # scores in [-1, 1], unit writes
+        k = k * torch.sigmoid(self.wi(z)).transpose(1, 2).unsqueeze(-1)            # write gate per head
         S0, p0 = (None, pos0) if h0 is None else h0
         pos = torch.arange(p0, p0 + T, device=x.device)
         q, k = rotate(q, self.theta, pos), rotate(k, self.theta, pos)
         la = self.logalpha(z).transpose(1, 2)                                     # (B,H,T)
-        o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk)
+        o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk, recompute=self.recompute)
         o = self.on(o).transpose(1, 2).reshape(B, T, D)
         return x + torch.sigmoid(self.gate) * self.o(o), (S, p0 + T)
