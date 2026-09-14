@@ -188,13 +188,27 @@ def kv_bytes(model, T):
 
 
 # --------------------------------------------------------------------------------- the axes
-def _docs(bins, ks, ps, rng, n, length, tok):
-    """n passages of `length` OUR tokens, decoded to text so every model tokenizes them itself."""
+EOD = 8191                                            # our tokenizer's end-of-document marker
+
+
+def _docs(bins, ks, ps, rng, n, length, tok, single_doc=False, sources=None):
+    """n passages of `length` OUR tokens, decoded to text so every model tokenizes them itself.
+
+    single_doc restricts the passage to lie INSIDE one document, which is the only way the context-rot
+    measurement means anything: 61.8% of our tokens live in documents longer than 2048, but a random span of
+    2048 usually straddles several unrelated ones, and a model that ignores the earlier ones is then right."""
+    keys = sources or ks
+    pr = np.array([ps[ks.index(k)] for k in keys]); pr = pr / pr.sum()
     out = []
-    for _ in range(n):
-        a = bins[ks[rng.choice(len(ks), p=ps)]]
-        j = rng.integers(0, len(a) - length - 2)
-        out.append(tok.decode([int(t) for t in a[j:j + length]]))
+    tries = 0
+    while len(out) < n and tries < 400 * n:
+        tries += 1
+        a = bins[keys[rng.choice(len(keys), p=pr)]]
+        j = int(rng.integers(0, len(a) - length - 2))
+        span = np.asarray(a[j:j + length])
+        if single_doc and (span == EOD).any():
+            continue
+        out.append(tok.decode([int(t) for t in span]))
     return out
 
 
@@ -214,12 +228,13 @@ def compression(model, texts, n_score=256):
     return nats / max(1, nbytes) / math.log(2), nbytes
 
 
-def context_rot(model, bins, ks, ps, tok, lengths=(512, 1024, 2048, 4096, 8192, 16384, 32768), n=8, n_score=256, seed=11):
+def context_rot(model, bins, ks, ps, tok, lengths=(512, 1024, 2048, 4096, 8192, 16384, 32768), n=8, n_score=256,
+                seed=11, single_doc=False, sources=None):
     """The SAME final 256 tokens, scored with more and more preceding context. Falling bits per byte means the
     model is using the context; rising means it is being hurt by it."""
     rng = np.random.default_rng(seed)
     out = {}
-    base = _docs(bins, ks, ps, rng, n, max(lengths) + n_score, tok)
+    base = _docs(bins, ks, ps, rng, n, max(lengths) + n_score, tok, single_doc=single_doc, sources=sources)
     for L in lengths:
         texts = []
         for b in base:
