@@ -46,6 +46,7 @@ def main():
     ap.add_argument("--data", default="/mnt/kv_cache/tok1b_v8192")
     ap.add_argument("--vocab", type=int, default=8192, help="must match the tokenizer the data was made with")
     ap.add_argument("--chunks", type=int, default=1, help="head chunks for the loss; >1 never holds all logits at once")
+    ap.add_argument("--scan-chunk", type=int, default=0, help="associative scan chunk (0: the carrier's default)")
     ap.add_argument("--out", default="/mnt/kv_cache/run1")
     ap.add_argument("--cap", type=float, default=20.0)
     ap.add_argument("--save-every", type=int, default=5000)
@@ -74,6 +75,9 @@ def main():
         m = LM(vocab=a.vocab, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
         # The carrier is 94% of an uncompiled step (195 ms of 206), because its cross-chunk pass is a python
         # loop issuing many tiny kernels. Compiling fuses them: 40 -> 154 ktok/s measured, a 3.8x speedup.
+        if a.scan_chunk:
+            for mx in m.mix:
+                if hasattr(mx, "chunk"): mx.chunk = a.scan_chunk
         fwd = torch.compile(m) if a.compile else m
         trunk = torch.compile(m.trunk) if a.compile else m.trunk
         P = sum(p.numel() for p in m.parameters())

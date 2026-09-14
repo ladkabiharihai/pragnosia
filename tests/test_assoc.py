@@ -76,5 +76,33 @@ check("forward_carried threads the memory across windows", tuple(lg.shape) == (2
 g = m.param_groups(); spec = sum(p.numel() for p in g[1]["params"])
 check("timescales, frequencies and gates are in the spectral (absolute-step) group", spec == sum(p.numel() for mx_ in m.mix for p in mx_.spectral_parameters()))
 
+if dev == "cuda":
+    print("\nbf16 matmuls, exact decay")
+    # The scan's four matmuls run in the autocast dtype; the cumulative decay, the exponentials and the state S
+    # stay fp32. Checked against the all-fp32 path: agreement to bf16's own precision, and NOT to less.
+    torch.manual_seed(7)
+    qb = F.normalize(torch.randn(2, 4, 512, 64, device=dev), dim=-1)
+    kb = F.normalize(torch.randn_like(qb), dim=-1); vb = F.normalize(torch.randn_like(qb), dim=-1)
+    lb = -F.softplus(torch.randn(2, 4, 512, device=dev)) * 0.01
+    o32, S32 = assoc_scan(qb, kb, vb, lb, None, chunk=128)
+    o16, S16 = assoc_scan(qb, kb, vb, lb, None, chunk=128, mm=torch.bfloat16)
+    ro = ((o16 - o32).abs().max() / o32.abs().max()).item(); rs = ((S16 - S32).abs().max() / S32.abs().max()).item()
+    check("outputs match fp32 to bf16 precision", ro < 0.03, f"max rel diff {ro:.1e}")
+    check("the accumulated state stays close (it is never demoted)", rs < 0.03, f"max rel diff {rs:.1e}")
+    # the decay itself must be exact: a 512-token chunk at a slow rate, where a bf16 cumsum would drift
+    ls = torch.full((1, 1, 512), -1e-3, device=dev)
+    o_a, _ = assoc_scan(qb[:1, :1], kb[:1, :1], vb[:1, :1], ls, None, chunk=512, mm=torch.bfloat16)
+    o_b, _ = assoc_scan(qb[:1, :1].double(), kb[:1, :1].double(), vb[:1, :1].double(), ls.double(), None, chunk=512)
+    check("a 512-token chunk at half-life 693 still matches fp64 within bf16 error",
+          ((o_a - o_b.float()).abs().max() / o_b.abs().max()).item() < 0.03,
+          f"max rel diff {((o_a - o_b.float()).abs().max() / o_b.abs().max()).item():.1e}")
+    # and the model under autocast uses it without changing the loss materially
+    torch.manual_seed(0)
+    mm_ = LM(vocab=512, d=128, layers=2, ctx=64, mixer="aspin").cuda(); xi_ = torch.randint(0, 512, (4, 65), device=dev)
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        la_ = F.cross_entropy(mm_(xi_[:, :-1]).float().reshape(-1, 512), xi_[:, 1:].reshape(-1))
+    lb_ = F.cross_entropy(mm_(xi_[:, :-1]).float().reshape(-1, 512), xi_[:, 1:].reshape(-1))
+    check("loss under autocast matches the fp32 loss", abs(la_.item() - lb_.item()) < 0.02, f"{la_.item():.4f} vs {lb_.item():.4f}")
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

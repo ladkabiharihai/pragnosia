@@ -39,22 +39,35 @@ def rotate(x, theta, pos):
     return torch.stack([x1 * c - x2 * s, x1 * s + x2 * c], dim=-1).flatten(-2)
 
 
-def _chunk(qc, kc, vc, lc, S):
-    """One chunk: outputs and the next state. Factored out so it can be recomputed in backward."""
+def _chunk(qc, kc, vc, lc, S, mm=None):
+    """One chunk: outputs and the next state. Factored out so it can be recomputed in backward.
+
+    mm is the dtype of the four matmuls. The decay arithmetic (cumulative sums, exponentials) and the state S
+    stay in the input dtype, which is fp32 or fp64; only the products run in mm. In bf16 that is the difference
+    between tensor cores and not: measured 2.3x slower than attention at 219M with everything in fp32, where
+    the FLOP count says this should be CHEAPER than attention at a 1024-token window (intra-chunk 2TCd plus
+    state 2Td*dk against attention's 2T^2d).
+
+    S accumulates over the whole sequence and is never demoted; the C x C score matrix is transient and is."""
     C = qc.shape[2]
     L = lc.cumsum(2)                                                              # (B,H,C), <= 0 and decreasing
     mask = torch.ones(C, C, device=qc.device, dtype=torch.bool).tril()
     dec = torch.exp((L.unsqueeze(3) - L.unsqueeze(2)).clamp(max=0.0)) * mask     # exp(L_t - L_s), s <= t
-    A = (qc @ kc.transpose(2, 3)) * dec                                          # (B,H,C,C)
     eL = torch.exp(L).unsqueeze(3)                                                # exp(L_t): decay from chunk start
-    o = A @ vc + (qc * eL) @ S                                                    # intra + carried
-    # S_new = exp(L_C) S + sum_s exp(L_C - L_s) k_s v_s^T
     w = torch.exp((L[:, :, -1:] - L).clamp(max=0.0)).unsqueeze(3)                 # (B,H,C,1)
-    S = eL[:, :, -1:] * S + (kc * w).transpose(2, 3) @ vc                        # eL[:, :, -1:] is (B,H,1,1)
+    if mm is None:
+        A = (qc @ kc.transpose(2, 3)) * dec
+        o = A @ vc + (qc * eL) @ S
+        S = eL[:, :, -1:] * S + (kc * w).transpose(2, 3) @ vc                    # eL[:, :, -1:] is (B,H,1,1)
+        return o, S
+    qm, km, vm = qc.to(mm), kc.to(mm), vc.to(mm)
+    A = (qm @ km.transpose(2, 3)).to(dec.dtype) * dec                            # scores fp32-accumulated, decay exact
+    o = (A.to(mm) @ vm).to(qc.dtype) + ((qc * eL).to(mm) @ S.to(mm)).to(qc.dtype)
+    S = eL[:, :, -1:] * S + ((kc * w).transpose(2, 3).to(mm) @ vm).to(S.dtype)
     return o, S
 
 
-def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = False):
+def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = False, mm=None):
     """o_t = sum_{s<=t} exp(L_t - L_s) (q_t . k_s) v_s  [+ exp(L_t) q_t . S0], chunked and stable.
 
     q, k, v: (B, H, T, D); logalpha: (B, H, T) <= 0 (log of the per-token forgetting); S0: (B, H, D, D) or None.
@@ -69,9 +82,9 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = Fa
         if recompute and torch.is_grad_enabled():
             # activation checkpointing per chunk: the C x C decay and score matrices of every chunk of every
             # layer otherwise stay alive for backward (the 219M model at B32 T1024 ran a 36 GiB cap out)
-            o, S = torch.utils.checkpoint.checkpoint(_chunk, qc, kc, vc, lc, S, use_reentrant=False)
+            o, S = torch.utils.checkpoint.checkpoint(_chunk, qc, kc, vc, lc, S, mm, use_reentrant=False)
         else:
-            o, S = _chunk(qc, kc, vc, lc, S)
+            o, S = _chunk(qc, kc, vc, lc, S, mm)
         outs.append(o)
     return torch.cat(outs, 2).to(q.dtype), S
 
@@ -121,6 +134,7 @@ class AssocCarrier(nn.Module):
         pos = torch.arange(p0, p0 + T, device=x.device)
         q, k = rotate(q, self.theta, pos), rotate(k, self.theta, pos)
         la = self.logalpha(z).transpose(1, 2)                                     # (B,H,T)
-        o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk, recompute=self.recompute)
+        mm = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") and x.is_cuda else None
+        o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk, recompute=self.recompute, mm=mm)
         o = self.on(o).transpose(1, 2).reshape(B, T, D)
         return x + torch.sigmoid(self.gate) * self.o(o), (S, p0 + T)
