@@ -16,9 +16,12 @@ MIX = {"dclm": .413, "fineweb-edu": .322, "starcoderdata": .130, "finemath": .03
        "open-web-math": .030, "arxiv": .030, "wikipedia": .023, "algebraic-stack": .015}
 
 
-def loaders(data):
+def loaders(data, only=None):
+    """only: restrict to these sources, renormalising the mix. Used for a long-context phase, where the point
+    is to train on windows that lie inside ONE document: 21% of documents in the full mix exceed 2048 tokens,
+    but arxiv's median is 12,710 and algebraic-stack's 10,375."""
     bins = {k: np.memmap(f"{data}/{k}.bin", dtype=np.uint16, mode="r")
-            for k in MIX if os.path.exists(f"{data}/{k}.bin")}
+            for k in MIX if os.path.exists(f"{data}/{k}.bin") and (only is None or k in only)}
     ks = list(bins)
     ps = np.array([MIX[k] for k in ks], dtype=np.float64); ps /= ps.sum()
     return bins, ks, ps
@@ -44,9 +47,11 @@ def main():
     ap.add_argument("--lr", type=float, default=6e-3)
     ap.add_argument("--warm", type=int, default=500)
     ap.add_argument("--data", default="/mnt/kv_cache/tok1b_v8192")
+    ap.add_argument("--sources", default="", help="comma-separated subset of the mix (long-context phase)")
     ap.add_argument("--vocab", type=int, default=8192, help="must match the tokenizer the data was made with")
     ap.add_argument("--chunks", type=int, default=1, help="head chunks for the loss; >1 never holds all logits at once")
     ap.add_argument("--scan-chunk", type=int, default=0, help="associative scan chunk (0: the carrier's default)")
+    ap.add_argument("--recompute", type=int, default=0, help="recompute each scan chunk in backward: at ctx 8192 this halves memory (25.4 -> 14.9 GiB) for 2% of speed")
     ap.add_argument("--out", default="/mnt/kv_cache/run1")
     ap.add_argument("--cap", type=float, default=20.0)
     ap.add_argument("--save-every", type=int, default=5000)
@@ -70,14 +75,14 @@ def main():
         from tokenizers import Tokenizer
         tok = Tokenizer.from_file(f"/mnt/kv_cache/tok_v{a.vocab}.json")
         assert tok.get_vocab_size() == a.vocab, (tok.get_vocab_size(), a.vocab)
-        bins, ks, ps = loaders(a.data)
+        bins, ks, ps = loaders(a.data, only=[x for x in a.sources.split(",") if x] or None)
         r.log(f"corpora {ks}")
         m = LM(vocab=a.vocab, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
         # The carrier is 94% of an uncompiled step (195 ms of 206), because its cross-chunk pass is a python
         # loop issuing many tiny kernels. Compiling fuses them: 40 -> 154 ktok/s measured, a 3.8x speedup.
-        if a.scan_chunk:
-            for mx in m.mix:
-                if hasattr(mx, "chunk"): mx.chunk = a.scan_chunk
+        for mx in m.mix:
+            if a.scan_chunk and hasattr(mx, "chunk"): mx.chunk = a.scan_chunk
+            if a.recompute and hasattr(mx, "recompute"): mx.recompute = True
         fwd = torch.compile(m) if a.compile else m
         trunk = torch.compile(m.trunk) if a.compile else m.trunk
         P = sum(p.numel() for p in m.parameters())
@@ -94,9 +99,21 @@ def main():
 
         # RESUME. The last run diverged at step 14,400 and the trainer then wrote NaN weights over a healthy
         # checkpoint, so the only survivor was a copy taken by accident for a probe.
-        start = 0
+        start = 0; grew_ctx = None
         if a.resume and os.path.exists(a.resume):
             sd = torch.load(a.resume, map_location="cuda")
+            if sd["cfg"].get("ctx", a.ctx) != a.ctx:
+                # A LONG-CONTEXT PHASE. The positional table is sized to the old window; tile the trained
+                # pattern to fill the new one. That is exactly what inference already does when it processes a
+                # long input as consecutive windows with the state carried, so training this way teaches the
+                # model to use the state ACROSS a window boundary rather than only within one.
+                old_ctx = sd["cfg"]["ctx"]
+                reps = -(-a.ctx // old_ctx)
+                w = sd["model"]["p.weight"]
+                sd["model"]["p.weight"] = w.repeat(reps, 1)[: a.ctx]
+                r.log(f"extended the positional table {old_ctx} -> {a.ctx} by tiling the trained pattern {reps}x")
+                sd["cfg"]["ctx"] = a.ctx
+                grew_ctx = (old_ctx, sd["cfg"]["d"])
             if sd["cfg"]["d"] != m.d:                      # a grown run: rebuild at the checkpoint's width
                 m = LM(vocab=a.vocab, d=sd["cfg"]["d"], layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
                 fwd = torch.compile(m) if a.compile else m
@@ -111,6 +128,13 @@ def main():
             if "opt" in sd:
                 try:
                     opt.load_state_dict(sd["opt"])
+                    if grew_ctx is not None:
+                        # the positional table grew with the window, so its second moment is still sized to
+                        # the old one. Fabric.grew extends it with the median of the existing rows; without
+                        # this the fused update tried to add a 2048-vector to an 8192-vector and the compile
+                        # failed rather than silently doing something wrong.
+                        opt.grew(m.p.weight, grew_ctx)
+                        r.log(f"extended the optimizer's statistics for the positional table to {a.ctx} rows")
                     r.log(f"resumed optimizer state ({len(sd['opt'].get('state', {}))} tensors)")
                 except Exception as e:
                     r.log(f"optimizer state present but not loadable ({type(e).__name__}); starting cold")
