@@ -80,5 +80,30 @@ with torch.no_grad(): same = torch.allclose(m2(x[:, :-1]), m(x[:, :-1]), atol=1e
 check("state_dict loads into a fresh model of the new width and computes the same thing", same)
 check("forward_carried works at the new width", tuple(m.forward_carried(torch.randint(0, V, (2, 64), device=dev)).shape) == (2, 32, V))
 
+print("\nthe attention control's KV cache (the scorecard needs it to decode honestly)")
+# Without a cache, feeding one token at a time gives attention a context of one token; with a cache and
+# is_causal it masks the wrong pairs. Both were measured as quality regressions before being caught.
+ma = LM(vocab=V, d=64, layers=2, ctx=32, mixer="attn").to(dev).eval()
+xa = torch.randint(0, V, (1, 12), device=dev)
+with torch.no_grad():
+    full = ma(xa)
+    st = [None] * ma.layers; lg = None
+    for t in range(12):
+        h = ma.e(xa[:, t:t + 1]) + ma.p(torch.tensor([t], device=dev))
+        for i, (mx, mp) in enumerate(zip(ma.mix, ma.mlp)): h, st[i] = mx(h, st[i]); h = mp(h)
+        lg = F.linear(ma.n(h), ma.e.weight)[0, -1]
+    check("token-at-a-time with the cache equals the full forward", (lg - full[0, -1]).abs().max().item() < 1e-5,
+          f"max diff {(lg - full[0, -1]).abs().max().item():.1e}")
+    st = [None] * ma.layers
+    h = ma.e(xa[:, :8]) + ma.p(torch.arange(8, device=dev))
+    for i, (mx, mp) in enumerate(zip(ma.mix, ma.mlp)): h, st[i] = mx(h, st[i]); h = mp(h)
+    h = ma.e(xa[:, 8:]) + ma.p(torch.arange(8, 12, device=dev))
+    for i, (mx, mp) in enumerate(zip(ma.mix, ma.mlp)): h, st[i] = mx(h, st[i]); h = mp(h)
+    lg2 = F.linear(ma.n(h), ma.e.weight)
+    check("a block of 4 after a prefill of 8 equals the full forward (the mask is built on absolute positions)",
+          (lg2[0] - full[0, 8:]).abs().max().item() == 0.0)
+    check("no cache means no memory: the same call with h0=None differs",
+          not torch.allclose(ma.mix[0](ma.e(xa[:, 11:12]))[0], ma.mix[0](ma.e(xa[:, 11:12]), (st[0][0][:, :, :11], st[0][1][:, :, :11]))[0]))
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

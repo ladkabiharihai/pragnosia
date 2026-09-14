@@ -39,11 +39,29 @@ class Attn(nn.Module):
         self.qn = nn.RMSNorm(d // heads); self.kn = nn.RMSNorm(d // heads)
 
     def forward(self, x, h0=None):
+        """h0 is a KV cache (k, v) from earlier tokens of the SAME window, for incremental decoding.
+
+        Without it, decoding one token at a time gives attention a context of exactly that one token, which is
+        not attention at all: the control's generations were pure loops (96% repeated 4-grams) and its decode
+        speed was measured on a model that could not see. The cache is what a real transformer does, and it is
+        also the thing that grows with every token while a recurrent state does not."""
         B_, T_, D = x.shape; z = self.n(x)
         q, k, v = [t(z).view(B_, T_, self.h, D // self.h).transpose(1, 2) for t in (self.q, self.k, self.v)]
         q, k = self.qn(q), self.kn(k)
-        a = F.scaled_dot_product_attention(q, k, v, is_causal=True).transpose(1, 2).reshape(B_, T_, D)
-        return x + self.o(a), None
+        if h0 is not None:
+            k = torch.cat([h0[0], k], dim=2); v = torch.cat([h0[1], v], dim=2)
+        Lk = k.shape[2]
+        if Lk == T_:
+            a = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:
+            # is_causal aligns its mask to the top-left, so with a cache (k longer than q) it masks the WRONG
+            # pairs: the control's bits per byte went from 1.12 to 2.99 before this was caught. Build the mask
+            # against absolute positions instead.
+            i = torch.arange(Lk - T_, Lk, device=x.device).unsqueeze(1)
+            j = torch.arange(Lk, device=x.device).unsqueeze(0)
+            a = F.scaled_dot_product_attention(q, k, v, attn_mask=(j <= i).view(1, 1, T_, Lk))
+        a = a.transpose(1, 2).reshape(B_, T_, D)
+        return x + self.o(a), (k, v)
 
     def spectral_parameters(self):
         return []
