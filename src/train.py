@@ -246,7 +246,11 @@ def main():
                                 "cfg": dict(vocab=a.vocab, d=m.d, layers=a.layers,
                                             mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer)},
                                f"{a.out}/ckpt.pt")
-        r.log(f"final loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f}, {skipped} spike-skips")
+        if ema is None:
+            r.log(f"NOTHING TO DO: resumed at step {start} with --steps {a.steps}. A resumed run counts from the "
+                  f"checkpoint's step, so --steps must exceed it.")
+        else:
+            r.log(f"final loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f}, {skipped} spike-skips")
 
 
 if __name__ == "__main__":
