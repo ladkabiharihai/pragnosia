@@ -87,7 +87,14 @@ class LM(nn.Module):
         self.e = nn.Embedding(vocab, d)
         self.p = nn.Embedding(ctx, d)
         mk = {"spin": lambda d: SpinCarrier(d), "gspin": lambda d: SpinCarrier(d, gated="io"),
-              "fspin": lambda d: SpinCarrier(d, gated="rf"), "aspin": AssocCarrier, "attn": Attn}[mixer]
+              "fspin": lambda d: SpinCarrier(d, gated="rf"), "aspin": AssocCarrier,
+              "dspin": lambda d: AssocCarrier(d, delta=True),
+              # FEWER, WIDER heads: the state per layer is h*(d/h)^2 = d^2/h, so four heads hold 2.7x the memory
+              # of eleven at the same parameter count, for 12% of the speed (196 against 222 ktok/s).
+              "wspin": lambda d: AssocCarrier(d, heads=4),
+              # both fixes at once: wide heads and the delta write rule, which replaces a key's stored value
+              # instead of accumulating onto it.
+              "xspin": lambda d: AssocCarrier(d, delta=True, heads=4), "attn": Attn}[mixer]
         self.mix = nn.ModuleList([mk(d) for _ in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)

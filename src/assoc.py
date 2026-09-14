@@ -39,7 +39,32 @@ def rotate(x, theta, pos):
     return torch.stack([x1 * c - x2 * s, x1 * s + x2 * c], dim=-1).flatten(-2)
 
 
-def _chunk(qc, kc, vc, lc, S, mm=None):
+_BLOCK = 16      # rows per forward-substitution block in the delta solve
+
+
+@torch.compiler.disable
+def _delta_solve(rhs, N, C, dtype, device):
+    """Excluded from torch.compile: the block loop unrolls into a graph inductor spent 30 minutes on and never
+    finished. Eager matmuls are fast; only this function breaks the graph."""
+    b = min(_BLOCK, C)
+    W = torch.zeros_like(rhs)
+    for i0 in range(0, C, b):
+        i1 = min(i0 + b, C)
+        r = rhs[:, :, i0:i1]
+        if i0:
+            r = r - N[:, :, i0:i1, :i0] @ W[:, :, :i0]
+        R = -N[:, :, i0:i1, i0:i1]
+        X = torch.eye(i1 - i0, device=device, dtype=dtype)
+        m_ = 1
+        while m_ < (i1 - i0):
+            X = X + R @ X
+            R = R @ R
+            m_ *= 2
+        W = torch.cat([W[:, :, :i0], X @ r, W[:, :, i1:]], dim=2)
+    return W
+
+
+def _chunk(qc, kc, vc, lc, S, mm=None, bc=None):
     """One chunk: outputs and the next state. Factored out so it can be recomputed in backward.
 
     mm is the dtype of the four matmuls. The decay arithmetic (cumulative sums, exponentials) and the state S
@@ -55,6 +80,29 @@ def _chunk(qc, kc, vc, lc, S, mm=None):
     dec = torch.exp((L.unsqueeze(3) - L.unsqueeze(2)).clamp(max=0.0)) * mask     # exp(L_t - L_s), s <= t
     eL = torch.exp(L).unsqueeze(3)                                                # exp(L_t): decay from chunk start
     w = torch.exp((L[:, :, -1:] - L).clamp(max=0.0)).unsqueeze(3)                 # (B,H,C,1)
+    if bc is not None:
+        # DELTA WRITE. The plain rule adds k v^T for every token, so two values written under similar keys leave
+        # their sum and neither reads back: the associative interference this architecture loses to attention on
+        # exact-retrieval text. The delta rule writes v MINUS what the memory already returns for that key, so a
+        # key's value is replaced rather than accumulated.
+        #
+        # Each token's correction has to see the writes of the tokens before it in the same chunk. Correcting
+        # them all against the chunk's incoming state instead (Jacobi) overshoots when keys are correlated: it
+        # is stable only for beta < 2/chunk, and at chunk 64 the loss went non-finite at step 128. Writing the
+        # recursion out gives, with W the residuals actually written and A[t,s] = (k_t . k_s) exp(L_t - L_s),
+        #     (I + diag(beta) strictly_lower(A)) W = diag(beta) (V - exp(L) K S),
+        # a unit lower triangular solve: exact, parallel over the chunk, and contractive for any beta in (0,1).
+        # The result does not depend on the chunk size, which is the test.
+        rhs = bc.unsqueeze(-1) * (vc - eL * (kc @ S))
+        N = bc.unsqueeze(-1) * ((kc @ kc.transpose(2, 3)) * dec).tril(-1)         # strictly lower, nilpotent
+        # Solve (I + N) W = rhs by forward substitution in BLOCKS of b rows.
+        #
+        # Two faster-looking routes were tried and both failed. torch.linalg.solve_triangular issues one tiny
+        # factorisation per chunk per head per layer, about 67,000 per step, and training crawled at 17 ktok/s.
+        # Summing the Neumann series sum_k (-N)^k by doubling is exact in exact arithmetic, N being nilpotent,
+        # but its intermediate powers reach norm C^k before they vanish and fp32 cancels: chunk 16 and chunk 256
+        # disagreed by 1.1. Blocked substitution keeps every intermediate bounded, is exact, and is all matmuls.
+        vc = _delta_solve(rhs, N, C, qc.dtype, qc.device)
     if mm is None:
         A = (qc @ kc.transpose(2, 3)) * dec
         o = A @ vc + (qc * eL) @ S
@@ -67,7 +115,7 @@ def _chunk(qc, kc, vc, lc, S, mm=None):
     return o, S
 
 
-def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = False, mm=None):
+def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = False, mm=None, beta=None):
     """o_t = sum_{s<=t} exp(L_t - L_s) (q_t . k_s) v_s  [+ exp(L_t) q_t . S0], chunked and stable.
 
     q, k, v: (B, H, T, D); logalpha: (B, H, T) <= 0 (log of the per-token forgetting); S0: (B, H, D, D) or None.
@@ -79,21 +127,23 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = Fa
     outs = []
     for s0 in range(0, T, chunk):
         qc, kc, vc, lc = q[:, :, s0:s0 + chunk], k[:, :, s0:s0 + chunk], v[:, :, s0:s0 + chunk], la[:, :, s0:s0 + chunk]
+        bc = None if beta is None else beta[:, :, s0:s0 + chunk]
         if recompute and torch.is_grad_enabled():
             # activation checkpointing per chunk: the C x C decay and score matrices of every chunk of every
             # layer otherwise stay alive for backward (the 219M model at B32 T1024 ran a 36 GiB cap out)
-            o, S = torch.utils.checkpoint.checkpoint(_chunk, qc, kc, vc, lc, S, mm, use_reentrant=False)
+            o, S = torch.utils.checkpoint.checkpoint(_chunk, qc, kc, vc, lc, S, mm, bc, use_reentrant=False)
         else:
-            o, S = _chunk(qc, kc, vc, lc, S, mm)
+            o, S = _chunk(qc, kc, vc, lc, S, mm, bc)
         outs.append(o)
     return torch.cat(outs, 2).to(q.dtype), S
 
 
 class AssocCarrier(nn.Module):
-    def __init__(self, d: int, heads: int | None = None, chunk: int = 64, recompute: bool = False):
+    def __init__(self, d: int, heads: int | None = None, chunk: int = 64, recompute: bool = False,
+                 delta: bool = False, head_dim: int | None = None):
         super().__init__()
-        self.d = d; self.recompute = recompute
-        self.h = heads or max(1, d // 64)
+        self.d = d; self.recompute = recompute; self.delta = delta
+        self.h = heads or max(1, d // (head_dim or 64))
         assert d % self.h == 0 and (d // self.h) % 2 == 0
         self.dk = d // self.h
         self.chunk = chunk
@@ -109,6 +159,9 @@ class AssocCarrier(nn.Module):
         # Measured without it (run7, step 20k): |S| per head up to 193,000, most tokens' forgetting learned to
         # zero, gradient spikes of 24x the median on 5% of batches, and divergence at 23k.
         self.wi = nn.Linear(d, self.h)
+        # the delta rule's write strength: 0 leaves the memory alone, 1 replaces this key's value outright
+        if delta:
+            self.wb = nn.Linear(d, self.h)
         self.A = nn.Parameter(torch.linspace(math.log(0.1 / 0.69), math.log(1e-4 / 0.69), self.h))
         # the spin: rotation frequencies per channel pair, learned; geometric init like RoPE (base 10000)
         base = 10000.0 ** (-torch.arange(0, self.dk, 2).float() / self.dk)
@@ -129,12 +182,14 @@ class AssocCarrier(nn.Module):
         z = self.ln(x)
         q, k, v = [t(z).view(B, T, self.h, self.dk).transpose(1, 2) for t in (self.q, self.k, self.v)]
         q, k, v = F.normalize(q, dim=-1), F.normalize(k, dim=-1), F.normalize(v, dim=-1)   # scores in [-1, 1], unit writes
-        k = k * torch.sigmoid(self.wi(z)).transpose(1, 2).unsqueeze(-1)            # write gate per head
+        if not self.delta:
+            k = k * torch.sigmoid(self.wi(z)).transpose(1, 2).unsqueeze(-1)        # write gate per head
         S0, p0 = (None, pos0) if h0 is None else h0
         pos = torch.arange(p0, p0 + T, device=x.device)
         q, k = rotate(q, self.theta, pos), rotate(k, self.theta, pos)
         la = self.logalpha(z).transpose(1, 2)                                     # (B,H,T)
         mm = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") and x.is_cuda else None
-        o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk, recompute=self.recompute, mm=mm)
+        bt = torch.sigmoid(self.wb(z)).transpose(1, 2) if self.delta else None     # (B,H,T)
+        o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk, recompute=self.recompute, mm=mm, beta=bt)
         o = self.on(o).transpose(1, 2).reshape(B, T, D)
         return x + torch.sigmoid(self.gate) * self.o(o), (S, p0 + T)

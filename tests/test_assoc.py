@@ -104,5 +104,38 @@ if dev == "cuda":
     lb_ = F.cross_entropy(mm_(xi_[:, :-1]).float().reshape(-1, 512), xi_[:, 1:].reshape(-1))
     check("loss under autocast matches the fp32 loss", abs(la_.item() - lb_.item()) < 0.02, f"{la_.item():.4f} vs {lb_.item():.4f}")
 
+print("\nthe delta write rule")
+# The plain rule ADDS k v^T per token, so two values under similar keys leave their sum and neither reads back.
+# The delta rule writes v minus what the memory already returns for that key. Each token's correction must see
+# the writes before it in its chunk; a per-chunk (Jacobi) correction is stable only for beta < 2/chunk and went
+# non-finite at step 128 of a real run. The triangular solve is exact and chunk-independent, which is the test.
+kk = F.normalize(torch.randn(1, 1, 1, 4, device=dev, dtype=torch.float64), dim=-1)
+va = torch.tensor([[[[1., 0, 0, 0]]]], device=dev, dtype=torch.float64)
+vb = torch.tensor([[[[0., 1., 0, 0]]]], device=dev, dtype=torch.float64)
+Kd = torch.cat([kk, kk, kk], 2); Vd = torch.cat([va, vb, va], 2)
+lad = torch.zeros(1, 1, 3, device=dev, dtype=torch.float64); bed = torch.ones(1, 1, 3, device=dev, dtype=torch.float64)
+r1 = assoc_scan(Kd, Kd, Vd, lad, None, chunk=1, beta=bed)[0][0, 0, 1]
+r3 = assoc_scan(Kd, Kd, Vd, lad, None, chunk=3, beta=bed)[0][0, 0, 1]
+rp = assoc_scan(Kd, Kd, Vd, lad, None, chunk=3)[0][0, 0, 1]
+check("a key written twice reads back the SECOND value", torch.allclose(r1, vb[0, 0, 0], atol=1e-9),
+      f"{[round(x, 4) for x in r1.tolist()]}")
+check("and the plain rule reads back their sum, which is the interference", torch.allclose(rp, (va + vb)[0, 0, 0], atol=1e-9),
+      f"{[round(x, 4) for x in rp.tolist()]}")
+check("chunk size does not change the delta result", torch.allclose(r1, r3, atol=1e-10))
+torch.manual_seed(1)
+Kr = F.normalize(torch.randn(2, 4, 256, 64, device=dev), dim=-1); Vr = F.normalize(torch.randn_like(Kr), dim=-1)
+lr_ = torch.zeros(2, 4, 256, device=dev); br = torch.ones(2, 4, 256, device=dev)
+y16, S16 = assoc_scan(Kr, Kr, Vr, lr_, None, chunk=16, beta=br)
+y256, S256 = assoc_scan(Kr, Kr, Vr, lr_, None, chunk=256, beta=br)
+check("256 correlated writes stay bounded (the Jacobi form diverged here)", S16.abs().max().item() < 2.0,
+      f"|S| max {S16.abs().max().item():.3f}")
+check("chunk 16 and chunk 256 agree to fp32 rounding", (y16 - y256).abs().max().item() < 1e-5,
+      f"max diff {(y16 - y256).abs().max().item():.1e}")
+md = LM(vocab=512, d=128, layers=2, ctx=64, mixer="dspin").to(dev)
+xd = torch.randint(0, 512, (2, 65), device=dev)
+ld = F.cross_entropy(md(xd[:, :-1]).reshape(-1, 512), xd[:, 1:].reshape(-1)); ld.backward()
+check("dspin trains: finite loss and gradients", torch.isfinite(ld).item()
+      and all(torch.isfinite(p.grad).all().item() for p in md.parameters() if p.grad is not None), f"loss {ld.item():.3f}")
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)
