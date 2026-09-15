@@ -94,7 +94,11 @@ class LM(nn.Module):
               "wspin": lambda d: AssocCarrier(d, heads=4),
               # both fixes at once: wide heads and the delta write rule, which replaces a key's stored value
               # instead of accumulating onto it.
-              "xspin": lambda d: AssocCarrier(d, delta=True, heads=4), "attn": Attn}[mixer]
+              "xspin": lambda d: AssocCarrier(d, delta=True, heads=4),
+              # two heads: d^2/2 of state per layer, 5.5x the eleven-head carrier's. The wide (four-head) run
+              # closed 18% of the long-context gap and the gain was larger at long context than at short, which
+              # says the state is what is being exhausted; this is the next point on that curve.
+              "w2spin": lambda d: AssocCarrier(d, heads=2), "attn": Attn}[mixer]
         self.mix = nn.ModuleList([mk(d) for _ in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
