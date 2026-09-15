@@ -246,7 +246,7 @@ def _(k, v, la, be, X, S0, has_s0, bc, bv):
 @triton.jit
 def _delta_loop_bwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, w_ptr, sent_ptr, gs_ptr, dw_ptr, dsfin_ptr,
                     dk_ptr, dv_ptr, dla_ptr, dbe_ptr, dx_ptr, ds0_ptr,
-                    T, NC, s_bh_t, s_bh_l, D: tl.constexpr, BC: tl.constexpr, BV: tl.constexpr):
+                    T, NC, NBH, s_bh_t, s_bh_l, D: tl.constexpr, BC: tl.constexpr, BV: tl.constexpr):
     """Reverse loop over chunks for the delta rule. Per chunk, with S the entering state, D_S the gradient on
     the state LEAVING the chunk, G the gradient on the entering state from the output kernel's read of it, and
     dW_out the gradient on the residuals from the output kernel:
@@ -302,11 +302,14 @@ def _delta_loop_bwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, w_ptr, sent_ptr, gs_ptr
         dLC = tl.sum(dw, 0) + da * a
         tot = tl.sum(dL, 0)
         dla = tot - tl.cumsum(dL, 0) + dL + dLC
-        # shared across column blocks: accumulate
-        tl.atomic_add(dk_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rd[None, :], dK, mask=tm[:, None])
-        tl.atomic_add(dla_ptr + bh * s_bh_l + t0 + rt, dla, mask=tm)
-        tl.atomic_add(dbe_ptr + bh * s_bh_l + t0 + rt, dbe, mask=tm)
-        tl.atomic_add(dx_ptr + (bh * NC + c) * BC * BC + rt[:, None] * BC + rt[None, :], dX)
+        # shared across column blocks: each program writes its own partial (slot jb), summed outside.
+        # Atomic adds here cost 7.85 ms per micro-step, eight times the forward loop, from the two programs of
+        # one batch-head contending on the same 64 x 64 tiles.
+        NB = D // BV
+        tl.store(dk_ptr + (jb * NBH + bh) * s_bh_t + (t0 + rt)[:, None] * D + rd[None, :], dK, mask=tm[:, None])
+        tl.store(dla_ptr + (jb * NBH + bh) * s_bh_l + t0 + rt, dla, mask=tm)
+        tl.store(dbe_ptr + (jb * NBH + bh) * s_bh_l + t0 + rt, dbe, mask=tm)
+        tl.store(dx_ptr + ((jb * NBH + bh) * NC + c) * BC * BC + rt[:, None] * BC + rt[None, :], dX)
         tl.store(dv_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], dV, mask=tm[:, None])
         DS = DSn
     tl.store(ds0_ptr + bh * D * D + rd[:, None] * D + rj[None, :], DS)
@@ -317,17 +320,18 @@ def _op_delta_bwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.
                   W: torch.Tensor, sent: torch.Tensor, gsent: torch.Tensor, dW: torch.Tensor,
                   dsfin: torch.Tensor, bc: int, bv: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     B, H, T, D = k.shape; NC = X.shape[2]; BH = B * H
-    dk = torch.zeros(B, H, T, D, device=k.device, dtype=torch.float32)
+    NB = D // bv
+    dk = torch.empty(NB, B, H, T, D, device=k.device, dtype=torch.float32)
     dv = torch.empty(B, H, T, D, device=k.device, dtype=torch.float32)
-    dla = torch.zeros(B, H, T, device=k.device, dtype=torch.float32)
-    dbe = torch.zeros(B, H, T, device=k.device, dtype=torch.float32)
-    dX = torch.zeros(B, H, NC, bc, bc, device=k.device, dtype=torch.float32)
+    dla = torch.empty(NB, B, H, T, device=k.device, dtype=torch.float32)
+    dbe = torch.empty(NB, B, H, T, device=k.device, dtype=torch.float32)
+    dX = torch.empty(NB, B, H, NC, bc, bc, device=k.device, dtype=torch.float32)
     dS0 = torch.empty(B, H, D, D, device=k.device, dtype=torch.float32)
-    _delta_loop_bwd[(BH, D // bv)](k.contiguous(), v.contiguous(), la.contiguous(), be.contiguous(), X.contiguous(),
-                                   W.contiguous(), sent.contiguous(), gsent.contiguous(), dW.contiguous().float(),
-                                   dsfin.contiguous().float(), dk, dv, dla, dbe, dX, dS0,
-                                   T, NC, T * D, T, D=D, BC=bc, BV=bv)
-    return dk, dv, dla, dbe, dX, dS0
+    _delta_loop_bwd[(BH, NB)](k.contiguous(), v.contiguous(), la.contiguous(), be.contiguous(), X.contiguous(),
+                              W.contiguous(), sent.contiguous(), gsent.contiguous(), dW.contiguous().float(),
+                              dsfin.contiguous().float(), dk, dv, dla, dbe, dX, dS0,
+                              T, NC, BH, T * D, T, D=D, BC=bc, BV=bv)
+    return dk.sum(0), dv, dla.sum(0), dbe.sum(0), dX.sum(0), dS0
 
 
 @_op_delta_bwd.register_fake
