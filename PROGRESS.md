@@ -349,3 +349,8 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
 - `2026-09-14 11:48:47 UTC` **train** (0.9 min) ok
   d704 L12 mlp4 ctx2048 B16 30000 steps -> /mnt/kv_cache/run12
   (log `logs/20260914-114754-train.log`, seed 0)
+- `2026-09-14 14:13:17 UTC` **train** (66.3 min) ok
+  d704 L12 mlp4 ctx2048 B16 30000 steps -> /mnt/kv_cache/run13
+  (log `logs/20260914-130700-train.log`, seed 0)
+- `2026-09-15 06:24:31 UTC` Wide heads (4 x 176 instead of 11 x 64, 2.8x the state at the same parameters) finished the ctx-2048 pipeline at 1.2013 against 1.2100 for the narrow version: a real but small gain. And a third idle gap: sixteen hours overnight.
+  run13 (wspin, 78M, ctx 2048, 30k steps, 13 skips, 66 min): 1.3498 at 10k, 1.2424 at 20k, 1.2013 at 30k against the eleven-head run9's 1.3660 / 1.2515 / 1.2100 on the same sample at the same steps. So 2.8x the associative state buys 0.009 bits/byte at ctx 2048 for 12% of the speed. Whether it buys more at long context, where the state is the thing being exhausted, is the question its ctx-8192 phase answers (run14, launched 06:25 UTC, ~35 min), and then the paired test against attention's 0.8301. THE GAP: run13 ended at 14:13 UTC on the 14th and nothing ran until 06:24 on the 15th, because the session ended with the run and the loop with it, for the third time. Sixteen hours of the week's last two days. The delta rule remains implemented, exact and tested (25/25) but unrun: memory-hungry outside compile and pathological inside it; it needs the same treatment the scan got, a kernel, and there is no time left in the week for that.
