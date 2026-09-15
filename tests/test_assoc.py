@@ -50,8 +50,14 @@ m = AssocCarrier(64).to(dev); x = torch.randn(2, 70, 64, device=dev)
 y, (S, p) = m(x)
 check("output shape and state shape", tuple(y.shape) == (2, 70, 64) and tuple(S.shape) == (2, 1, 64, 64) and p == 70)
 ya, sa = m(x[:, :30]); yb, _ = m(x[:, 30:], h0=sa)
-check("carried across windows == one pass (rotation positions continue)", torch.allclose(torch.cat([ya, yb], 1), y, atol=1e-4),
+check("carried across windows == one pass, kernel path (bf16 matmuls, so 1e-2)", torch.allclose(torch.cat([ya, yb], 1), y, atol=1e-2),
       f"max diff {(torch.cat([ya, yb], 1) - y).abs().max().item():.1e}")
+m.kernel = False
+y, _ = m(x); ya, sa = m(x[:, :30]); yb, _ = m(x[:, 30:], h0=sa)
+check("carried across windows == one pass, torch path (fp32, so 1e-4)", torch.allclose(torch.cat([ya, yb], 1), y, atol=1e-4),
+      f"max diff {(torch.cat([ya, yb], 1) - y).abs().max().item():.1e}")
+m.kernel = True
+y, _ = m(x)                                      # the kernel path again: the causal check must compare like with like
 x2 = x.clone(); x2[:, 50] += 3.0
 y2, _ = m(x2)
 check("causal: editing token 50 changes nothing before it", torch.equal(y2[:, :50], y[:, :50]) or (y2[:, :50] - y[:, :50]).abs().max().item() == 0.0,
@@ -136,6 +142,25 @@ xd = torch.randint(0, 512, (2, 65), device=dev)
 ld = F.cross_entropy(md(xd[:, :-1]).reshape(-1, 512), xd[:, 1:].reshape(-1)); ld.backward()
 check("dspin trains: finite loss and gradients", torch.isfinite(ld).item()
       and all(torch.isfinite(p.grad).all().item() for p in md.parameters() if p.grad is not None), f"loss {ld.item():.3f}")
+
+if dev == "cuda":
+    print("\nthe Triton scan kernel against the two-pass form")
+    from src.assoc_kernel import assoc_scan_kernel
+    torch.manual_seed(0)
+    for Dk in (64, 128):
+        qk = F.normalize(torch.randn(2, 3, 333, Dk, device=dev), dim=-1); kk_ = F.normalize(torch.randn_like(qk), dim=-1)
+        vk = F.normalize(torch.randn_like(qk), dim=-1); lak = -F.softplus(torch.randn(2, 3, 333, device=dev)) * 0.05
+        S0k = torch.randn(2, 3, Dk, Dk, device=dev) * 0.1
+        yr, Sr = assoc_scan(qk, kk_, vk, lak, S0k, chunk=64, mm=torch.bfloat16); yk, Sk = assoc_scan_kernel(qk, kk_, vk, lak, S0k)
+        check(f"D={Dk}, T=333 (partial last chunk), carried S0: forward within bf16 precision",
+              ((yk - yr).abs().max() / yr.abs().max()).item() < 1e-2 and ((Sk - Sr).abs().max() / Sr.abs().max()).item() < 1e-2,
+              f"y {((yk-yr).abs().max()/yr.abs().max()).item():.1e} S {((Sk-Sr).abs().max()/Sr.abs().max()).item():.1e}")
+        args = [t.clone().requires_grad_(True) for t in (qk, kk_, vk, lak)]; wk = torch.randn_like(qk)
+        (assoc_scan(*args, None, chunk=64)[0] * wk).sum().backward(); gr = [t.grad.clone() for t in args]
+        for t in args: t.grad = None
+        (assoc_scan_kernel(*args, None)[0] * wk).sum().backward()
+        worst = max(((a.grad - b).abs().max() / (b.abs().max() + 1e-12)).item() for a, b in zip(args, gr))
+        check(f"D={Dk}: gradients of q, k, v and the decay within bf16 precision of the fp32 reference", worst < 1e-2, f"worst {worst:.1e}")
 
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

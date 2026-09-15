@@ -192,7 +192,7 @@ def _unit_lower_inverse(N, b=16):
     return torch.cat(cols, dim=-2)
 
 
-def _scan_twopass_delta(q, k, v, la, be, S, chunk, mm):
+def _scan_twopass_delta(q, k, v, la, be, S, chunk, mm, kernel=False):
     """The DELTA rule in the same two-pass shape.
 
     S_t = a_t S_{t-1} + b_t k_t (v_t - k_t S_{t-1})^T: a key's stored value is replaced, not accumulated onto.
@@ -218,7 +218,7 @@ def _scan_twopass_delta(q, k, v, la, be, S, chunk, mm):
     a = torch.exp(L[..., -1])
     KK = (kc @ kc.transpose(3, 4)) * dec
     X = _unit_lower_inverse(bc.unsqueeze(-1) * KK.tril(-1))                       # (B,H,NC,C,C), batched
-    A = (qc @ kc.transpose(3, 4)) * dec
+    A = None if (kernel and q.is_cuda and D in (64, 128) and C == 64) else (qc @ kc.transpose(3, 4)) * dec
     kw = (kc * w).transpose(3, 4)                                                  # (B,H,NC,D,C)
     ent = []; Ws = []
     for c in range(NC):
@@ -228,11 +228,18 @@ def _scan_twopass_delta(q, k, v, la, be, S, chunk, mm):
         Ws.append(Wc)
         S = a[:, :, c, None, None] * S + kw[:, :, c] @ Wc
     Sent = torch.stack(ent, 2); W = torch.stack(Ws, 2)
-    o = (A @ W + (qc * eL) @ Sent).reshape(B, H, NC * C, D)[:, :, :T]
+    if kernel and q.is_cuda and D in (64, 128) and C == 64:
+        # the C x C part through the Triton kernel, with the residuals W in the value slot: it recomputes the
+        # decayed scores in backward instead of saving them, which is where the 27 GiB went
+        from .assoc_kernel import _op_out
+        o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), W.reshape(B, H, NC * C, D).to(torch.bfloat16),
+                    la, Sent)[:, :, :T]
+    else:
+        o = (A @ W + (qc * eL) @ Sent).reshape(B, H, NC * C, D)[:, :, :T]
     return o, S
 
 
-def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = False, mm=None, beta=None):
+def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = False, mm=None, beta=None, kernel=False):
     """o_t = sum_{s<=t} exp(L_t - L_s) (q_t . k_s) v_s  [+ exp(L_t) q_t . S0], chunked and stable.
 
     q, k, v: (B, H, T, D); logalpha: (B, H, T) <= 0 (log of the per-token forgetting); S0: (B, H, D, D) or None.
@@ -242,7 +249,7 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = Fa
     q, k, v, la = q.to(rt), k.to(rt), v.to(rt), logalpha.to(rt)
     S = torch.zeros(B, H, D, D, device=q.device, dtype=rt) if S0 is None else S0.to(rt)
     fn, args = (_scan_twopass, (q, k, v, la, S, chunk, mm)) if beta is None else \
-               (_scan_twopass_delta, (q, k, v, la, beta.to(rt), S, chunk, mm))
+               (_scan_twopass_delta, (q, k, v, la, beta.to(rt), S, chunk, mm, kernel))
     if recompute and torch.is_grad_enabled():
         o, S = torch.utils.checkpoint.checkpoint(fn, *args, use_reentrant=False)
     else:
@@ -252,9 +259,13 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = Fa
 
 class AssocCarrier(nn.Module):
     def __init__(self, d: int, heads: int | None = None, chunk: int = 64, recompute: bool = False,
-                 delta: bool = False, head_dim: int | None = None):
+                 delta: bool = False, head_dim: int | None = None, kernel: bool = True):
         super().__init__()
         self.d = d; self.recompute = recompute; self.delta = delta
+        # kernel: the Triton scan (src/assoc_kernel.py) when it applies (CUDA, plain rule, head dim 64 or 128,
+        # more than one token); the PyTorch two-pass form otherwise, and always for the T=1 decode step, which
+        # is CUDA-graphed already and has nothing for a chunk kernel to do.
+        self.kernel = kernel
         self.h = heads or max(1, d // (head_dim or 64))
         assert d % self.h == 0 and (d // self.h) % 2 == 0
         self.dk = d // self.h
@@ -303,6 +314,11 @@ class AssocCarrier(nn.Module):
         la = self.logalpha(z).transpose(1, 2)                                     # (B,H,T)
         mm = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") and x.is_cuda else None
         bt = torch.sigmoid(self.wb(z)).transpose(1, 2) if self.delta else None     # (B,H,T)
-        o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk, recompute=self.recompute, mm=mm, beta=bt)
+        if self.kernel and x.is_cuda and not self.delta and self.dk in (64, 128) and T > 1:
+            from .assoc_kernel import assoc_scan_kernel
+            o, S = assoc_scan_kernel(q, k, v, la, S0)
+        else:
+            o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk, recompute=self.recompute, mm=mm, beta=bt,
+                              kernel=self.kernel and self.dk in (64, 128))
         o = self.on(o).transpose(1, 2).reshape(B, T, D)
         return x + torch.sigmoid(self.gate) * self.o(o), (S, p0 + T)
