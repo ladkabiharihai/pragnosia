@@ -396,10 +396,10 @@ def _delta_loop_bwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, w_ptr, sent_ptr, gs_ptr
         # Atomic adds here cost 7.85 ms per micro-step, eight times the forward loop, from the two programs of
         # one batch-head contending on the same 64 x 64 tiles.
         NB = D // BV
-        tl.store(dk_ptr + (jb * NBH + bh) * s_bh_t + (t0 + rt)[:, None] * D + rd[None, :], dK, mask=tm[:, None])
+        tl.store(dk_ptr + (jb * NBH + bh) * s_bh_t + (t0 + rt)[:, None] * D + rd[None, :], dK.to(dk_ptr.dtype.element_ty), mask=tm[:, None])
         tl.store(dla_ptr + (jb * NBH + bh) * s_bh_l + t0 + rt, dla, mask=tm)
         tl.store(dbe_ptr + (jb * NBH + bh) * s_bh_l + t0 + rt, dbe, mask=tm)
-        tl.store(dx_ptr + ((jb * NBH + bh) * NC + c) * BC * BC + rt[:, None] * BC + rt[None, :], dX)
+        tl.store(dx_ptr + ((jb * NBH + bh) * NC + c) * BC * BC + rt[:, None] * BC + rt[None, :], dX.to(dx_ptr.dtype.element_ty))
         tl.store(dv_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], dV.to(dv_ptr.dtype.element_ty), mask=tm[:, None])
         DS = DSn
     tl.store(ds0_ptr + bh * D * D + rd[:, None] * D + rj[None, :], DS)
@@ -411,11 +411,12 @@ def _op_delta_bwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.
                   dsfin: torch.Tensor, bc: int, bv: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     B, H, T, D = k.shape; NC = X.shape[2]; BH = B * H
     NB = D // bv
-    dk = torch.empty(NB, B, H, T, D, device=k.device, dtype=torch.float32)
+    # dK and dX partials in bf16: their sums are cast to bf16 (k's dtype) and fed to a bf16 dot respectively
+    dk = torch.empty(NB, B, H, T, D, device=k.device, dtype=torch.bfloat16)
     dv = torch.empty_like(v)
     dla = torch.empty(NB, B, H, T, device=k.device, dtype=torch.float32)
     dbe = torch.empty(NB, B, H, T, device=k.device, dtype=torch.float32)
-    dX = torch.empty(NB, B, H, NC, bc, bc, device=k.device, dtype=torch.float32)
+    dX = torch.empty(NB, B, H, NC, bc, bc, device=k.device, dtype=torch.bfloat16)
     dS0 = torch.empty(B, H, D, D, device=k.device, dtype=torch.float32)
     _delta_loop_bwd[(BH, NB)](k.contiguous(), v.contiguous(), la.contiguous(), be.contiguous(), X.contiguous(),
                               W.contiguous(), sent.contiguous(), gsent.contiguous(), dW.contiguous(),
@@ -431,7 +432,8 @@ def _op_delta_bwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.
 def _(k, v, la, be, X, W, sent, gsent, dW, dsfin, bc, bv):
     B, H, T, D = k.shape; NC = X.shape[2]; NB = D // bv
     e = lambda *sh: torch.empty(*sh, device=k.device, dtype=torch.float32)
-    return e(NB, B, H, T, D), torch.empty_like(v), e(NB, B, H, T), e(NB, B, H, T), e(NB, B, H, NC, bc, bc), e(B, H, D, D)
+    b = lambda *sh: torch.empty(*sh, device=k.device, dtype=torch.bfloat16)
+    return b(NB, B, H, T, D), torch.empty_like(v), e(NB, B, H, T), e(NB, B, H, T), b(NB, B, H, NC, bc, bc), e(B, H, D, D)
 
 
 def _delta_setup(ctx, inputs, output):
@@ -446,16 +448,21 @@ def _delta_backward(ctx, dW, gsent, dsfin):
     if gsent is None: gsent = torch.zeros_like(sent)
     if dsfin is None: dsfin = torch.zeros(sent.shape[0], sent.shape[1], sent.shape[3], sent.shape[4], device=k.device)
     dk, dv, dla, dbe, dX, dS0 = _op_delta_bwd(k, v, la, be, X, W, sent, gsent, dW, dsfin, ctx.bc, ctx.bv)
-    return (dk.sum(0).to(k.dtype), dv, dla.sum(0), dbe.sum(0), dX.sum(0),
+    return (dk.float().sum(0).to(k.dtype), dv, dla.sum(0), dbe.sum(0), dX.float().sum(0).to(X.dtype),
             (dS0 if ctx.has_s0 else None), None, None, None, None)
 
 
 _op_delta_fwd.register_autograd(_delta_backward, setup_context=_delta_setup)
 
 
-def delta_scan_kernel(q, k, v, logalpha, beta, S0=None, chunk: int = 64, bv: int = 32, bv_bwd: int | None = None):
+def delta_scan_kernel(q, k, v, logalpha, beta, S0=None, chunk: int = 64, bv: int = 32, bv_bwd: int = 16):
     """The delta rule end to end: X from the torch-side inverse (compiled, autograd), the loop over chunks in
-    the Triton kernel, the C x C output through _op_out with the residuals W in the value slot."""
+    the Triton kernel, the C x C output through _op_out with the residuals W in the value slot.
+
+    bv / bv_bwd: state columns per program in the forward / backward loop. Swept at B4 H11 T2048 D64: forward
+    32 (0.046 ms; 16 is 0.057, 64 is 0.085), backward 16 (0.160 ms; 32 is 0.188, 64 is 0.304) once the
+    backward's partial buffers were bf16. 4 warps and 3 pipeline stages for both; 8 warps, 2 warps and chunk
+    128 are all slower."""
     from .assoc import _unit_lower_inverse
     B, H, T, D = q.shape; Cc = chunk
     NC = triton.cdiv(T, Cc); pad = NC * Cc - T
@@ -475,7 +482,7 @@ def delta_scan_kernel(q, k, v, logalpha, beta, S0=None, chunk: int = 64, bv: int
         X = _unit_lower_inverse(bcc.unsqueeze(-1) * ((kp @ kp.transpose(-1, -2)) * dec).tril(-1))
     has = S0 is not None
     s0 = S0.float() if has else torch.zeros(B, H, D, D, device=q.device, dtype=torch.float32)
-    W, sent, sfin = _op_delta_fwd(k.to(torch.bfloat16), v, la, be, X, s0, has, Cc, bv, bv_bwd or bv)
+    W, sent, sfin = _op_delta_fwd(k.to(torch.bfloat16), v, la, be, X, s0, has, Cc, bv, bv_bwd)
     o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), W, la, sent, Cc)
     return o.to(q.dtype), sfin
 
@@ -543,10 +550,10 @@ def _inv_solve(n_ptr, x_ptr, NC, BC: tl.constexpr):
              - tl.dot(_blk(n_ptr, base, 3, 1, BC).to(tl.bfloat16), X1.to(tl.bfloat16), out_dtype=tl.float32) \
              - tl.dot(_blk(n_ptr, base, 3, 2, BC).to(tl.bfloat16), X2.to(tl.bfloat16), out_dtype=tl.float32)
     X3 = tl.dot(_inv16(n_ptr, base, 3, BC).to(tl.bfloat16), rhs.to(tl.bfloat16), out_dtype=tl.float32)
-    tl.store(x_ptr + base + (r)[:, None] * BC + cc[None, :], X0)
-    tl.store(x_ptr + base + (r + 16)[:, None] * BC + cc[None, :], X1)
-    tl.store(x_ptr + base + (r + 32)[:, None] * BC + cc[None, :], X2)
-    tl.store(x_ptr + base + (r + 48)[:, None] * BC + cc[None, :], X3)
+    tl.store(x_ptr + base + (r)[:, None] * BC + cc[None, :], X0.to(x_ptr.dtype.element_ty))
+    tl.store(x_ptr + base + (r + 16)[:, None] * BC + cc[None, :], X1.to(x_ptr.dtype.element_ty))
+    tl.store(x_ptr + base + (r + 32)[:, None] * BC + cc[None, :], X2.to(x_ptr.dtype.element_ty))
+    tl.store(x_ptr + base + (r + 48)[:, None] * BC + cc[None, :], X3.to(x_ptr.dtype.element_ty))
 
 
 @triton.jit
@@ -586,7 +593,9 @@ def _inv_bwd(k_ptr, la_ptr, be_ptr, x_ptr, dx_ptr, dk_ptr, dla_ptr, dbe_ptr,
 def _op_inv(k: torch.Tensor, la: torch.Tensor, be: torch.Tensor, nc: int) -> torch.Tensor:
     B, H, T, D = k.shape; BH = B * H
     N = torch.empty(B, H, nc, C, C, device=k.device, dtype=torch.float32)
-    X = torch.empty_like(N)
+    # X is consumed by three kernels and every one of them feeds it to a bf16 dot: stored in bf16 it is the
+    # same operand with half the traffic and half the footprint (23 -> 11.5 MB per layer at micro-batch 4)
+    X = torch.empty(B, H, nc, C, C, device=k.device, dtype=torch.bfloat16)
     _inv_build[(BH, nc)](k.contiguous(), la.contiguous(), be.contiguous(), N, T, nc, T * D, T, D=D, BC=C)
     _inv_solve[(BH, nc)](N, X, nc, BC=C)
     return X
@@ -595,7 +604,7 @@ def _op_inv(k: torch.Tensor, la: torch.Tensor, be: torch.Tensor, nc: int) -> tor
 @_op_inv.register_fake
 def _(k, la, be, nc):
     B, H, T, D = k.shape
-    return torch.empty(B, H, nc, C, C, device=k.device, dtype=torch.float32)
+    return torch.empty(B, H, nc, C, C, device=k.device, dtype=torch.bfloat16)
 
 
 @torch.library.custom_op("membrae::delta_inv_bwd", mutates_args=())
@@ -603,7 +612,7 @@ def _op_inv_bwd(k: torch.Tensor, la: torch.Tensor, be: torch.Tensor, X: torch.Te
     B, H, T, D = k.shape; nc = X.shape[2]; BH = B * H
     dk = torch.empty(B, H, T, D, device=k.device, dtype=torch.float32)
     dla = torch.empty(B, H, T, device=k.device, dtype=torch.float32); dbe = torch.empty_like(dla)
-    _inv_bwd[(BH, nc)](k.contiguous(), la.contiguous(), be.contiguous(), X.contiguous(), dX.contiguous().float(),
+    _inv_bwd[(BH, nc)](k.contiguous(), la.contiguous(), be.contiguous(), X.contiguous(), dX.contiguous(),
                        dk, dla, dbe, T, nc, T * D, T, D=D, BC=C)
     return dk, dla, dbe
 
