@@ -183,7 +183,15 @@ def main():
             r.log(f"micro-step captured as a CUDA graph; {torch.cuda.memory_reserved()/2**30:.1f} GiB reserved after capture")
 
         t0 = time.time(); ema = None
-        gnorms = []; skipped = 0; recent = []; bpbs = []
+        # THE GUARD LIVES ON THE CARD. Reading the gradient norm and the loss every step were the only two
+        # syncs left in the loop, and each one drained the queue and left the card idle through the host's
+        # bookkeeping: 2 ms of a 128 ms update measured piece by piece. The norm history, its median, the
+        # keep/skip decision and the loss average are device tensors now; the host reads them once per 200
+        # steps. A skipped step zeroes its gradients through one foreach multiply instead of a branch, so the
+        # optimizer sees a zero gradient (its moments decay once) rather than being skipped outright; on
+        # steps that do not spike, which is all but a few per ten thousand, nothing changes.
+        hist = torch.zeros(1000, device="cuda"); skips_t = torch.zeros((), device="cuda"); ema_t = None
+        marks = []; bpbs = []; skipped = 0
         nxt = [batch(bins, ks, ps, rng, a.batch, a.ctx) for _ in range(a.accum)]
         for i in range(start, a.steps):
             w = min(1.0, (i + 1) / a.warm)
@@ -230,36 +238,24 @@ def main():
             # the next step's batches are sampled NOW, while the card is still busy with this one; the
             # gradient-norm read below is a sync and everything after it is a gap the card sits through
             nxt = [batch(bins, ks, ps, rng, a.batch, a.ctx) for _ in range(a.accum)]
-            gn = float(torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0))
+            gn = torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)          # a device scalar, not read
             # SPIKE GUARD. The previous run went from loss 4.0998 to NaN between step 14,200 and 14,400, a
             # sudden spike rather than a drift. Clipping bounds the step but still applies a direction taken
             # from a pathological batch, and the optimizer then carries that direction in its state for
             # thousands of steps. Compared against a running median so it needs no retuning as loss scale
             # changes. This guard existed in the previous project's trainer and I failed to carry it here.
-            skip = len(gnorms) >= 200 and (not math.isfinite(gn) or gn > a.spike * float(np.median(gnorms)))
-            if skip:
-                opt.zero_grad(set_to_none=set_none); skipped += 1
-                recent.append(i)
-                # DIVERGED, not spiking: the attention control blew up at step ~11,000 and the guard then
-                # skipped every one of the next 27,000 steps while the log showed a healthy-looking rate.
-                # A guard that skips everything is a frozen model burning the card; stop and say so.
-                if len(recent) >= 250 and i - recent[-250] < 500:
-                    r.log(f"    DIVERGED: {len(recent)} skips, 250 of them within the last 500 steps; stopping")
-                    break
-                if skipped <= 10 or skipped % 200 == 0:
-                    r.log(f"    spike at step {i+1}: |g|={gn:.2f} vs median {float(np.median(gnorms)):.2f}"
-                          f" -- SKIPPED (total {skipped})")
-            else:
-                opt.step()
-                if math.isfinite(gn):
-                    gnorms.append(gn)
-                    if len(gnorms) > 1000: gnorms.pop(0)
-            v = loss.item()
-            if not math.isfinite(v):
-                r.log(f"    NON-FINITE LOSS at step {i+1}; stopping rather than burning the card on NaN")
-                break
-            ema = v if ema is None else 0.99 * ema + 0.01 * v
+            j = i - start; fin = torch.isfinite(gn)
+            med = hist[:min(j, 1000)].median() if j else gn
+            keep = fin & ((gn <= a.spike * med) if j >= 200 else torch.ones((), dtype=torch.bool, device="cuda"))
+            hist[j % 1000] = torch.where(keep, gn, hist[j % 1000])            # only kept steps enter the history
+            skips_t.add_(~keep)
+            # zero the gradients of a skipped step; a non-finite one becomes NaN * 0 here and is zeroed for
+            # good inside the fused update (nan_to_num), so the optimizer state never sees it
+            torch._foreach_mul_([p_.grad for p_ in m.parameters() if p_.grad is not None], keep.float())
+            opt.step()
+            ema_t = loss.clone() if ema_t is None else ema_t.mul_(0.99).add_(loss, alpha=0.01)
             if (i + 1) % 200 == 0:
+                ema, nsk, medv = ema_t.item(), int(skips_t.item()), float(med.item())   # the one sync
                 el = time.time() - t0
                 # Rate and ETA must count from the RESUME point, not from step zero, or a resumed run
                 # reports a throughput it never achieved and an ETA that is wildly optimistic.
@@ -267,8 +263,20 @@ def main():
                 r.log(f"{i+1}/{a.steps} loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f} "
                       f"lr {opt.param_groups[0]['lr']:.2e} {done*a.batch*a.ctx*a.accum/el/1e3:.0f} ktok/s "
                       f"eta {(a.steps-i-1)*el/max(1,done)/60:.0f}m"
-                      + (f" {torch.cuda.memory_reserved()/2**30:.1f} GiB" if i + 1 - start == 200 else "")
+                      + (f" {torch.cuda.memory_reserved()/2**30:.1f} GiB" if done == 200 else "")
                       + (f" recaptures {opt.recaptures}" if opt.recaptures else ""))
+                if not math.isfinite(ema):
+                    r.log(f"    NON-FINITE LOSS within the last 200 steps; stopping rather than burning the card on NaN")
+                    break
+                if nsk > skipped:
+                    r.log(f"    {nsk - skipped} spike(s) skipped in the last 200 steps (median |g| {medv:.2f}, total {nsk})")
+                marks.append((i + 1, nsk)); skipped = nsk
+                # DIVERGED, not spiking: the attention control blew up at step ~11,000 and the guard then
+                # skipped every one of the next 27,000 steps while the log showed a healthy-looking rate.
+                # A guard that skips everything is a frozen model burning the card; stop and say so.
+                if len(marks) >= 4 and nsk - marks[-4][1] >= 250:
+                    r.log(f"    DIVERGED: {nsk} skips, {nsk - marks[-4][1]} of them within the last 600 steps; stopping")
+                    break
             if (i + 1) % a.eval_every == 0:
                 # BITS PER BYTE, not loss per token. Per-token loss depends on the vocabulary and is
                 # comparable to nothing; bits per byte removes the tokenizer and is the only number that can
