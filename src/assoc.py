@@ -185,7 +185,8 @@ class AssocCarrier(nn.Module):
         if not self.delta:
             k = k * torch.sigmoid(self.wi(z)).transpose(1, 2).unsqueeze(-1)        # write gate per head
         S0, p0 = (None, pos0) if h0 is None else h0
-        pos = torch.arange(p0, p0 + T, device=x.device)
+        # p0 may be a 0-d tensor: a CUDA-graphed decode step needs the position on the device, not baked in
+        pos = p0 + torch.arange(T, device=x.device)
         q, k = rotate(q, self.theta, pos), rotate(k, self.theta, pos)
         la = self.logalpha(z).transpose(1, 2)                                     # (B,H,T)
         mm = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") and x.is_cuda else None

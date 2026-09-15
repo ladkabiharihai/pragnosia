@@ -115,6 +115,8 @@ class Ours:
             lg = F.linear(self.m.n(h[:, -1:]), self.m.e.weight)[0, -1].float()
             pw = nn_ % w
         out = []
+        if self.mixer != "attn" and n > 8:
+            return out + self._generate_graphed(states, pw, lg, n, temp, g)
         for _ in range(n):
             nxt = int(lg.argmax()) if temp == 0 else int(torch.multinomial(torch.softmax(lg / temp, -1), 1, generator=g))
             out.append(nxt)
@@ -126,6 +128,58 @@ class Ours:
                 h, states[i] = mx(h, states[i]); h = mp(h)
             lg = F.linear(self.m.n(h), self.m.e.weight)[0, -1].float()
             pw = (pw + 1) % w
+        return out
+
+    @torch.no_grad()
+    def _generate_graphed(self, states, pw, lg, n, temp, g):
+        """The decode step as ONE CUDA graph, captured once per model and reused across calls.
+
+        Measured eagerly: 965 kernel launches and 12.65 ms per token for 1.7 ms of GPU work, so the step was
+        seven times CPU-bound. Every state tensor lives in a static buffer the graph updates in place; the token
+        and the position are static device scalars filled before each replay; the positional index wraps on
+        the device. Only the argmax or the sample runs outside. Capture costs ~120 ms once; amortised over a
+        64-token measurement it read as 4.2 ms/token, so it is done once and kept."""
+        w = self.ctx; dev = self.device
+        def flat(states):
+            out = []
+            for s_ in states:
+                if isinstance(s_, tuple) and len(s_) == 2 and torch.is_tensor(s_[0]) and not torch.is_tensor(s_[1]):
+                    out.append((s_[0], torch.tensor(float(s_[1]), device=dev)))    # assoc: (S, p0) with p0 an int
+                else:
+                    out.append(tuple(s_))
+            return out
+        fresh = flat(states)
+        if getattr(self, "_g", None) is None:
+            st = [tuple(t.clone().contiguous() for t in s_) for s_ in fresh]
+            tok = torch.zeros(1, 1, dtype=torch.long, device=dev)
+            pos = torch.tensor([pw], device=dev)
+            def step():
+                h = self.m.e(tok) + self.m.p(pos)
+                for i, (mx, mp) in enumerate(zip(self.m.mix, self.m.mlp)):
+                    h, new = mx(h, st[i]); h = mp(h)
+                    for a, b in zip(st[i], new):
+                        a.copy_(b)
+                pos.copy_((pos + 1) % w)
+                return F.linear(self.m.n(h), self.m.e.weight)[0, -1].float()
+            s_ = torch.cuda.Stream(); s_.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(s_):
+                for _ in range(2): step()
+            torch.cuda.current_stream().wait_stream(s_)
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                out_lg = step()
+            self._g = (graph, st, tok, pos, out_lg)
+        graph, st, tok, pos, out_lg = self._g
+        for s_, f_ in zip(st, fresh):                                            # load this call's state
+            for a, b in zip(s_, f_): a.copy_(b)
+        pos.fill_(pw)
+        out = []; cur = lg
+        for _ in range(n):
+            nxt = int(cur.argmax()) if temp == 0 else int(torch.multinomial(torch.softmax(cur / temp, -1), 1, generator=g))
+            out.append(nxt)
+            tok.fill_(nxt)
+            graph.replay()
+            cur = out_lg
         return out
 
 
