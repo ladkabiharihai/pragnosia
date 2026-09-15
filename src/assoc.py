@@ -316,17 +316,24 @@ class AssocCarrier(nn.Module):
         """h0: (state S (B,H,dk,dk), position offset) from a previous window, or None."""
         B, T, D = x.shape
         z = self.ln(x)
-        q, k, v = [t(z).view(B, T, self.h, self.dk).transpose(1, 2) for t in (self.q, self.k, self.v)]
+        # ONE projection for q, k, v and the two per-head gates. As five nn.Linear calls they were fifteen GEMM
+        # launches per layer with backward, and the d -> H ones ran at 64 x 64 tiles, 51 us each for eleven
+        # columns. The parameters stay where they are (checkpoints load unchanged); the concatenation is a
+        # fused copy under torch.compile, 1.5M elements.
+        gate = self.wb if self.delta else self.wi
+        y = F.linear(z, torch.cat([self.q.weight, self.k.weight, self.v.weight, self.wa.weight, gate.weight]))
+        q, k, v = [y[..., i * D:(i + 1) * D].view(B, T, self.h, self.dk).transpose(1, 2) for i in range(3)]
+        ya = y[..., 3 * D:3 * D + self.h] + self.wa.bias; yg = y[..., 3 * D + self.h:] + gate.bias
         q, k, v = F.normalize(q, dim=-1), F.normalize(k, dim=-1), F.normalize(v, dim=-1)   # scores in [-1, 1], unit writes
         if not self.delta:
-            k = k * torch.sigmoid(self.wi(z)).transpose(1, 2).unsqueeze(-1)        # write gate per head
+            k = k * torch.sigmoid(yg).transpose(1, 2).unsqueeze(-1)                 # write gate per head
         S0, p0 = (None, pos0) if h0 is None else h0
         # p0 may be a 0-d tensor: a CUDA-graphed decode step needs the position on the device, not baked in
         pos = p0 + torch.arange(T, device=x.device)
         q, k = rotate(q, self.theta, pos), rotate(k, self.theta, pos)
-        la = self.logalpha(z).transpose(1, 2)                                     # (B,H,T)
+        la = (-F.softplus(ya) * torch.exp(self.A)).transpose(1, 2)                 # (B,H,T), <= 0
         mm = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") and x.is_cuda else None
-        bt = torch.sigmoid(self.wb(z)).transpose(1, 2) if self.delta else None     # (B,H,T)
+        bt = torch.sigmoid(yg).transpose(1, 2) if self.delta else None             # (B,H,T)
         if self.kernel and x.is_cuda and self.dk in (64, 128) and T > 1:
             if self.delta:
                 from .assoc_kernel import delta_scan_kernel

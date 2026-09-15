@@ -166,7 +166,7 @@ def assoc_scan_kernel(q, k, v, logalpha, S0=None):
     loop). Then the C x C work in the Triton kernel. bf16 inputs halve the kernel's memory traffic."""
     B, H, T, D = q.shape
     NC = triton.cdiv(T, C); pad = NC * C - T
-    la = logalpha.float()
+    la = logalpha.float().contiguous(); v = v.contiguous()
     lc = torch.nn.functional.pad(la, (0, pad)).view(B, H, NC, C)
     L = lc.cumsum(-1)
     a_log = lc.sum(-1)                                                          # log of each chunk's total decay
@@ -331,14 +331,16 @@ def _op_delta_bwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.
                               W.contiguous(), sent.contiguous(), gsent.contiguous(), dW.contiguous().float(),
                               dsfin.contiguous().float(), dk, dv, dla, dbe, dX, dS0,
                               T, NC, BH, T * D, T, D=D, BC=bc, BV=bv)
-    return dk.sum(0), dv, dla.sum(0), dbe.sum(0), dX.sum(0), dS0
+    # the partials are summed by the caller, which torch.compile traces; inside this op they would be eager
+    # reductions, 48 launches per micro-step that the profile showed at the top of the table
+    return dk, dv, dla, dbe, dX, dS0
 
 
 @_op_delta_bwd.register_fake
 def _(k, v, la, be, X, W, sent, gsent, dW, dsfin, bc, bv):
-    B, H, T, D = k.shape; NC = X.shape[2]
+    B, H, T, D = k.shape; NC = X.shape[2]; NB = D // bv
     e = lambda *sh: torch.empty(*sh, device=k.device, dtype=torch.float32)
-    return e(B, H, T, D), e(B, H, T, D), e(B, H, T), e(B, H, T), e(B, H, NC, bc, bc), e(B, H, D, D)
+    return e(NB, B, H, T, D), e(B, H, T, D), e(NB, B, H, T), e(NB, B, H, T), e(NB, B, H, NC, bc, bc), e(B, H, D, D)
 
 
 def _delta_setup(ctx, inputs, output):
@@ -353,7 +355,8 @@ def _delta_backward(ctx, dW, gsent, dsfin):
     if gsent is None: gsent = torch.zeros_like(sent)
     if dsfin is None: dsfin = torch.zeros(sent.shape[0], sent.shape[1], sent.shape[3], sent.shape[4], device=k.device)
     dk, dv, dla, dbe, dX, dS0 = _op_delta_bwd(k, v, la, be, X, W, sent, gsent, dW, dsfin, ctx.bc, ctx.bv)
-    return dk.to(k.dtype), dv.to(v.dtype), dla, dbe, dX, (dS0 if ctx.has_s0 else None), None, None, None
+    return (dk.sum(0).to(k.dtype), dv.to(v.dtype), dla.sum(0), dbe.sum(0), dX.sum(0),
+            (dS0 if ctx.has_s0 else None), None, None, None)
 
 
 _op_delta_fwd.register_autograd(_delta_backward, setup_context=_delta_setup)
@@ -365,7 +368,10 @@ def delta_scan_kernel(q, k, v, logalpha, beta, S0=None, chunk: int = 64, bv: int
     from .assoc import _unit_lower_inverse
     B, H, T, D = q.shape; Cc = chunk
     NC = triton.cdiv(T, Cc); pad = NC * Cc - T
-    la = logalpha.float(); be = beta.float()
+    # contiguous HERE, inside the compiled region, where the copy fuses into the kernel that produces the
+    # tensor; the ops' own .contiguous() then finds nothing to do. Left to the ops it was 156 eager copies per
+    # micro-step (the decay and beta arrive as transposes of (B,T,H), v as a transpose of (B,T,H,D)).
+    la = logalpha.float().contiguous(); be = beta.float().contiguous(); v = v.contiguous()
     lc = torch.nn.functional.pad(la, (0, pad)).view(B, H, NC, Cc)
     L = lc.cumsum(-1)
     mask = torch.ones(Cc, Cc, device=q.device, dtype=torch.bool).tril()
