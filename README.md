@@ -21,27 +21,43 @@ architecture; what is being tested and why is recorded, dated, in [PROGRESS.md](
 | `src/calib.py` | the goal probes: calibration (goal 4), real-vs-fabricated confidence (goal 5), needle retrieval through the carried state (goal 9), BPB against GPT-2. |
 | `src/bench.py` | THE SCORECARD: every axis the vision is accountable on, measured in one place against GPT-2 124M. Nothing scales until it says to. |
 | `src/facts.py` | 48 factual multiple-choice items used by the goal-5 probe. |
-| `tests/` | `test_common.py` (13), `test_optim.py` (21), `test_spin.py` (45), `test_model.py` (13, growth), `test_assoc.py` (15). All must pass before a run. |
+| `tests/` | `test_common.py` (13), `test_optim.py` (21), `test_spin.py` (45), `test_model.py` (16), `test_assoc.py` (25). All must pass before a run. |
 | `logs/` | one file per run, not tracked. |
 | `.venv/` | this project's environment, python 3.12.3 + torch 2.14.0+cu130. Not tracked. Do not use `parakeet_env`. |
 
 Fifteen source files. A sixteenth needs a reason.
 
-## Current state, 2026-09-11
+## Current state, 2026-09-15
 
-**Data:** 200.8B raw tokens downloaded, 1.01B tokenized at vocab 8192 (see CONSTRAINTS.md for paths and mix).
+**Data:** 200.8B raw tokens downloaded; 1.01B tokenized at vocab 8192, 10B at vocab 16384, 1.2B of long
+documents at vocab 8192 (paths and mix in CONSTRAINTS.md).
 
-**Architecture under test:** the spin carrier (no attention, no Mamba, no hybrid, by instruction). A 77.6M
-model trained on the 1B slice reaches BPB 1.3105 (GPT-2 124M on the same bytes: 1.2230, with 9x the tokens).
-The matched attention control is training now (`/mnt/kv_cache/run2`).
+**Architecture:** the associative carrier (`src/assoc.py`), reached by measurement. The diagonal carrier and
+its gated variants could not retrieve by content (needle lift +0.05 to +0.9 against attention's +4.8) and lost
+0.07 to 0.14 bits/byte to it; the associative carrier matches attention's in-window retrieval and beats it on
+web-text compression at a 512-token window (1.0994 against 1.1165 at 78M; GPT-2 124M is 1.1061 on the same
+bytes with nine times the tokens). Mathematically it is in the linear-attention family and the file says so.
 
-**What the trajectory probes say so far** (24 checkpoints of the spin run): confidence on real subjects
-exceeds fabricated at 21 of 24, with a small positive and growing gap (single seed, n=48); retrieval reaches
-256 tokens and barely past the 512 window through the carried state. Both are hypotheses, not results.
+**Against the gate in VISION.md, at 78M, measured by `src/bench.py`:**
 
-**Known costs:** at 512-token windows spin trains 1.21x slower per step than attention (1.39x on forward and
-backward alone), reaching parity around 6k tokens. At inference its state is 74 KB and constant where a KV
-cache at 8k context is 277 MB and growing.
+| axis | result |
+|---|---|
+| compression, web text, 512 window | win: 1.0994 vs attention 1.1165, GPT-2 1.1061 |
+| compression, long documents, same 8192 window for both | loss: 0.9232 vs attention 0.8301 |
+| context rot | mechanism found: usable context = training window; 512-trained rots +0.108, 8192-trained does not. Attention given the same window also does not, and improves 2.4x more |
+| facts (48, four-way) | loss: 22/48 for every 78M model, GPT-2 26/48 |
+| coherence (greedy) | tie: everything loops |
+| training throughput, ctx 2048 | 273 vs 222 ktok/s (carrier faster); a Python chunk loop starves the GPU at small batch |
+| inference memory | win: 2 MiB constant vs a KV cache of 64 MiB at 1k, 8 GB at 128k |
+| inference speed | loss: 12.7 ms/token vs 8.1 (attention) and 3.9 (GPT-2), kernel quality |
+| growth mid-run | works; 0.038 behind from-scratch at equal steps |
+
+**Verdict:** "surpass the LLMs" is not met. What is proven: a fixed 2 MiB memory gets within 0.09 bits/byte of
+an unbounded 1.1 GB cache on the text that favours the cache most, beats the same attention on ordinary web
+text, and works at any context length in constant memory. That is a memory trade, not a win on the LLMs' metric.
+
+**What would move it:** the delta write rule as a kernel (implemented and exact in `src/assoc.py`, unrun for
+memory); a Triton kernel for the chunked scan; and more tokens, which is the only thing that fixes facts.
 
 ## Running things
 
@@ -56,7 +72,7 @@ cache at 8k context is 277 MB and growing.
 
 Every run uses `src/common.py:Run`, which writes one log file and appends a dated entry to PROGRESS.md on
 completion, including on failure. Long jobs are launched with `setsid nohup ... &` and their PID recorded
-from `ps` by executable name, never from `pgrep -f`, which has matched the launching shell five times.
+from `ps` by executable name, never from `pgrep -f` or `pkill -f`, which have matched the launching shell six times.
 
 ## How work is done here
 
