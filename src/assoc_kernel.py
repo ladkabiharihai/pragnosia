@@ -184,3 +184,195 @@ def assoc_scan_kernel(q, k, v, logalpha, S0=None):
     sfin = torch.exp(a_log[..., -1])[..., None, None] * sent[:, :, -1] + KV[:, :, -1]
     o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), v.to(torch.bfloat16), la, sent)
     return o.to(q.dtype), sfin
+
+
+# ------------------------------------------------------------------ the delta rule's loop over chunks
+# W_c depends on the state entering chunk c, and that state on W of every earlier chunk, so unlike the plain
+# rule this recurrence cannot become a prefix matmul. It is one program per (batch-head, block of state
+# columns) walking the chunks: three small matmuls in registers per chunk and the scaled add. In compiled
+# PyTorch the same loop ran at 73 ktok/s at batch 4; the matrix X_c = (I + beta strictly_lower(K K^T dec))^-1
+# does not depend on the state and is computed for all chunks at once outside.
+@triton.jit
+def _delta_loop_fwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, s0_ptr, w_ptr, sent_ptr, sfin_ptr,
+                    T, NC, s_bh_t, s_bh_l, HAS_S0: tl.constexpr, D: tl.constexpr, BC: tl.constexpr, BV: tl.constexpr):
+    bh = tl.program_id(0); jb = tl.program_id(1)
+    rt = tl.arange(0, BC); rd = tl.arange(0, D)
+    rj = jb * BV + tl.arange(0, BV)
+    if HAS_S0:
+        S = tl.load(s0_ptr + bh * D * D + rd[:, None] * D + rj[None, :]).to(tl.float32)
+    else:
+        S = tl.zeros([D, BV], dtype=tl.float32)
+    for c in range(NC):
+        t0 = c * BC
+        tm = (t0 + rt) < T
+        la = tl.load(la_ptr + bh * s_bh_l + t0 + rt, mask=tm, other=0.0).to(tl.float32)
+        be = tl.load(be_ptr + bh * s_bh_l + t0 + rt, mask=tm, other=0.0).to(tl.float32)
+        L = tl.cumsum(la, 0); LC = tl.sum(la, 0)
+        eL = tl.exp(L); w = tl.exp(LC - L)
+        kk = tl.load(k_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rd[None, :], mask=tm[:, None], other=0.0)
+        vv = tl.load(v_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], mask=tm[:, None], other=0.0).to(tl.float32)
+        X = tl.load(x_ptr + (bh * NC + c) * BC * BC + rt[:, None] * BC + rt[None, :])
+        tl.store(sent_ptr + (bh * NC + c) * D * D + rd[:, None] * D + rj[None, :], S)
+        # rhs = beta (v - eL k S);  W = X rhs;  S = a S + (k w)^T W
+        ks = tl.dot(kk.to(tl.bfloat16), S.to(tl.bfloat16), out_dtype=tl.float32)
+        rhs = be[:, None] * (vv - eL[:, None] * ks)
+        W = tl.dot(X.to(tl.bfloat16), rhs.to(tl.bfloat16), out_dtype=tl.float32)
+        tl.store(w_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], W, mask=tm[:, None])
+        kw = (kk.to(tl.float32) * w[:, None]).to(tl.bfloat16)
+        S = tl.exp(LC) * S + tl.dot(tl.trans(kw), W.to(tl.bfloat16), out_dtype=tl.float32)
+    tl.store(sfin_ptr + bh * D * D + rd[:, None] * D + rj[None, :], S)
+
+
+@torch.library.custom_op("membrae::delta_loop_fwd", mutates_args=())
+def _op_delta_fwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.Tensor, X: torch.Tensor,
+                  S0: torch.Tensor, has_s0: bool) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    B, H, T, D = k.shape; NC = X.shape[2]; BH = B * H
+    W = torch.empty(B, H, T, D, device=k.device, dtype=torch.float32)
+    sent = torch.empty(B, H, NC, D, D, device=k.device, dtype=torch.float32)
+    sfin = torch.empty(B, H, D, D, device=k.device, dtype=torch.float32)
+    BV = 32
+    _delta_loop_fwd[(BH, D // BV)](k.contiguous(), v.contiguous(), la.contiguous(), be.contiguous(), X.contiguous(),
+                                   S0.contiguous() if has_s0 else sfin, W, sent, sfin,
+                                   T, NC, T * D, T, HAS_S0=has_s0, D=D, BC=C, BV=BV)
+    return W, sent, sfin
+
+
+@_op_delta_fwd.register_fake
+def _(k, v, la, be, X, S0, has_s0):
+    B, H, T, D = k.shape; NC = X.shape[2]
+    e = lambda *sh: torch.empty(*sh, device=k.device, dtype=torch.float32)
+    return e(B, H, T, D), e(B, H, NC, D, D), e(B, H, D, D)
+
+
+@triton.jit
+def _delta_loop_bwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, w_ptr, sent_ptr, gs_ptr, dw_ptr, dsfin_ptr,
+                    dk_ptr, dv_ptr, dla_ptr, dbe_ptr, dx_ptr, ds0_ptr,
+                    T, NC, s_bh_t, s_bh_l, D: tl.constexpr, BC: tl.constexpr, BV: tl.constexpr):
+    """Reverse loop over chunks for the delta rule. Per chunk, with S the entering state, D_S the gradient on
+    the state LEAVING the chunk, G the gradient on the entering state from the output kernel's read of it, and
+    dW_out the gradient on the residuals from the output kernel:
+        dW    = dW_out + Kw D_S                (S' = a S + Kw^T W)
+        drhs  = X^T dW,  dX += dW rhs^T         (W = X rhs)
+        dbeta = sum drhs (V - eL K S),  dV = beta drhs,  dks = -beta eL drhs,  d(eL) = -sum beta drhs ks
+        dK   += dks S^T + (W D_S^T) w,   dS = G + a D_S + K^T dks
+    and the decay terms fold into dla as in the plain kernel. dK, dbeta, dla and dX are shared across the
+    column blocks of one batch-head and accumulate atomically; dV and dS are per block."""
+    bh = tl.program_id(0); jb = tl.program_id(1)
+    rt = tl.arange(0, BC); rd = tl.arange(0, D)
+    rj = jb * BV + tl.arange(0, BV)
+    DS = tl.load(dsfin_ptr + bh * D * D + rd[:, None] * D + rj[None, :]).to(tl.float32)   # gradient on the final state
+    for i in range(NC):
+        c = NC - 1 - i
+        t0 = c * BC
+        tm = (t0 + rt) < T
+        la = tl.load(la_ptr + bh * s_bh_l + t0 + rt, mask=tm, other=0.0).to(tl.float32)
+        be = tl.load(be_ptr + bh * s_bh_l + t0 + rt, mask=tm, other=0.0).to(tl.float32)
+        L = tl.cumsum(la, 0); LC = tl.sum(la, 0)
+        eL = tl.exp(L); w = tl.exp(LC - L); a = tl.exp(LC)
+        kk = tl.load(k_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rd[None, :], mask=tm[:, None], other=0.0).to(tl.float32)
+        vv = tl.load(v_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], mask=tm[:, None], other=0.0).to(tl.float32)
+        W = tl.load(w_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], mask=tm[:, None], other=0.0)
+        S = tl.load(sent_ptr + (bh * NC + c) * D * D + rd[:, None] * D + rj[None, :])
+        G = tl.load(gs_ptr + (bh * NC + c) * D * D + rd[:, None] * D + rj[None, :])
+        dWo = tl.load(dw_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], mask=tm[:, None], other=0.0).to(tl.float32)
+        X = tl.load(x_ptr + (bh * NC + c) * BC * BC + rt[:, None] * BC + rt[None, :])
+        kb = kk.to(tl.bfloat16)
+        kw = kk * w[:, None]
+        # dW = dW_out + Kw D_S
+        dW = dWo + tl.dot(kw.to(tl.bfloat16), DS.to(tl.bfloat16), out_dtype=tl.float32)
+        # through S' = a S + Kw^T W: dKw = W D_S^T, da = <S, D_S>
+        dKw = tl.dot(W.to(tl.bfloat16), tl.trans(DS.to(tl.bfloat16)), out_dtype=tl.float32)
+        da = tl.sum(tl.sum(S * DS, 1), 0)
+        # through W = X rhs
+        ks = tl.dot(kb, S.to(tl.bfloat16), out_dtype=tl.float32)
+        rhs = be[:, None] * (vv - eL[:, None] * ks)
+        drhs = tl.dot(tl.trans(X.to(tl.bfloat16)), dW.to(tl.bfloat16), out_dtype=tl.float32)
+        dX = tl.dot(dW.to(tl.bfloat16), tl.trans(rhs.to(tl.bfloat16)), out_dtype=tl.float32)
+        # through rhs = beta (v - eL ks)
+        inner = vv - eL[:, None] * ks
+        dbe = tl.sum(drhs * inner, 1)
+        dV = be[:, None] * drhs
+        dks = -be[:, None] * eL[:, None] * drhs
+        deL = -tl.sum(be[:, None] * drhs * ks, 1)
+        # through ks = K S
+        dK = tl.dot(dks.to(tl.bfloat16), tl.trans(S.to(tl.bfloat16)), out_dtype=tl.float32) + dKw * w[:, None]
+        DSn = G + a * DS + tl.dot(tl.trans(kb), dks.to(tl.bfloat16), out_dtype=tl.float32)
+        # decay: eL, w and a terms
+        dw = tl.sum(dKw * kk, 1) * w
+        dL = deL * eL - dw
+        dLC = tl.sum(dw, 0) + da * a
+        tot = tl.sum(dL, 0)
+        dla = tot - tl.cumsum(dL, 0) + dL + dLC
+        # shared across column blocks: accumulate
+        tl.atomic_add(dk_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rd[None, :], dK, mask=tm[:, None])
+        tl.atomic_add(dla_ptr + bh * s_bh_l + t0 + rt, dla, mask=tm)
+        tl.atomic_add(dbe_ptr + bh * s_bh_l + t0 + rt, dbe, mask=tm)
+        tl.atomic_add(dx_ptr + (bh * NC + c) * BC * BC + rt[:, None] * BC + rt[None, :], dX)
+        tl.store(dv_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], dV, mask=tm[:, None])
+        DS = DSn
+    tl.store(ds0_ptr + bh * D * D + rd[:, None] * D + rj[None, :], DS)
+
+
+@torch.library.custom_op("membrae::delta_loop_bwd", mutates_args=())
+def _op_delta_bwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.Tensor, X: torch.Tensor,
+                  W: torch.Tensor, sent: torch.Tensor, gsent: torch.Tensor, dW: torch.Tensor,
+                  dsfin: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    B, H, T, D = k.shape; NC = X.shape[2]; BH = B * H
+    dk = torch.zeros(B, H, T, D, device=k.device, dtype=torch.float32)
+    dv = torch.empty(B, H, T, D, device=k.device, dtype=torch.float32)
+    dla = torch.zeros(B, H, T, device=k.device, dtype=torch.float32)
+    dbe = torch.zeros(B, H, T, device=k.device, dtype=torch.float32)
+    dX = torch.zeros(B, H, NC, C, C, device=k.device, dtype=torch.float32)
+    dS0 = torch.empty(B, H, D, D, device=k.device, dtype=torch.float32)
+    BV = 32
+    _delta_loop_bwd[(BH, D // BV)](k.contiguous(), v.contiguous(), la.contiguous(), be.contiguous(), X.contiguous(),
+                                   W.contiguous(), sent.contiguous(), gsent.contiguous(), dW.contiguous().float(),
+                                   dsfin.contiguous().float(), dk, dv, dla, dbe, dX, dS0,
+                                   T, NC, T * D, T, D=D, BC=C, BV=BV)
+    return dk, dv, dla, dbe, dX, dS0
+
+
+@_op_delta_bwd.register_fake
+def _(k, v, la, be, X, W, sent, gsent, dW, dsfin):
+    B, H, T, D = k.shape; NC = X.shape[2]
+    e = lambda *sh: torch.empty(*sh, device=k.device, dtype=torch.float32)
+    return e(B, H, T, D), e(B, H, T, D), e(B, H, T), e(B, H, T), e(B, H, NC, C, C), e(B, H, D, D)
+
+
+def _delta_setup(ctx, inputs, output):
+    k, v, la, be, X, S0, has_s0 = inputs
+    W, sent, sfin = output
+    ctx.save_for_backward(k, v, la, be, X, W, sent)
+    ctx.has_s0 = has_s0
+
+
+def _delta_backward(ctx, dW, gsent, dsfin):
+    k, v, la, be, X, W, sent = ctx.saved_tensors
+    if gsent is None: gsent = torch.zeros_like(sent)
+    if dsfin is None: dsfin = torch.zeros(sent.shape[0], sent.shape[1], sent.shape[3], sent.shape[4], device=k.device)
+    dk, dv, dla, dbe, dX, dS0 = _op_delta_bwd(k, v, la, be, X, W, sent, gsent, dW, dsfin)
+    return dk.to(k.dtype), dv.to(v.dtype), dla, dbe, dX, (dS0 if ctx.has_s0 else None), None
+
+
+_op_delta_fwd.register_autograd(_delta_backward, setup_context=_delta_setup)
+
+
+def delta_scan_kernel(q, k, v, logalpha, beta, S0=None):
+    """The delta rule end to end: X from the torch-side inverse (compiled, autograd), the loop over chunks in
+    the Triton kernel, the C x C output through _op_out with the residuals W in the value slot."""
+    from .assoc import _unit_lower_inverse
+    B, H, T, D = q.shape
+    NC = triton.cdiv(T, C); pad = NC * C - T
+    la = logalpha.float(); be = beta.float()
+    lc = torch.nn.functional.pad(la, (0, pad)).view(B, H, NC, C)
+    L = lc.cumsum(-1)
+    mask = torch.ones(C, C, device=q.device, dtype=torch.bool).tril()
+    dec = torch.exp((L.unsqueeze(-1) - L.unsqueeze(-2)).clamp(max=0.0)) * mask
+    kp = torch.nn.functional.pad(k, (0, 0, 0, pad)).view(B, H, NC, C, D).float()
+    bc = torch.nn.functional.pad(be, (0, pad)).view(B, H, NC, C)
+    X = _unit_lower_inverse(bc.unsqueeze(-1) * ((kp @ kp.transpose(-1, -2)) * dec).tril(-1))
+    has = S0 is not None
+    s0 = S0.float() if has else torch.zeros(B, H, D, D, device=q.device, dtype=torch.float32)
+    W, sent, sfin = _op_delta_fwd(k.to(torch.bfloat16), v.float(), la, be, X, s0, has)
+    o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), W.to(torch.bfloat16), la, sent)
+    return o.to(q.dtype), sfin

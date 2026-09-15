@@ -314,9 +314,13 @@ class AssocCarrier(nn.Module):
         la = self.logalpha(z).transpose(1, 2)                                     # (B,H,T)
         mm = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") and x.is_cuda else None
         bt = torch.sigmoid(self.wb(z)).transpose(1, 2) if self.delta else None     # (B,H,T)
-        if self.kernel and x.is_cuda and not self.delta and self.dk in (64, 128) and T > 1:
-            from .assoc_kernel import assoc_scan_kernel
-            o, S = assoc_scan_kernel(q, k, v, la, S0)
+        if self.kernel and x.is_cuda and self.dk in (64, 128) and T > 1:
+            if self.delta:
+                from .assoc_kernel import delta_scan_kernel
+                o, S = delta_scan_kernel(q, k, v, la, bt, S0)
+            else:
+                from .assoc_kernel import assoc_scan_kernel
+                o, S = assoc_scan_kernel(q, k, v, la, S0)
         else:
             o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk, recompute=self.recompute, mm=mm, beta=bt,
                               kernel=self.kernel and self.dk in (64, 128))
