@@ -165,6 +165,73 @@ def _scan_twopass(q, k, v, la, S, chunk, mm):
     return o, S
 
 
+def _unit_lower_inverse(N, b=16):
+    """X = (I + N)^-1 for a batch of strictly-lower N (..., C, C), by blocked forward substitution.
+
+    Every intermediate stays bounded (the Neumann series over the whole C x C did not: its powers reach norm
+    C^k before vanishing and fp32 cancelled). Within a b x b diagonal block the series is summed by doubling,
+    which is exact after log2(b) steps because the block is nilpotent; across blocks it is substitution. All
+    matmuls, batched over every leading dimension, so it costs the same for one chunk or a thousand."""
+    C = N.shape[-1]
+    I = torch.eye(C, device=N.device, dtype=N.dtype).expand_as(N)
+    X = torch.zeros_like(N)
+    cols = []
+    for i0 in range(0, C, b):
+        i1 = min(i0 + b, C)
+        R = -N[..., i0:i1, i0:i1]
+        Xd = torch.eye(i1 - i0, device=N.device, dtype=N.dtype)
+        m_ = 1
+        while m_ < (i1 - i0):
+            Xd = Xd + R @ Xd
+            R = R @ R
+            m_ *= 2
+        rhs = I[..., i0:i1, :]
+        if i0:
+            rhs = rhs - N[..., i0:i1, :i0] @ torch.cat(cols, dim=-2)
+        cols.append(Xd @ rhs)
+    return torch.cat(cols, dim=-2)
+
+
+def _scan_twopass_delta(q, k, v, la, be, S, chunk, mm):
+    """The DELTA rule in the same two-pass shape.
+
+    S_t = a_t S_{t-1} + b_t k_t (v_t - k_t S_{t-1})^T: a key's stored value is replaced, not accumulated onto.
+    Within a chunk the residuals actually written, W, satisfy (I + diag(b) strictly_lower(K K^T dec)) W =
+    diag(b)(V - eL K S_entering). The matrix does NOT depend on the state, so its inverse X is computed for all
+    chunks at once in pass 0; only the right-hand side needs S_entering, so pass 1 is, per chunk, two small
+    matmuls (K S and X rhs) and the scaled add. This is what makes the rule affordable: the earlier per-token
+    and per-chunk solves ran at 17 and 6 ktok/s."""
+    B, H, T, D = q.shape
+    C = min(chunk, T)
+    pad = (-T) % C
+    if pad:
+        z = lambda t: F.pad(t, (0, 0, 0, pad)) if t.dim() == 4 else F.pad(t, (0, pad))
+        q, k, v, la, be = z(q), z(k), z(v), z(la), z(be)          # padded beta = 0: writes nothing
+    NC = q.shape[2] // C
+    qc, kc, vc = (t.view(B, H, NC, C, D) for t in (q, k, v))
+    lc, bc = la.view(B, H, NC, C), be.view(B, H, NC, C)
+    L = lc.cumsum(3)
+    mask = torch.ones(C, C, device=q.device, dtype=torch.bool).tril()
+    dec = torch.exp((L.unsqueeze(4) - L.unsqueeze(3)).clamp(max=0.0)) * mask
+    eL = torch.exp(L).unsqueeze(4)
+    w = torch.exp((L[..., -1:] - L).clamp(max=0.0)).unsqueeze(4)
+    a = torch.exp(L[..., -1])
+    KK = (kc @ kc.transpose(3, 4)) * dec
+    X = _unit_lower_inverse(bc.unsqueeze(-1) * KK.tril(-1))                       # (B,H,NC,C,C), batched
+    A = (qc @ kc.transpose(3, 4)) * dec
+    kw = (kc * w).transpose(3, 4)                                                  # (B,H,NC,D,C)
+    ent = []; Ws = []
+    for c in range(NC):
+        ent.append(S)
+        rhs = bc[:, :, c].unsqueeze(-1) * (vc[:, :, c] - eL[:, :, c] * (kc[:, :, c] @ S))
+        Wc = X[:, :, c] @ rhs
+        Ws.append(Wc)
+        S = a[:, :, c, None, None] * S + kw[:, :, c] @ Wc
+    Sent = torch.stack(ent, 2); W = torch.stack(Ws, 2)
+    o = (A @ W + (qc * eL) @ Sent).reshape(B, H, NC * C, D)[:, :, :T]
+    return o, S
+
+
 def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = False, mm=None, beta=None):
     """o_t = sum_{s<=t} exp(L_t - L_s) (q_t . k_s) v_s  [+ exp(L_t) q_t . S0], chunked and stable.
 
@@ -174,24 +241,13 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = Fa
     rt = torch.float64 if q.dtype == torch.float64 else torch.float32
     q, k, v, la = q.to(rt), k.to(rt), v.to(rt), logalpha.to(rt)
     S = torch.zeros(B, H, D, D, device=q.device, dtype=rt) if S0 is None else S0.to(rt)
-    if beta is None:
-        if recompute and torch.is_grad_enabled():
-            o, S = torch.utils.checkpoint.checkpoint(_scan_twopass, q, k, v, la, S, chunk, mm, use_reentrant=False)
-        else:
-            o, S = _scan_twopass(q, k, v, la, S, chunk, mm)
-        return o.to(q.dtype), S
-    outs = []
-    for s0 in range(0, T, chunk):
-        qc, kc, vc, lc = q[:, :, s0:s0 + chunk], k[:, :, s0:s0 + chunk], v[:, :, s0:s0 + chunk], la[:, :, s0:s0 + chunk]
-        bc = None if beta is None else beta[:, :, s0:s0 + chunk]
-        if recompute and torch.is_grad_enabled():
-            # activation checkpointing per chunk: the C x C decay and score matrices of every chunk of every
-            # layer otherwise stay alive for backward (the 219M model at B32 T1024 ran a 36 GiB cap out)
-            o, S = torch.utils.checkpoint.checkpoint(_chunk, qc, kc, vc, lc, S, mm, bc, use_reentrant=False)
-        else:
-            o, S = _chunk(qc, kc, vc, lc, S, mm, bc)
-        outs.append(o)
-    return torch.cat(outs, 2).to(q.dtype), S
+    fn, args = (_scan_twopass, (q, k, v, la, S, chunk, mm)) if beta is None else \
+               (_scan_twopass_delta, (q, k, v, la, beta.to(rt), S, chunk, mm))
+    if recompute and torch.is_grad_enabled():
+        o, S = torch.utils.checkpoint.checkpoint(fn, *args, use_reentrant=False)
+    else:
+        o, S = fn(*args)
+    return o.to(q.dtype), S
 
 
 class AssocCarrier(nn.Module):

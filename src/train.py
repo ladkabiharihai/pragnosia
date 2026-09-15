@@ -50,6 +50,7 @@ def main():
     ap.add_argument("--sources", default="", help="comma-separated subset of the mix (long-context phase)")
     ap.add_argument("--vocab", type=int, default=8192, help="must match the tokenizer the data was made with")
     ap.add_argument("--chunks", type=int, default=1, help="head chunks for the loss; >1 never holds all logits at once")
+    ap.add_argument("--accum", type=int, default=1, help="gradient-accumulation steps: --batch is the MICRO-batch; tokens per update = accum*batch*ctx. At ctx 2048 the 78M carrier peaks at 20.2 GiB with batch 16 and 5.9 GiB with batch 4 x accum 4, at 88% of the speed")
     ap.add_argument("--scan-chunk", type=int, default=0, help="associative scan chunk (0: the carrier's default)")
     ap.add_argument("--recompute", type=int, default=0, help="recompute each scan chunk in backward: at ctx 8192 this halves memory (25.4 -> 14.9 GiB) for 2% of speed")
     ap.add_argument("--out", default="/mnt/kv_cache/run1")
@@ -93,7 +94,7 @@ def main():
         opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), cuda_graph=bool(a.graph and a.fused))
         set_none = not opt.cuda_graph
         rng = np.random.default_rng(a.seed)
-        tok_total = a.steps * a.batch * a.ctx
+        tok_total = a.steps * a.batch * a.ctx * a.accum
         r.log(f"{P/1e6:.1f}M params, carrier {100*car/P:.1f}%, "
               f"{tok_total/1e9:.2f}B tokens = {tok_total/P:.1f} tok/param")
 
@@ -169,16 +170,20 @@ def main():
                 P = sum(p.numel() for p in m.parameters())
                 r.log(f"    GREW to d={m.d} at step {i}: {P/1e6:.1f}M params, same batch loss {lb:.4f} -> {la:.4f}, "
                       f"optimizer state {opt.state_bytes()/2**20:.0f} MiB carried")
-            x = batch(bins, ks, ps, rng, a.batch, a.ctx)
             opt.zero_grad(set_to_none=set_none)
-            if a.chunks > 1:
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    h = trunk(x[:, :a.ctx])
-                loss = m.loss(h, x[:, 1:a.ctx + 1], chunks=a.chunks)
-            else:
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    loss = F.cross_entropy(fwd(x[:, :a.ctx]).reshape(-1, a.vocab), x[:, 1:a.ctx + 1].reshape(-1))
-            loss.backward()
+            loss = None
+            for _acc in range(a.accum):
+                x = batch(bins, ks, ps, rng, a.batch, a.ctx)
+                if a.chunks > 1:
+                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                        h = trunk(x[:, :a.ctx])
+                    l_ = m.loss(h, x[:, 1:a.ctx + 1], chunks=a.chunks)
+                else:
+                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                        l_ = F.cross_entropy(fwd(x[:, :a.ctx]).reshape(-1, a.vocab), x[:, 1:a.ctx + 1].reshape(-1))
+                (l_ / a.accum).backward()
+                loss = l_.detach() if loss is None else loss + l_.detach()
+            loss = loss / a.accum
             gn = float(torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0))
             # SPIKE GUARD. The previous run went from loss 4.0998 to NaN between step 14,200 and 14,400, a
             # sudden spike rather than a drift. Clipping bounds the step but still applies a direction taken
@@ -214,7 +219,7 @@ def main():
                 # reports a throughput it never achieved and an ETA that is wildly optimistic.
                 done = i + 1 - start
                 r.log(f"{i+1}/{a.steps} loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f} "
-                      f"lr {opt.param_groups[0]['lr']:.2e} {done*a.batch*a.ctx/el/1e3:.0f} ktok/s "
+                      f"lr {opt.param_groups[0]['lr']:.2e} {done*a.batch*a.ctx*a.accum/el/1e3:.0f} ktok/s "
                       f"eta {(a.steps-i-1)*el/max(1,done)/60:.0f}m"
                       + (f" recaptures {opt.recaptures}" if opt.recaptures else ""))
             if (i + 1) % a.eval_every == 0:
