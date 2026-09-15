@@ -162,5 +162,27 @@ if dev == "cuda":
         worst = max(((a.grad - b).abs().max() / (b.abs().max() + 1e-12)).item() for a, b in zip(args, gr))
         check(f"D={Dk}: gradients of q, k, v and the decay within bf16 precision of the fp32 reference", worst < 1e-2, f"worst {worst:.1e}")
 
+    print("\nthe delta rule's kernels against the two-pass delta form")
+    # The kernel path was measured against the reference by hand when it was built and then only for finiteness
+    # in this file; every dtype and structure change to it since is checked here. bf16 dots, so 1e-2 relative.
+    from src.assoc_kernel import delta_scan_kernel
+    torch.manual_seed(2)
+    for Dk in (64, 128):
+        qk = F.normalize(torch.randn(2, 3, 333, Dk, device=dev), dim=-1); kk_ = F.normalize(torch.randn_like(qk), dim=-1)
+        vk = F.normalize(torch.randn_like(qk), dim=-1); lak = -F.softplus(torch.randn(2, 3, 333, device=dev)) * 0.05
+        bek = torch.sigmoid(torch.randn(2, 3, 333, device=dev)); S0k = torch.randn(2, 3, Dk, Dk, device=dev) * 0.1
+        ar = [t.clone().requires_grad_(True) for t in (qk, kk_, vk, lak, bek, S0k)]
+        ak = [t.clone().requires_grad_(True) for t in (qk, kk_, vk, lak, bek, S0k)]
+        wk = torch.randn_like(qk); wS = torch.randn_like(S0k)
+        yr, Sr = assoc_scan(*ar[:4], ar[5], chunk=64, beta=ar[4], kernel=False)
+        yk, Sk = delta_scan_kernel(*ak[:4], ak[4], ak[5])
+        rel = lambda a, b: ((a - b).abs().max() / (b.abs().max() + 1e-12)).item()
+        check(f"delta D={Dk}, T=333, carried S0: forward and final state within bf16 precision",
+              rel(yk, yr) < 1e-2 and rel(Sk, Sr) < 1e-2, f"y {rel(yk, yr):.1e} S {rel(Sk, Sr):.1e}")
+        ((yr * wk).sum() + (Sr * wS).sum()).backward(); ((yk * wk).sum() + (Sk * wS).sum()).backward()
+        worst = {n: rel(a.grad, b.grad) for n, a, b in zip(("q", "k", "v", "decay", "beta", "S0"), ak, ar)}
+        check(f"delta D={Dk}: all six gradients within bf16 precision of the reference", max(worst.values()) < 1e-2,
+              " ".join(f"{n} {x:.1e}" for n, x in worst.items()))
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

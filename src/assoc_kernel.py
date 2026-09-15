@@ -28,6 +28,7 @@ import triton
 import triton.language as tl
 
 C = 64
+_LOOP = {"nw_fwd": 4, "nw_bwd": 4, "ns_fwd": 3, "ns_bwd": 3}     # loop-kernel launch knobs, set by the sweep
 
 
 _CFGS = [triton.Config({}, num_warps=w, num_stages=st) for w in (2, 4, 8) for st in (1, 2, 3)]
@@ -56,7 +57,7 @@ def _fwd_out(q_ptr, k_ptr, v_ptr, la_ptr, sent_ptr, o_ptr,
     o = tl.dot(A.to(tl.bfloat16), v.to(tl.bfloat16), out_dtype=tl.float32)
     qe = (q.to(tl.float32) * tl.exp(L)[:, None]).to(tl.bfloat16)
     o += tl.dot(qe, S.to(tl.bfloat16), out_dtype=tl.float32)
-    tl.store(o_ptr + off, o, mask=tm[:, None])
+    tl.store(o_ptr + off, o.to(o_ptr.dtype.element_ty), mask=tm[:, None])
 
 
 @triton.autotune(configs=_CFGS, key=["T", "D"])
@@ -98,9 +99,9 @@ def _bwd_chunk(q_ptr, k_ptr, v_ptr, la_ptr, do_ptr, sent_ptr,
     dL = tl.sum(M, 1) - tl.sum(M, 0) + tl.sum(do * Z, 1) * eL
     tot = tl.sum(dL, 0)
     dla = tot - tl.cumsum(dL, 0) + dL                                             # reverse cumulative sum
-    tl.store(dq_ptr + off, dq, mask=tm[:, None])
-    tl.store(dk_ptr + off, dk, mask=tm[:, None])
-    tl.store(dv_ptr + off, dv, mask=tm[:, None])
+    tl.store(dq_ptr + off, dq.to(dq_ptr.dtype.element_ty), mask=tm[:, None])
+    tl.store(dk_ptr + off, dk.to(dk_ptr.dtype.element_ty), mask=tm[:, None])
+    tl.store(dv_ptr + off, dv.to(dv_ptr.dtype.element_ty), mask=tm[:, None])
     tl.store(dla_ptr + bh * s_bh_l + t0 + rt, dla, mask=tm)
     tl.store(dsent_ptr + (bh * NC + c) * D * D + rd[:, None] * D + rd[None, :], dS)
 
@@ -113,7 +114,11 @@ def _bwd_chunk(q_ptr, k_ptr, v_ptr, la_ptr, do_ptr, sent_ptr,
 @torch.library.custom_op("membrae::assoc_out", mutates_args=())
 def _op_out(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, sent: torch.Tensor, bc: int) -> torch.Tensor:
     B, H, T, D = q.shape; NC = sent.shape[2]
-    o = torch.empty(B, H, T, D, device=q.device, dtype=torch.float32)
+    # OUTPUTS IN THE CONSUMER'S DTYPE. o, dq, dk, dv, W and dW were all written in fp32 and cast to bf16 at the
+    # next boundary (autograd casts the gradients back to the inputs' dtype, W was cast for the output kernel).
+    # Writing them in that dtype from the kernel is the same numbers with half the bytes and no cast pass;
+    # _bwd_chunk moves 170 MB per layer at micro-batch 4 and its floor is that traffic, not its 7 dots.
+    o = torch.empty(B, H, T, D, device=q.device, dtype=q.dtype)
     _fwd_out[(B * H, NC)](q.contiguous(), k.contiguous(), v.contiguous(), la.contiguous(),
                           sent.contiguous(), o, T, NC, T * D, T, D=D, BC=bc)
     return o
@@ -121,17 +126,17 @@ def _op_out(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, la: torch.Tensor,
 
 @_op_out.register_fake
 def _(q, k, v, la, sent, bc):
-    return torch.empty(q.shape, device=q.device, dtype=torch.float32)
+    return torch.empty(q.shape, device=q.device, dtype=q.dtype)
 
 
 @torch.library.custom_op("membrae::assoc_out_bwd", mutates_args=())
 def _op_out_bwd(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, sent: torch.Tensor,
                 do: torch.Tensor, bc: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     B, H, T, D = q.shape; NC = sent.shape[2]
-    dq = torch.empty(B, H, T, D, device=q.device, dtype=torch.float32); dk = torch.empty_like(dq); dv = torch.empty_like(dq)
+    dq = torch.empty_like(q); dk = torch.empty_like(k); dv = torch.empty_like(v)
     dla = torch.empty(B, H, T, device=q.device, dtype=torch.float32)
     dsent = torch.empty(B, H, NC, D, D, device=q.device, dtype=torch.float32)
-    _bwd_chunk[(B * H, NC)](q.contiguous(), k.contiguous(), v.contiguous(), la.contiguous(), do.contiguous().float(),
+    _bwd_chunk[(B * H, NC)](q.contiguous(), k.contiguous(), v.contiguous(), la.contiguous(), do.contiguous(),
                             sent.contiguous(), dq, dk, dv, dla, dsent, T, NC, T * D, T, D=D, BC=bc)
     return dq, dk, dv, dla, dsent
 
@@ -140,7 +145,7 @@ def _op_out_bwd(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, la: torch.Ten
 def _(q, k, v, la, sent, do, bc):
     B, H, T, D = q.shape; NC = sent.shape[2]
     e = lambda *sh: torch.empty(*sh, device=q.device, dtype=torch.float32)
-    return e(B, H, T, D), e(B, H, T, D), e(B, H, T, D), e(B, H, T), e(B, H, NC, D, D)
+    return torch.empty_like(q), torch.empty_like(k), torch.empty_like(v), e(B, H, T), e(B, H, NC, D, D)
 
 
 def _setup(ctx, inputs, output):
@@ -151,37 +156,121 @@ def _setup(ctx, inputs, output):
 def _backward(ctx, do):
     q, k, v, la, sent = ctx.saved_tensors
     dq, dk, dv, dla, dsent = _op_out_bwd(q, k, v, la, sent, do, ctx.bc)
-    return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), dla, dsent, None
+    return dq, dk, dv, dla, dsent, None
 
 
 _op_out.register_autograd(_backward, setup_context=_setup)
 
 
-def assoc_scan_kernel(q, k, v, logalpha, S0=None):
+# ------------------------------------------------------------------ the plain rule's state over chunks
+# S_{c+1} = exp(a_c) S_c + KV_c with a scalar decay per chunk. As a weighted prefix sum it was one fp32 batched
+# GEMM of shape 32 x 32 @ 32 x 4096 per layer forward (0.143 ms: 370 MFLOP in a shape cuBLAS runs with 32 x 32
+# FFMA tiles) and two more in backward. As a recurrence it is one elementwise pass over a D x BV tile per chunk,
+# memory-bound at 16 KB per chunk; the backward is the reverse recurrence plus one inner product per chunk for
+# the decay's gradient. Partials over column blocks for that gradient, summed by the traced caller.
+@triton.jit
+def _prefix_fwd(kv_ptr, al_ptr, s0_ptr, sent_ptr, sfin_ptr, NC, HAS_S0: tl.constexpr, D: tl.constexpr, BV: tl.constexpr):
+    bh = tl.program_id(0); jb = tl.program_id(1)
+    rd = tl.arange(0, D); rj = jb * BV + tl.arange(0, BV)
+    off = rd[:, None] * D + rj[None, :]
+    if HAS_S0:
+        S = tl.load(s0_ptr + bh * D * D + off).to(tl.float32)
+    else:
+        S = tl.zeros([D, BV], dtype=tl.float32)
+    for c in range(NC):
+        base = (bh * NC + c) * D * D
+        tl.store(sent_ptr + base + off, S)
+        e = tl.exp(tl.load(al_ptr + bh * NC + c))
+        S = e * S + tl.load(kv_ptr + base + off)
+    tl.store(sfin_ptr + bh * D * D + off, S)
+
+
+@triton.jit
+def _prefix_bwd(sent_ptr, al_ptr, dsent_ptr, dsfin_ptr, dkv_ptr, dal_ptr, ds0_ptr, NC, NBH,
+                D: tl.constexpr, BV: tl.constexpr):
+    bh = tl.program_id(0); jb = tl.program_id(1)
+    rd = tl.arange(0, D); rj = jb * BV + tl.arange(0, BV)
+    off = rd[:, None] * D + rj[None, :]
+    R = tl.load(dsfin_ptr + bh * D * D + off).to(tl.float32)                     # gradient on S_{NC}
+    for i in range(NC):
+        c = NC - 1 - i
+        base = (bh * NC + c) * D * D
+        e = tl.exp(tl.load(al_ptr + bh * NC + c))
+        S = tl.load(sent_ptr + base + off)
+        tl.store(dkv_ptr + base + off, R)                                       # S_{c+1} = e S_c + KV_c
+        tl.store(dal_ptr + (jb * NBH + bh) * NC + c, e * tl.sum(tl.sum(R * S, 1), 0))
+        R = tl.load(dsent_ptr + base + off) + e * R                             # gradient on S_c
+    tl.store(ds0_ptr + bh * D * D + off, R)
+
+
+@torch.library.custom_op("membrae::prefix_scan", mutates_args=())
+def _op_prefix(KV: torch.Tensor, a_log: torch.Tensor, S0: torch.Tensor, has_s0: bool, bv: int) -> tuple[torch.Tensor, torch.Tensor]:
+    B, H, NC, D, _ = KV.shape; BH = B * H
+    sent = torch.empty_like(KV); sfin = torch.empty(B, H, D, D, device=KV.device, dtype=torch.float32)
+    _prefix_fwd[(BH, D // bv)](KV.contiguous(), a_log.contiguous(), S0.contiguous() if has_s0 else sfin,
+                               sent, sfin, NC, HAS_S0=has_s0, D=D, BV=bv)
+    return sent, sfin
+
+
+@_op_prefix.register_fake
+def _(KV, a_log, S0, has_s0, bv):
+    B, H, NC, D, _ = KV.shape
+    return torch.empty_like(KV), torch.empty(B, H, D, D, device=KV.device, dtype=torch.float32)
+
+
+@torch.library.custom_op("membrae::prefix_scan_bwd", mutates_args=())
+def _op_prefix_bwd(sent: torch.Tensor, a_log: torch.Tensor, dsent: torch.Tensor, dsfin: torch.Tensor,
+                   bv: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    B, H, NC, D, _ = sent.shape; BH = B * H; NB = D // bv
+    dKV = torch.empty_like(sent); dal = torch.empty(NB, B, H, NC, device=sent.device, dtype=torch.float32)
+    dS0 = torch.empty(B, H, D, D, device=sent.device, dtype=torch.float32)
+    _prefix_bwd[(BH, NB)](sent.contiguous(), a_log.contiguous(), dsent.contiguous(), dsfin.contiguous().float(),
+                          dKV, dal, dS0, NC, BH, D=D, BV=bv)
+    return dKV, dal, dS0
+
+
+@_op_prefix_bwd.register_fake
+def _(sent, a_log, dsent, dsfin, bv):
+    B, H, NC, D, _ = sent.shape; NB = D // bv
+    return (torch.empty_like(sent), torch.empty(NB, B, H, NC, device=sent.device, dtype=torch.float32),
+            torch.empty(B, H, D, D, device=sent.device, dtype=torch.float32))
+
+
+def _prefix_setup(ctx, inputs, output):
+    KV, a_log, S0, has_s0, bv = inputs
+    ctx.save_for_backward(a_log, output[0]); ctx.has_s0 = has_s0; ctx.bv = bv
+
+
+def _prefix_backward(ctx, dsent, dsfin):
+    a_log, sent = ctx.saved_tensors
+    if dsent is None: dsent = torch.zeros_like(sent)
+    if dsfin is None: dsfin = torch.zeros(sent.shape[0], sent.shape[1], sent.shape[3], sent.shape[4], device=sent.device)
+    dKV, dal, dS0 = _op_prefix_bwd(sent, a_log, dsent, dsfin, ctx.bv)
+    return dKV, dal.sum(0), (dS0 if ctx.has_s0 else None), None, None
+
+
+_op_prefix.register_autograd(_prefix_backward, setup_context=_prefix_setup)
+
+
+def assoc_scan_kernel(q, k, v, logalpha, S0=None, bv: int = 16):
     """Same contract as src.assoc.assoc_scan for the plain rule: (o, final state).
 
-    The chunk-level structure, in compiled PyTorch: per-chunk decay statistics, each chunk's KV contribution,
-    and the state entering every chunk as a weighted prefix sum over chunks (S_ent[c] = sum_{j<c}
-    exp(A_{c-1} - A_j) KV_j, all weights <= 1: with scalar per-chunk decays the recurrence is a matmul, not a
-    loop). Then the C x C work in the Triton kernel. bf16 inputs halve the kernel's memory traffic."""
+    The chunk-level structure: per-chunk decay statistics and each chunk's KV contribution in compiled
+    PyTorch, the state entering every chunk by the recurrence kernel above, then the C x C work in the
+    Triton output kernel. bf16 inputs halve the kernels' memory traffic."""
     B, H, T, D = q.shape
     NC = triton.cdiv(T, C); pad = NC * C - T
     la = logalpha.float().contiguous(); v = v.contiguous()
     lc = torch.nn.functional.pad(la, (0, pad)).view(B, H, NC, C)
     L = lc.cumsum(-1)
     a_log = lc.sum(-1)                                                          # log of each chunk's total decay
-    A = a_log.cumsum(-1)
-    Am1 = torch.nn.functional.pad(A, (1, 0))[..., :-1]                          # A_{c-1}, A_{-1} = 0
     w = torch.exp(a_log.unsqueeze(-1) - L).unsqueeze(-1)                        # exp(L_C - L_s), (B,H,NC,C,1)
     kp = torch.nn.functional.pad(k, (0, 0, 0, pad)).view(B, H, NC, C, D)
     vp = torch.nn.functional.pad(v, (0, 0, 0, pad)).view(B, H, NC, C, D)
     KV = ((kp.float() * w).to(torch.bfloat16).transpose(-1, -2) @ vp.to(torch.bfloat16)).float()   # (B,H,NC,D,D)
-    Wt = torch.exp((Am1.unsqueeze(-1) - A.unsqueeze(-2)).clamp(max=0.0))
-    Wt = Wt * torch.ones(NC, NC, device=q.device, dtype=Wt.dtype).tril(-1)      # [c, j], j < c
-    sent = (Wt @ KV.reshape(B, H, NC, D * D)).view(B, H, NC, D, D)
-    if S0 is not None:
-        sent = sent + torch.exp(Am1)[..., None, None] * S0.float().unsqueeze(2)
-    sfin = torch.exp(a_log[..., -1])[..., None, None] * sent[:, :, -1] + KV[:, :, -1]
+    has = S0 is not None
+    s0 = S0.float() if has else torch.zeros(B, H, D, D, device=q.device, dtype=torch.float32)
+    sent, sfin = _op_prefix(KV, a_log, s0, has, bv)
     o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), v.to(torch.bfloat16), la, sent, C)
     return o.to(q.dtype), sfin
 
@@ -217,7 +306,7 @@ def _delta_loop_fwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, s0_ptr, w_ptr, sent_ptr
         ks = tl.dot(kk.to(tl.bfloat16), S.to(tl.bfloat16), out_dtype=tl.float32)
         rhs = be[:, None] * (vv - eL[:, None] * ks)
         W = tl.dot(X.to(tl.bfloat16), rhs.to(tl.bfloat16), out_dtype=tl.float32)
-        tl.store(w_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], W, mask=tm[:, None])
+        tl.store(w_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], W.to(w_ptr.dtype.element_ty), mask=tm[:, None])
         kw = (kk.to(tl.float32) * w[:, None]).to(tl.bfloat16)
         S = tl.exp(LC) * S + tl.dot(tl.trans(kw), W.to(tl.bfloat16), out_dtype=tl.float32)
     tl.store(sfin_ptr + bh * D * D + rd[:, None] * D + rj[None, :], S)
@@ -225,22 +314,23 @@ def _delta_loop_fwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, s0_ptr, w_ptr, sent_ptr
 
 @torch.library.custom_op("membrae::delta_loop_fwd", mutates_args=())
 def _op_delta_fwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.Tensor, X: torch.Tensor,
-                  S0: torch.Tensor, has_s0: bool, bc: int, bv: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                  S0: torch.Tensor, has_s0: bool, bc: int, bv: int, bvb: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     B, H, T, D = k.shape; NC = X.shape[2]; BH = B * H
-    W = torch.empty(B, H, T, D, device=k.device, dtype=torch.float32)
+    W = torch.empty(B, H, T, D, device=k.device, dtype=torch.bfloat16)     # the output kernel's value slot
     sent = torch.empty(B, H, NC, D, D, device=k.device, dtype=torch.float32)
     sfin = torch.empty(B, H, D, D, device=k.device, dtype=torch.float32)
     _delta_loop_fwd[(BH, D // bv)](k.contiguous(), v.contiguous(), la.contiguous(), be.contiguous(), X.contiguous(),
                                    S0.contiguous() if has_s0 else sfin, W, sent, sfin,
-                                   T, NC, T * D, T, HAS_S0=has_s0, D=D, BC=bc, BV=bv)
+                                   T, NC, T * D, T, HAS_S0=has_s0, D=D, BC=bc, BV=bv,
+                                   num_warps=_LOOP["nw_fwd"], num_stages=_LOOP["ns_fwd"])
     return W, sent, sfin
 
 
 @_op_delta_fwd.register_fake
-def _(k, v, la, be, X, S0, has_s0, bc, bv):
+def _(k, v, la, be, X, S0, has_s0, bc, bv, bvb):
     B, H, T, D = k.shape; NC = X.shape[2]
     e = lambda *sh: torch.empty(*sh, device=k.device, dtype=torch.float32)
-    return e(B, H, T, D), e(B, H, NC, D, D), e(B, H, D, D)
+    return torch.empty(B, H, T, D, device=k.device, dtype=torch.bfloat16), e(B, H, NC, D, D), e(B, H, D, D)
 
 
 @triton.jit
@@ -310,7 +400,7 @@ def _delta_loop_bwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, w_ptr, sent_ptr, gs_ptr
         tl.store(dla_ptr + (jb * NBH + bh) * s_bh_l + t0 + rt, dla, mask=tm)
         tl.store(dbe_ptr + (jb * NBH + bh) * s_bh_l + t0 + rt, dbe, mask=tm)
         tl.store(dx_ptr + ((jb * NBH + bh) * NC + c) * BC * BC + rt[:, None] * BC + rt[None, :], dX)
-        tl.store(dv_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], dV, mask=tm[:, None])
+        tl.store(dv_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], dV.to(dv_ptr.dtype.element_ty), mask=tm[:, None])
         DS = DSn
     tl.store(ds0_ptr + bh * D * D + rd[:, None] * D + rj[None, :], DS)
 
@@ -322,15 +412,16 @@ def _op_delta_bwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.
     B, H, T, D = k.shape; NC = X.shape[2]; BH = B * H
     NB = D // bv
     dk = torch.empty(NB, B, H, T, D, device=k.device, dtype=torch.float32)
-    dv = torch.empty(B, H, T, D, device=k.device, dtype=torch.float32)
+    dv = torch.empty_like(v)
     dla = torch.empty(NB, B, H, T, device=k.device, dtype=torch.float32)
     dbe = torch.empty(NB, B, H, T, device=k.device, dtype=torch.float32)
     dX = torch.empty(NB, B, H, NC, bc, bc, device=k.device, dtype=torch.float32)
     dS0 = torch.empty(B, H, D, D, device=k.device, dtype=torch.float32)
     _delta_loop_bwd[(BH, NB)](k.contiguous(), v.contiguous(), la.contiguous(), be.contiguous(), X.contiguous(),
-                              W.contiguous(), sent.contiguous(), gsent.contiguous(), dW.contiguous().float(),
+                              W.contiguous(), sent.contiguous(), gsent.contiguous(), dW.contiguous(),
                               dsfin.contiguous().float(), dk, dv, dla, dbe, dX, dS0,
-                              T, NC, BH, T * D, T, D=D, BC=bc, BV=bv)
+                              T, NC, BH, T * D, T, D=D, BC=bc, BV=bv,
+                              num_warps=_LOOP["nw_bwd"], num_stages=_LOOP["ns_bwd"])
     # the partials are summed by the caller, which torch.compile traces; inside this op they would be eager
     # reductions, 48 launches per micro-step that the profile showed at the top of the table
     return dk, dv, dla, dbe, dX, dS0
@@ -340,14 +431,14 @@ def _op_delta_bwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.
 def _(k, v, la, be, X, W, sent, gsent, dW, dsfin, bc, bv):
     B, H, T, D = k.shape; NC = X.shape[2]; NB = D // bv
     e = lambda *sh: torch.empty(*sh, device=k.device, dtype=torch.float32)
-    return e(NB, B, H, T, D), e(B, H, T, D), e(NB, B, H, T), e(NB, B, H, T), e(NB, B, H, NC, bc, bc), e(B, H, D, D)
+    return e(NB, B, H, T, D), torch.empty_like(v), e(NB, B, H, T), e(NB, B, H, T), e(NB, B, H, NC, bc, bc), e(B, H, D, D)
 
 
 def _delta_setup(ctx, inputs, output):
-    k, v, la, be, X, S0, has_s0, bc, bv = inputs
+    k, v, la, be, X, S0, has_s0, bc, bv, bvb = inputs
     W, sent, sfin = output
     ctx.save_for_backward(k, v, la, be, X, W, sent)
-    ctx.has_s0 = has_s0; ctx.bc = bc; ctx.bv = bv
+    ctx.has_s0 = has_s0; ctx.bc = bc; ctx.bv = bvb
 
 
 def _delta_backward(ctx, dW, gsent, dsfin):
@@ -355,14 +446,14 @@ def _delta_backward(ctx, dW, gsent, dsfin):
     if gsent is None: gsent = torch.zeros_like(sent)
     if dsfin is None: dsfin = torch.zeros(sent.shape[0], sent.shape[1], sent.shape[3], sent.shape[4], device=k.device)
     dk, dv, dla, dbe, dX, dS0 = _op_delta_bwd(k, v, la, be, X, W, sent, gsent, dW, dsfin, ctx.bc, ctx.bv)
-    return (dk.sum(0).to(k.dtype), dv.to(v.dtype), dla.sum(0), dbe.sum(0), dX.sum(0),
-            (dS0 if ctx.has_s0 else None), None, None, None)
+    return (dk.sum(0).to(k.dtype), dv, dla.sum(0), dbe.sum(0), dX.sum(0),
+            (dS0 if ctx.has_s0 else None), None, None, None, None)
 
 
 _op_delta_fwd.register_autograd(_delta_backward, setup_context=_delta_setup)
 
 
-def delta_scan_kernel(q, k, v, logalpha, beta, S0=None, chunk: int = 64, bv: int = 32):
+def delta_scan_kernel(q, k, v, logalpha, beta, S0=None, chunk: int = 64, bv: int = 32, bv_bwd: int | None = None):
     """The delta rule end to end: X from the torch-side inverse (compiled, autograd), the loop over chunks in
     the Triton kernel, the C x C output through _op_out with the residuals W in the value slot."""
     from .assoc import _unit_lower_inverse
@@ -384,8 +475,8 @@ def delta_scan_kernel(q, k, v, logalpha, beta, S0=None, chunk: int = 64, bv: int
         X = _unit_lower_inverse(bcc.unsqueeze(-1) * ((kp @ kp.transpose(-1, -2)) * dec).tril(-1))
     has = S0 is not None
     s0 = S0.float() if has else torch.zeros(B, H, D, D, device=q.device, dtype=torch.float32)
-    W, sent, sfin = _op_delta_fwd(k.to(torch.bfloat16), v.float(), la, be, X, s0, has, Cc, bv)
-    o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), W.to(torch.bfloat16), la, sent, Cc)
+    W, sent, sfin = _op_delta_fwd(k.to(torch.bfloat16), v, la, be, X, s0, has, Cc, bv, bv_bwd or bv)
+    o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), W, la, sent, Cc)
     return o.to(q.dtype), sfin
 
 
