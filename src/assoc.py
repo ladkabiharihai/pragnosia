@@ -115,6 +115,56 @@ def _chunk(qc, kc, vc, lc, S, mm=None, bc=None):
     return o, S
 
 
+def _scan_twopass(q, k, v, la, S, chunk, mm):
+    """The plain rule as two BATCHED passes around one trivial loop.
+
+    The chunk-by-chunk version did every matmul inside a Python loop over T/C chunks, so nothing batched across
+    chunks and the GPU idled between launches: 154 ktok/s for the two-head carrier against attention's ~220 at
+    the same shape. Only one thing in the recurrence is sequential, the state carried from chunk to chunk, and
+    that step is S_c = a_c S_{c-1} + KV_c, a scaled ADD with no matmul in it. So:
+      pass 0, batched over all chunks: the C x C decayed scores, the intra-chunk output, and each chunk's
+              contribution KV_c = (K * w)^T V and total decay a_c = exp(L_C);
+      pass 1, the loop: NC scaled adds producing the state ENTERING every chunk;
+      pass 2, batched: O = intra + (Q * eL) @ S_entering.
+    Identical result to the sequential form (tests), all matmuls batched, the loop nearly free."""
+    B, H, T, D = q.shape
+    C = min(chunk, T)
+    pad = (-T) % C
+    if pad:                                                                        # zero tokens with alpha = 1
+        z = lambda t: F.pad(t, (0, 0, 0, pad)) if t.dim() == 4 else F.pad(t, (0, pad))
+        q, k, v, la = z(q), z(k), z(v), z(la)
+    NC = q.shape[2] // C
+    qc, kc, vc = (t.view(B, H, NC, C, D) for t in (q, k, v))
+    lc = la.view(B, H, NC, C)
+    L = lc.cumsum(3)                                                               # (B,H,NC,C), <= 0
+    mask = torch.ones(C, C, device=q.device, dtype=torch.bool).tril()
+    dec = torch.exp((L.unsqueeze(4) - L.unsqueeze(3)).clamp(max=0.0)) * mask       # (B,H,NC,C,C)
+    eL = torch.exp(L).unsqueeze(4)                                                 # (B,H,NC,C,1)
+    w = torch.exp((L[..., -1:] - L).clamp(max=0.0)).unsqueeze(4)                   # (B,H,NC,C,1)
+    a = torch.exp(L[..., -1])                                                      # (B,H,NC): decay over the chunk
+    if mm is None:
+        A = (qc @ kc.transpose(3, 4)) * dec
+        intra = A @ vc
+        KV = (kc * w).transpose(3, 4) @ vc                                        # (B,H,NC,D,D)
+    else:
+        qm, km, vm = qc.to(mm), kc.to(mm), vc.to(mm)
+        A = (qm @ km.transpose(3, 4)).to(dec.dtype) * dec
+        intra = (A.to(mm) @ vm).to(q.dtype)
+        KV = ((kc * w).transpose(3, 4).to(mm) @ vm).to(q.dtype)
+    # pass 1: the only sequential step, and it is a scaled add
+    ent = []
+    for c in range(NC):
+        ent.append(S)
+        S = a[:, :, c, None, None] * S + KV[:, :, c]
+    Sent = torch.stack(ent, 2)                                                     # (B,H,NC,D,D): state entering each chunk
+    if mm is None:
+        carried = (qc * eL) @ Sent
+    else:
+        carried = ((qc * eL).to(mm) @ Sent.to(mm)).to(q.dtype)
+    o = (intra + carried).reshape(B, H, NC * C, D)[:, :, :T]
+    return o, S
+
+
 def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = False, mm=None, beta=None):
     """o_t = sum_{s<=t} exp(L_t - L_s) (q_t . k_s) v_s  [+ exp(L_t) q_t . S0], chunked and stable.
 
@@ -124,6 +174,12 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = Fa
     rt = torch.float64 if q.dtype == torch.float64 else torch.float32
     q, k, v, la = q.to(rt), k.to(rt), v.to(rt), logalpha.to(rt)
     S = torch.zeros(B, H, D, D, device=q.device, dtype=rt) if S0 is None else S0.to(rt)
+    if beta is None:
+        if recompute and torch.is_grad_enabled():
+            o, S = torch.utils.checkpoint.checkpoint(_scan_twopass, q, k, v, la, S, chunk, mm, use_reentrant=False)
+        else:
+            o, S = _scan_twopass(q, k, v, la, S, chunk, mm)
+        return o.to(q.dtype), S
     outs = []
     for s0 in range(0, T, chunk):
         qc, kc, vc, lc = q[:, :, s0:s0 + chunk], k[:, :, s0:s0 + chunk], v[:, :, s0:s0 + chunk], la[:, :, s0:s0 + chunk]
