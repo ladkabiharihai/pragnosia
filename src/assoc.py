@@ -170,26 +170,38 @@ def _unit_lower_inverse(N, b=16):
 
     Every intermediate stays bounded (the Neumann series over the whole C x C did not: its powers reach norm
     C^k before vanishing and fp32 cancelled). Within a b x b diagonal block the series is summed by doubling,
-    which is exact after log2(b) steps because the block is nilpotent; across blocks it is substitution. All
-    matmuls, batched over every leading dimension, so it costs the same for one chunk or a thousand."""
+    exact after log2(b) steps because the block is nilpotent; across blocks it is substitution.
+
+    Batched over the BLOCKS as well as the leading dimensions: the diagonal blocks are inverted all at once,
+    and the substitution runs one step per block row with a single matmul each. The earlier version looped
+    over blocks in Python and, measured, was the delta rule's entire cost (1.43 ms of a 1.81 ms forward; the
+    Triton loop kernel it feeds is 0.08 ms)."""
     C = N.shape[-1]
-    I = torch.eye(C, device=N.device, dtype=N.dtype).expand_as(N)
-    X = torch.zeros_like(N)
-    cols = []
-    for i0 in range(0, C, b):
-        i1 = min(i0 + b, C)
-        R = -N[..., i0:i1, i0:i1]
-        Xd = torch.eye(i1 - i0, device=N.device, dtype=N.dtype)
-        m_ = 1
-        while m_ < (i1 - i0):
-            Xd = Xd + R @ Xd
-            R = R @ R
-            m_ *= 2
-        rhs = I[..., i0:i1, :]
-        if i0:
-            rhs = rhs - N[..., i0:i1, :i0] @ torch.cat(cols, dim=-2)
-        cols.append(Xd @ rhs)
-    return torch.cat(cols, dim=-2)
+    if C % b:
+        b = C                                                                   # tiny chunks (tests): one block
+    nb = C // b
+    lead = N.shape[:-2]
+    Nb = N.reshape(*lead, nb, b, nb, b).transpose(-3, -2)                       # (..., nb, nb, b, b): [i, j]
+    idx = torch.arange(nb, device=N.device)
+    Ndiag = Nb[..., idx, idx, :, :]                                             # (..., nb, b, b)
+    # all diagonal blocks at once: X_ii = sum_k (-N_ii)^k, doubled
+    R = -Ndiag
+    Xd = torch.eye(b, device=N.device, dtype=N.dtype).expand_as(R)
+    m_ = 1
+    while m_ < b:
+        Xd = Xd + R @ Xd
+        R = R @ R
+        m_ *= 2
+    # forward substitution over block rows: X[i, :] = X_ii (E_i - sum_{j<i} N_ij X[j, :])
+    rows = []
+    E = torch.eye(C, device=N.device, dtype=N.dtype).expand(*lead, C, C)
+    for i in range(nb):
+        rhs = E[..., i * b:(i + 1) * b, :]
+        if i:
+            below = torch.cat(rows, dim=-2)                                     # (..., i*b, C)
+            rhs = rhs - N[..., i * b:(i + 1) * b, :i * b] @ below
+        rows.append(Xd[..., i, :, :] @ rhs)
+    return torch.cat(rows, dim=-2)
 
 
 def _scan_twopass_delta(q, k, v, la, be, S, chunk, mm, kernel=False):
@@ -233,7 +245,7 @@ def _scan_twopass_delta(q, k, v, la, be, S, chunk, mm, kernel=False):
         # decayed scores in backward instead of saving them, which is where the 27 GiB went
         from .assoc_kernel import _op_out
         o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), W.reshape(B, H, NC * C, D).to(torch.bfloat16),
-                    la, Sent)[:, :, :T]
+                    la, Sent, C)[:, :, :T]
     else:
         o = (A @ W + (qc * eL) @ Sent).reshape(B, H, NC * C, D)[:, :, :T]
     return o, S
@@ -266,6 +278,7 @@ class AssocCarrier(nn.Module):
         # more than one token); the PyTorch two-pass form otherwise, and always for the T=1 decode step, which
         # is CUDA-graphed already and has nothing for a chunk kernel to do.
         self.kernel = kernel
+        self.bv = 32                                  # state columns per program in the delta loop kernel
         self.h = heads or max(1, d // (head_dim or 64))
         assert d % self.h == 0 and (d // self.h) % 2 == 0
         self.dk = d // self.h
@@ -317,7 +330,8 @@ class AssocCarrier(nn.Module):
         if self.kernel and x.is_cuda and self.dk in (64, 128) and T > 1:
             if self.delta:
                 from .assoc_kernel import delta_scan_kernel
-                o, S = delta_scan_kernel(q, k, v, la, bt, S0)
+                o, S = delta_scan_kernel(q, k, v, la, bt, S0, chunk=self.chunk if self.chunk in (64, 128) else 64,
+                                         bv=self.bv)
             else:
                 from .assoc_kernel import assoc_scan_kernel
                 o, S = assoc_scan_kernel(q, k, v, la, S0)
