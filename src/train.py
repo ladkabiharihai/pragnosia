@@ -33,7 +33,9 @@ def batch(bins, ks, ps, rng, B, T):
         a = bins[ks[rng.choice(len(ks), p=ps)]]
         j = rng.integers(0, len(a) - T - 2)
         o[i] = a[j:j + T + 1]
-    return torch.from_numpy(o).cuda()
+    # pinned + non-blocking: a pageable .cuda() waits for every kernel already queued before it returns, so
+    # the host could never run ahead of the card and the card idled through each step's sampling.
+    return torch.from_numpy(o).pin_memory().cuda(non_blocking=True)
 
 
 def main():
@@ -62,6 +64,8 @@ def main():
     ap.add_argument("--grow-to", type=int, default=0, help="width to grow to at --grow-at")
     ap.add_argument("--fused", type=int, default=1, help="one compiled kernel group per parameter update")
     ap.add_argument("--graph", type=int, default=1, help="replay the optimizer step as a CUDA graph")
+    ap.add_argument("--graph-step", type=int, default=1,
+                    help="capture forward+loss+backward as ONE CUDA graph and replay it per micro-batch")
     ap.add_argument("--resume", default="")
     ap.add_argument("--mixer", default="spin", choices=["spin", "gspin", "fspin", "aspin", "dspin", "wspin", "xspin", "w2spin", "attn"])
     ap.add_argument("--spike", type=float, default=4.0)
@@ -94,6 +98,37 @@ def main():
         opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), cuda_graph=bool(a.graph and a.fused))
         set_none = not opt.cuda_graph
         rng = np.random.default_rng(a.seed)
+
+        # THE MICRO-STEP AS ONE CUDA GRAPH. With the scan in Triton the step was launch-bound: 1.3 ms of
+        # kernels inside a 23.9 ms micro-step at micro-batch 4, the rest python and launch gaps. The same
+        # recipe as the optimizer and the decode step: a static input buffer, grads zeroed in place, the whole
+        # forward + chunked loss + backward captured once and replayed per accumulation step. Measured at 78M
+        # ctx 2048: delta 143 -> 264 ktok/s, plain 282 -> 295, attention 312 -> 325. torch.compile's own
+        # "reduce-overhead" mode could not do this (it refuses grads that outlive the replay); manual capture
+        # can. Copying the batch into the static buffer is the only per-step host work left.
+        def capture():
+            if not (a.graph_step and a.compile): return None
+            xs = torch.empty((a.batch, a.ctx + 1), dtype=torch.long, device="cuda")
+            xs.copy_(batch(bins, ks, ps, np.random.default_rng(11), a.batch, a.ctx))
+            for p_ in m.parameters():
+                if p_.grad is None: p_.grad = torch.zeros_like(p_)
+            out = {}
+            def micro():
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    h = trunk(xs[:, :a.ctx])
+                l_ = m.loss(h, xs[:, 1:a.ctx + 1], chunks=max(1, a.chunks))
+                (l_ / a.accum).backward()
+                out["loss"] = l_.detach()
+            s_ = torch.cuda.Stream(); s_.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(s_):
+                for _ in range(3): micro()                       # compile and warm on a side stream
+            torch.cuda.current_stream().wait_stream(s_)
+            for p_ in m.parameters(): p_.grad.zero_()
+            g = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(g):
+                micro()
+            for p_ in m.parameters(): p_.grad.zero_()
+            return g, xs, out["loss"]
         tok_total = a.steps * a.batch * a.ctx * a.accum
         r.log(f"{P/1e6:.1f}M params, carrier {100*car/P:.1f}%, "
               f"{tok_total/1e9:.2f}B tokens = {tok_total/P:.1f} tok/param")
@@ -142,9 +177,14 @@ def main():
             else:
                 r.log("WARNING: checkpoint carries no optimizer state; the first steps will be a shock")
             r.log(f"resumed from {a.resume} at step {start}, loss {sd['loss']:.4f}")
+        gs = capture()
+        if gs is not None:
+            set_none = False
+            r.log(f"micro-step captured as a CUDA graph; {torch.cuda.memory_reserved()/2**30:.1f} GiB reserved after capture")
 
         t0 = time.time(); ema = None
         gnorms = []; skipped = 0; recent = []; bpbs = []
+        nxt = [batch(bins, ks, ps, rng, a.batch, a.ctx) for _ in range(a.accum)]
         for i in range(start, a.steps):
             w = min(1.0, (i + 1) / a.warm)
             # cosine over the whole budget: a flat rate lets a model equilibrate at that rate's noise floor,
@@ -165,6 +205,7 @@ def main():
                 torch._dynamo.reset()                        # compiled graphs hold the old parameters
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
+                gs = capture()                                # the graph held the old parameters
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                     la = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
                 P = sum(p.numel() for p in m.parameters())
@@ -173,17 +214,22 @@ def main():
             opt.zero_grad(set_to_none=set_none)
             loss = None
             for _acc in range(a.accum):
-                x = batch(bins, ks, ps, rng, a.batch, a.ctx)
-                if a.chunks > 1:
+                x = nxt[_acc]
+                if gs is not None:
+                    gs[1].copy_(x); gs[0].replay(); l_ = gs[2].clone()
+                elif a.chunks > 1:
                     with torch.autocast("cuda", dtype=torch.bfloat16):
                         h = trunk(x[:, :a.ctx])
                     l_ = m.loss(h, x[:, 1:a.ctx + 1], chunks=a.chunks)
                 else:
                     with torch.autocast("cuda", dtype=torch.bfloat16):
                         l_ = F.cross_entropy(fwd(x[:, :a.ctx]).reshape(-1, a.vocab), x[:, 1:a.ctx + 1].reshape(-1))
-                (l_ / a.accum).backward()
+                if gs is None: (l_ / a.accum).backward()      # the graph replay already did
                 loss = l_.detach() if loss is None else loss + l_.detach()
             loss = loss / a.accum
+            # the next step's batches are sampled NOW, while the card is still busy with this one; the
+            # gradient-norm read below is a sync and everything after it is a gap the card sits through
+            nxt = [batch(bins, ks, ps, rng, a.batch, a.ctx) for _ in range(a.accum)]
             gn = float(torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0))
             # SPIKE GUARD. The previous run went from loss 4.0998 to NaN between step 14,200 and 14,400, a
             # sudden spike rather than a drift. Clipping bounds the step but still applies a direction taken
@@ -221,6 +267,7 @@ def main():
                 r.log(f"{i+1}/{a.steps} loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f} "
                       f"lr {opt.param_groups[0]['lr']:.2e} {done*a.batch*a.ctx*a.accum/el/1e3:.0f} ktok/s "
                       f"eta {(a.steps-i-1)*el/max(1,done)/60:.0f}m"
+                      + (f" {torch.cuda.memory_reserved()/2**30:.1f} GiB" if i + 1 - start == 200 else "")
                       + (f" recaptures {opt.recaptures}" if opt.recaptures else ""))
             if (i + 1) % a.eval_every == 0:
                 # BITS PER BYTE, not loss per token. Per-token loss depends on the vocabulary and is
