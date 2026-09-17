@@ -32,11 +32,15 @@ class Attn(nn.Module):
     norm median rose 1.15 -> 5.0 and every step from 15,400 on was skipped by the spike guard while the spin
     run at identical settings took 57 skips in 120,000. The control must be the strongest attention I can
     field, or "spin wins" means nothing."""
-    def __init__(self, d: int, heads: int = 8):
+    def __init__(self, d: int, heads: int = 8, window: int = 0):
         super().__init__()
         self.n = nn.LayerNorm(d); self.h = heads
         self.q = nn.Linear(d, d); self.k = nn.Linear(d, d); self.v = nn.Linear(d, d); self.o = nn.Linear(d, d)
         self.qn = nn.RMSNorm(d // heads); self.kn = nn.RMSNorm(d // heads)
+        # window > 0 restricts each token to the last `window` positions. The cost is then linear in length and
+        # the cache is bounded, which is the only form of attention that can sit in this project without
+        # giving back what the carrier was built to win.
+        self.window = window
 
     def forward(self, x, h0=None):
         """h0 is a KV cache (k, v) from earlier tokens of the SAME window, for incremental decoding.
@@ -51,7 +55,19 @@ class Attn(nn.Module):
         if h0 is not None:
             k = torch.cat([h0[0], k], dim=2); v = torch.cat([h0[1], v], dim=2)
         Lk = k.shape[2]
-        if Lk == T_:
+        if self.window and Lk == T_ and T_ % self.window == 0 and T_ > self.window:
+            # BLOCK-LOCAL, not a masked full attention. An explicit sliding-window mask costs a T x T boolean
+            # and turns off the flash kernel: measured 94 ktok/s against the plain attention's 300 at ctx 2048.
+            # Reshaping into independent blocks of `window` and running the flash kernel causally inside each
+            # keeps the fast path, is linear in length, and bounds the cache at one block. Tokens early in a
+            # block see less; the carrier layers between these are what carry the rest.
+            w = self.window; nb = T_ // w
+            qb, kb, vb = [t.reshape(B_, self.h, nb, w, D // self.h).reshape(B_ * nb, self.h, w, D // self.h)
+                          if False else t.view(B_, self.h, nb, w, D // self.h).transpose(1, 2).reshape(B_ * nb, self.h, w, D // self.h)
+                          for t in (q, k, v)]
+            a = F.scaled_dot_product_attention(qb, kb, vb, is_causal=True)
+            a = a.view(B_, nb, self.h, w, D // self.h).transpose(1, 2).reshape(B_, self.h, T_, D // self.h)
+        elif Lk == T_:
             a = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         else:
             # is_causal aligns its mask to the top-left, so with a cache (k longer than q) it masks the WRONG
@@ -127,8 +143,16 @@ class LM(nn.Module):
               # key survive. The copy probe of 2026-09-17 put the carrier's exact recall at zero beyond 1,000
               # tokens against attention's +1.59 at 4,000, and the cause is key crosstalk, which sparsity
               # attacks directly. Everything else is identical to hdspin, so the pair isolates it.
-              "sdspin": lambda d: AssocCarrier(d, delta=True, head_dim=128, key_topk=8), "attn": Attn}[mixer]
-        self.mix = nn.ModuleList([mk(d) for _ in range(layers)])
+              "sdspin": lambda d: AssocCarrier(d, delta=True, head_dim=128, key_topk=8),
+              # ALTERNATING: odd layers are the wide delta carrier, even layers are attention over a 512-token
+              # window. The copy probe of 2026-09-17 showed the carrier has no exact recall past 1,000 tokens
+              # while attention holds +1.59 at 4,000; a bounded window buys back exact recall of the recent
+              # past at linear cost and a fixed cache, and the carrier still carries everything older. Both
+              # blocks are 4 d^2, so this has the same parameter count as twelve of either.
+              "altspin": lambda d, i: (Attn(d, window=512) if i % 2 else
+                                       AssocCarrier(d, delta=True, head_dim=128)),
+              "attn": Attn}[mixer]
+        self.mix = nn.ModuleList([mk(d, i) if mixer == "altspin" else mk(d) for i in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
         self.head_compile = True                    # tests flip it to compare against the eager form
