@@ -302,14 +302,15 @@ def main():
                     if os.path.exists(f"{a.out}/ckpt.pt"):
                         os.replace(f"{a.out}/ckpt.pt", f"{a.out}/ckpt_prev.pt")
                     torch.save({"model": m.state_dict(), "opt": opt.state_dict(),
-                                "step": i + 1, "loss": ema,
+                                "step": i + 1, "loss": ema_t.item(),   # the current average, not the last log's
                                 "cfg": dict(vocab=a.vocab, d=m.d, layers=a.layers,
                                             mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer)},
                                f"{a.out}/ckpt.pt")
-        if ema is None:
+        if ema_t is None:
             r.log(f"NOTHING TO DO: resumed at step {start} with --steps {a.steps}. A resumed run counts from the "
                   f"checkpoint's step, so --steps must exceed it.")
         else:
+            ema = ema_t.item(); skipped = int(skips_t.item())
             r.log(f"final loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f}, {skipped} spike-skips")
 
 
