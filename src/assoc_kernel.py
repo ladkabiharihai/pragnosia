@@ -491,7 +491,9 @@ def delta_scan_kernel(q, k, v, logalpha, beta, S0=None, chunk: int = 64, bv: int
         X = _unit_lower_inverse(bcc.unsqueeze(-1) * ((kp @ kp.transpose(-1, -2)) * dec).tril(-1))
     has = S0 is not None
     s0 = S0.float() if has else torch.zeros(B, H, D, D, device=q.device, dtype=torch.float32)
-    W, sent, sfin = _op_delta_fwd(k.to(torch.bfloat16), v, la, be, X, s0, has, Cc, bv, bv_bwd)
+    # v in bf16: the loop kernel rounds the right-hand side beta (v - e^L k S) to bf16 for its dot in any
+    # case, and the fp32 v the op saved for its backward was 22 MiB per layer at B4 T2048
+    W, sent, sfin = _op_delta_fwd(k.to(torch.bfloat16), v.to(torch.bfloat16), la, be, X, s0, has, Cc, bv, bv_bwd)
     o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), W, la, sent, Cc)
     return o.to(q.dtype), sfin
 
