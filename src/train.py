@@ -191,6 +191,7 @@ def main():
         # optimizer sees a zero gradient (its moments decay once) rather than being skipped outright; on
         # steps that do not spike, which is all but a few per ten thousand, nothing changes.
         hist = torch.zeros(1000, device="cuda"); skips_t = torch.zeros((), device="cuda"); ema_t = None
+        nonfin = torch.zeros((), device="cuda"); nf_prev = 0
         marks = []; bpbs = []; skipped = 0
         nxt = [batch(bins, ks, ps, rng, a.batch, a.ctx) for _ in range(a.accum)]
         for i in range(start, a.steps):
@@ -253,9 +254,18 @@ def main():
             # good inside the fused update (nan_to_num), so the optimizer state never sees it
             torch._foreach_mul_([p_.grad for p_ in m.parameters() if p_.grad is not None], keep.float())
             opt.step()
-            ema_t = loss.clone() if ema_t is None else ema_t.mul_(0.99).add_(loss, alpha=0.01)
+            # A NON-FINITE LOSS MUST NOT POISON THE AVERAGE. The first version of this device-side guard folded
+            # every loss into the EMA, so one NaN batch made the average NaN for ever and the run stopped at the
+            # next log line even though the guard had already zeroed that step's gradients and the weights were
+            # still finite: run20 died that way at step 32,600 on 2026-09-17 with a healthy checkpoint on disk.
+            # The average now skips non-finite losses and they are counted instead; what decides a real
+            # divergence is the weights, checked below.
+            fin_l = torch.isfinite(loss)
+            nonfin.add_(~fin_l)
+            ema_t = loss.clone() if ema_t is None else torch.where(fin_l, ema_t * 0.99 + loss * 0.01, ema_t)
             if (i + 1) % 200 == 0:
                 ema, nsk, medv = ema_t.item(), int(skips_t.item()), float(med.item())   # the one sync
+                nnf = int(nonfin.item())
                 el = time.time() - t0
                 # Rate and ETA must count from the RESUME point, not from step zero, or a resumed run
                 # reports a throughput it never achieved and an ETA that is wildly optimistic.
@@ -265,8 +275,17 @@ def main():
                       f"eta {(a.steps-i-1)*el/max(1,done)/60:.0f}m"
                       + (f" {torch.cuda.memory_reserved()/2**30:.1f} GiB" if done == 200 else "")
                       + (f" recaptures {opt.recaptures}" if opt.recaptures else ""))
+                if nnf > nf_prev:
+                    # the guard zeroed those steps; the run continues unless the weights themselves went bad
+                    alive = bool(torch.stack([p_.isfinite().all() for p_ in m.parameters()]).all().item())
+                    recent_nf = nnf - nf_prev; nf_prev = nnf
+                    r.log(f"    {recent_nf} non-finite loss(es) in the last 200 steps (total {nnf}); "
+                          f"weights {'still finite' if alive else 'NON-FINITE'}")
+                    if not alive or recent_nf > 100:
+                        r.log(f"    DIVERGED: the weights are not finite; stopping rather than burning the card")
+                        break
                 if not math.isfinite(ema):
-                    r.log(f"    NON-FINITE LOSS within the last 200 steps; stopping rather than burning the card on NaN")
+                    r.log(f"    NON-FINITE RUNNING LOSS with finite weights; stopping, this should not happen")
                     break
                 if nsk > skipped:
                     r.log(f"    {nsk - skipped} spike(s) skipped in the last 200 steps (median |g| {medv:.2f}, total {nsk})")
