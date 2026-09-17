@@ -373,3 +373,22 @@ def facts(model, FACTS):
     return dict(correct=right, n=len(FACTS), conf_right=float(np.mean(rc)) if rc else 0.0,
                 conf_wrong=float(np.mean(wc)) if wc else 0.0,
                 separation=float(np.mean(rc) - np.mean(wc)) if rc and wc else 0.0)
+
+def arithmetic_exact(model, items, max_new=6):
+    """The harder half of the arithmetic probe: GENERATE the answer instead of ranking four candidates.
+
+    Multiple choice can be passed by elimination; exact match cannot. The first integer in the greedy
+    continuation is the answer, so a model that writes "= 122 and then" still counts as right. Chance is
+    effectively zero here, which is what makes it worth running on a model too small to do arithmetic: the
+    first non-zero score is a real event, and until then the multiple-choice number carries the signal."""
+    right = 0; blank = 0
+    for stem, ans, _ in items:
+        ids = model.encode(stem)
+        txt = model.decode(model.generate(ids, max_new, temp=0.0))     # generate returns the NEW tokens only
+        digits = ""
+        for ch in txt:
+            if ch.isdigit(): digits += ch
+            elif digits: break
+        if not digits: blank += 1
+        elif digits == ans.strip(): right += 1
+    return dict(correct=right, n=len(items), no_number=blank)
