@@ -114,7 +114,15 @@ class LM(nn.Module):
               # two heads: d^2/2 of state per layer, 5.5x the eleven-head carrier's. The wide (four-head) run
               # closed 18% of the long-context gap and the gain was larger at long context than at short, which
               # says the state is what is being exhausted; this is the next point on that curve.
-              "w2spin": lambda d: AssocCarrier(d, heads=2), "attn": Attn}[mixer]
+              "w2spin": lambda d: AssocCarrier(d, heads=2),
+              # HEAD DIM 128, the widest head the Triton kernels take. State per layer is d*128 against the
+              # 64-dim carrier's d*64, so twice the memory AT KERNEL SPEED, where wspin's 176-dim heads fall
+              # back to the torch path and run at 98 ktok/s against 335. At d768 that is six heads. These two
+              # exist to ask, paired, whether the delta rule helps once the state is no longer the binding
+              # constraint: at ctx 2048 the delta rule was 0.014 bits/byte ahead of the eleven-head carrier
+              # and at ctx 8192 it was 0.026 behind the four-head wide one (2026-09-17).
+              "hspin": lambda d: AssocCarrier(d, head_dim=128),
+              "hdspin": lambda d: AssocCarrier(d, delta=True, head_dim=128), "attn": Attn}[mixer]
         self.mix = nn.ModuleList([mk(d) for _ in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
