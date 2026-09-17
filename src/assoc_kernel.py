@@ -25,8 +25,17 @@ the state in fp32.
 from __future__ import annotations
 from typing import Optional
 import torch
+import torch._functorch.config
 import triton
 import triton.language as tl
+
+# THE COMPILE CACHE DOES NOT SEE THESE OPS' BACKWARD. AOTAutograd's on-disk cache keys on the forward graph
+# dynamo hands it; the Python backward glue below (_backward, _delta_backward, ...) and the ops' layout tags
+# are only read when the backward is traced, which a cache hit skips. Measured on 2026-09-17: an edit to
+# _backward and a needs_contiguous_strides tag had no effect on the compiled program for a whole session,
+# every process loading a backward compiled from the code as it was before the edit. The FX graph cache is
+# keyed on the traced graphs themselves and stays on; only the tracing must happen every time.
+torch._functorch.config.enable_autograd_cache = False
 
 C = 64
 _LOOP = {"nw_fwd": 4, "nw_bwd": 4, "ns_fwd": 3, "ns_bwd": 3}     # loop-kernel launch knobs, set by the sweep
@@ -112,7 +121,11 @@ def _bwd_chunk(q_ptr, k_ptr, v_ptr, la_ptr, do_ptr, sent_ptr,
 # bookkeeping in there cost more in launches than the sequential kernels it replaced (2.19 ms against 1.13).
 # The chunk-level structure is in assoc_scan_kernel below, which torch.compile fuses with the rest of the layer,
 # and autograd differentiates the state path through the prefix matmul on its own.
-@torch.library.custom_op("membrae::assoc_out", mutates_args=())
+# needs_contiguous_strides on every op: without it inductor handed the output kernel's backward its incoming
+# gradient in the transposed order of the RMSNorm after it (a 12-layer model only; a 2-layer one got it
+# contiguous), and the op's own .contiguous() then ran as an eager copy of 11 MB per layer. With the tag the
+# copy is the producer's, fused into the kernel that writes the tensor.
+@torch.library.custom_op("membrae::assoc_out", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
 def _op_out(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, sent: torch.Tensor, bc: int) -> torch.Tensor:
     B, H, T, D = q.shape; NC = sent.shape[2]
     # OUTPUTS IN THE CONSUMER'S DTYPE. o, dq, dk, dv, W and dW were all written in fp32 and cast to bf16 at the
@@ -130,7 +143,7 @@ def _(q, k, v, la, sent, bc):
     return torch.empty(q.shape, device=q.device, dtype=q.dtype)
 
 
-@torch.library.custom_op("membrae::assoc_out_bwd", mutates_args=())
+@torch.library.custom_op("membrae::assoc_out_bwd", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
 def _op_out_bwd(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, sent: torch.Tensor,
                 do: torch.Tensor, bc: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     B, H, T, D = q.shape; NC = sent.shape[2]
@@ -156,7 +169,10 @@ def _setup(ctx, inputs, output):
 
 def _backward(ctx, do):
     q, k, v, la, sent = ctx.saved_tensors
-    dq, dk, dv, dla, dsent = _op_out_bwd(q, k, v, la, sent, do, ctx.bc)
+    # do arrives with the strides of the transpose after the output RMSNorm, (B,T,H,D) order; made contiguous
+    # HERE, in the traced backward, the copy fuses into the RMSNorm backward kernel that produces it, where
+    # inside the op it was an eager copy of 11 MB per layer (0.23 ms per micro-step at micro-batch 4)
+    dq, dk, dv, dla, dsent = _op_out_bwd(q, k, v, la, sent, do.contiguous(), ctx.bc)
     return dq, dk, dv, dla, dsent, None
 
 
@@ -204,7 +220,7 @@ def _prefix_bwd(sent_ptr, al_ptr, dsent_ptr, dsfin_ptr, dkv_ptr, dal_ptr, ds0_pt
     tl.store(ds0_ptr + bh * D * D + off, R)
 
 
-@torch.library.custom_op("membrae::prefix_scan", mutates_args=())
+@torch.library.custom_op("membrae::prefix_scan", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
 def _op_prefix(KV: torch.Tensor, a_log: torch.Tensor, S0: torch.Tensor, has_s0: bool, bv: int) -> tuple[torch.Tensor, torch.Tensor]:
     B, H, NC, D, _ = KV.shape; BH = B * H
     sent = torch.empty_like(KV); sfin = torch.empty(B, H, D, D, device=KV.device, dtype=torch.float32)
@@ -219,7 +235,7 @@ def _(KV, a_log, S0, has_s0, bv):
     return torch.empty_like(KV), torch.empty(B, H, D, D, device=KV.device, dtype=torch.float32)
 
 
-@torch.library.custom_op("membrae::prefix_scan_bwd", mutates_args=())
+@torch.library.custom_op("membrae::prefix_scan_bwd", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
 def _op_prefix_bwd(sent: torch.Tensor, a_log: torch.Tensor, dsent: torch.Tensor, dsfin: torch.Tensor,
                    bv: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     B, H, NC, D, _ = sent.shape; BH = B * H; NB = D // bv
@@ -313,7 +329,7 @@ def _delta_loop_fwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, s0_ptr, w_ptr, sent_ptr
     tl.store(sfin_ptr + bh * D * D + rd[:, None] * D + rj[None, :], S)
 
 
-@torch.library.custom_op("membrae::delta_loop_fwd", mutates_args=())
+@torch.library.custom_op("membrae::delta_loop_fwd", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
 def _op_delta_fwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.Tensor, X: torch.Tensor,
                   S0: torch.Tensor, has_s0: bool, bc: int, bv: int, bvb: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     B, H, T, D = k.shape; NC = X.shape[2]; BH = B * H
@@ -406,7 +422,7 @@ def _delta_loop_bwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, w_ptr, sent_ptr, gs_ptr
     tl.store(ds0_ptr + bh * D * D + rd[:, None] * D + rj[None, :], DS)
 
 
-@torch.library.custom_op("membrae::delta_loop_bwd", mutates_args=())
+@torch.library.custom_op("membrae::delta_loop_bwd", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
 def _op_delta_bwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.Tensor, X: torch.Tensor,
                   W: torch.Tensor, sent: torch.Tensor, gsent: torch.Tensor, dW: torch.Tensor,
                   dsfin: torch.Tensor, bc: int, bv: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -448,7 +464,8 @@ def _delta_backward(ctx, dW, gsent, dsfin):
     k, v, la, be, X, W, sent = ctx.saved_tensors
     if gsent is None: gsent = torch.zeros_like(sent)
     if dsfin is None: dsfin = torch.zeros(sent.shape[0], sent.shape[1], sent.shape[3], sent.shape[4], device=k.device)
-    dk, dv, dla, dbe, dX, dS0 = _op_delta_bwd(k, v, la, be, X, W, sent, gsent, dW, dsfin, ctx.bc, ctx.bv)
+    dk, dv, dla, dbe, dX, dS0 = _op_delta_bwd(k, v, la, be, X, W, sent, gsent.contiguous(), dW.contiguous(),
+                                              dsfin.contiguous(), ctx.bc, ctx.bv)
     return (dk.float().sum(0).to(k.dtype), dv, dla.sum(0), dbe.sum(0), dX.float().sum(0).to(X.dtype),
             (dS0 if ctx.has_s0 else None), None, None, None, None)
 
@@ -590,7 +607,7 @@ def _inv_bwd(k_ptr, la_ptr, be_ptr, x_ptr, dx_ptr, dk_ptr, dla_ptr, dbe_ptr,
     tl.store(dbe_ptr + bh * s_bh_l + t0 + rt, dbe, mask=tm)
 
 
-@torch.library.custom_op("membrae::delta_inv", mutates_args=())
+@torch.library.custom_op("membrae::delta_inv", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
 def _op_inv(k: torch.Tensor, la: torch.Tensor, be: torch.Tensor, nc: int) -> torch.Tensor:
     B, H, T, D = k.shape; BH = B * H
     N = torch.empty(B, H, nc, C, C, device=k.device, dtype=torch.float32)
@@ -608,7 +625,7 @@ def _(k, la, be, nc):
     return torch.empty(B, H, nc, C, C, device=k.device, dtype=torch.bfloat16)
 
 
-@torch.library.custom_op("membrae::delta_inv_bwd", mutates_args=())
+@torch.library.custom_op("membrae::delta_inv_bwd", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
 def _op_inv_bwd(k: torch.Tensor, la: torch.Tensor, be: torch.Tensor, X: torch.Tensor, dX: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     B, H, T, D = k.shape; nc = X.shape[2]; BH = B * H
     dk = torch.empty(B, H, T, D, device=k.device, dtype=torch.float32)
@@ -760,7 +777,7 @@ def _prep_bwd(qp_ptr, kp_ptr, vp_ptr, gl_ptr, th_ptr, pos_ptr, dq_ptr, dk_ptr, d
 _PREP_BT_MIN = 16                                  # the smallest tile in _PREP_CFGS sizes the theta partials
 
 
-@torch.library.custom_op("membrae::assoc_prep", mutates_args=())
+@torch.library.custom_op("membrae::assoc_prep", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
 def _op_prep(qp: torch.Tensor, kp: torch.Tensor, vp: torch.Tensor, gl: Optional[torch.Tensor],
              theta: torch.Tensor, pos: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     B, T, H, D = qp.shape
@@ -780,7 +797,7 @@ def _(qp, kp, vp, gl, theta, pos):
     return e(), e(), e()
 
 
-@torch.library.custom_op("membrae::assoc_prep_bwd", mutates_args=())
+@torch.library.custom_op("membrae::assoc_prep_bwd", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
 def _op_prep_bwd(qp: torch.Tensor, kp: torch.Tensor, vp: torch.Tensor, gl: Optional[torch.Tensor],
                  theta: torch.Tensor, pos: torch.Tensor, dq: torch.Tensor, dk: torch.Tensor,
                  dv: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
