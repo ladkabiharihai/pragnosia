@@ -105,5 +105,31 @@ with torch.no_grad():
     check("no cache means no memory: the same call with h0=None differs",
           not torch.allclose(ma.mix[0](ma.e(xa[:, 11:12]))[0], ma.mix[0](ma.e(xa[:, 11:12]), (st[0][0][:, :, :11], st[0][1][:, :, :11]))[0]))
 
+if dev == "cuda":
+    print("the compiled output head")
+    torch.manual_seed(3)
+    mh = LM(vocab=1024, d=64, layers=2, ctx=64, mixer="attn").to(dev)
+    xh = torch.randint(0, 1024, (4, 65), device=dev)
+    def head(compiled, chunks):
+        mh.head_compile = compiled; mh.zero_grad(set_to_none=True)
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            h = mh.trunk(xh[:, :-1])
+        l = mh.loss(h, xh[:, 1:], chunks=chunks); l.backward()
+        return l.item(), mh.e.weight.grad.clone(), mh.mlp[-1].b.weight.grad.clone()
+    # the reference: full logits in fp32, no chunking, no checkpoint, no autocast in the head
+    mh.zero_grad(set_to_none=True)
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        h = mh.trunk(xh[:, :-1])
+    lr_ = F.cross_entropy(F.linear(h.float(), mh.e.weight).reshape(-1, 1024), xh[:, 1:].reshape(-1)); lr_.backward()
+    ref = (lr_.item(), mh.e.weight.grad.clone(), mh.mlp[-1].b.weight.grad.clone())
+    rel = lambda a, b: (a - b).abs().max().item() / b.abs().max().item()
+    for chunks in (1, 4):
+        le, ge, be = head(False, chunks); lc, gc, bc = head(True, chunks)
+        check(f"compiled head, {chunks} chunk(s): loss equals the fp32 full-logits cross-entropy and the eager chunked head",
+              abs(lc - ref[0]) < 2e-3 and abs(lc - le) < 1e-4, f"compiled {lc:.5f} eager {le:.5f} fp32 {ref[0]:.5f}")
+        check(f"compiled head, {chunks} chunk(s): embedding and trunk gradients within bf16 precision of the fp32 reference, "
+              f"as close as the eager head's", rel(gc, ref[1]) < 1e-2 and rel(bc, ref[2]) < 1e-2 and rel(gc, ref[1]) < 1.5 * rel(ge, ref[1]) + 1e-4,
+              f"compiled {rel(gc, ref[1]):.1e} / {rel(bc, ref[2]):.1e}, eager {rel(ge, ref[1]):.1e} / {rel(be, ref[2]):.1e}")
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

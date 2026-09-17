@@ -33,7 +33,9 @@ def _update(p, g, vr, vc, v, m, lr, b1: float, b2: float, eps: float, wd: float,
 
     vr/vc are the factored second moment (2D), else v is the dense one. m is the momentum or None. lr is a
     0-d tensor so the same compiled kernel serves every step of a schedule."""
-    gf = g.float()
+    # a non-finite gradient contributes nothing: the trainer's guard zeroes a skipped step's gradients with a
+    # multiply, and NaN * 0 is NaN, so the zeroing has to finish here, fused into the update
+    gf = torch.nan_to_num(g.float(), nan=0.0, posinf=0.0, neginf=0.0)
     if vr is not None:
         sq = gf.square().add(eps)
         vr.mul_(b2).add_(sq.mean(dim=1), alpha=1 - b2)

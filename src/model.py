@@ -78,6 +78,22 @@ class MLP(nn.Module):
         return x + self.b(F.gelu(self.a(self.n(x))))
 
 
+def _head_piece_eager(hc, yc, E):
+    """One chunk of the output head: logits in bf16, cross-entropy in fp32."""
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        lg = F.linear(hc, E)
+    return F.cross_entropy(lg.float(), yc, reduction="sum")
+
+
+# The same chunk compiled, once, at module level (a closure compiled inside loss() would recompile per call).
+# Eager, the fp32 cast of a (2048, 8192) logits chunk was a separate copy kernel, twelve per micro-step with
+# the checkpoint's recompute and the backward, and the softmax ran as cuDNN's generic forward and backward.
+# Compiled, the cast fuses into a single log-sum-exp reduction over the bf16 logits and the backward into one
+# kernel: attention 325 -> 343 ktok/s at ctx 2048 micro-batch 4, reserved memory 4.52 -> 4.16 GiB. Chunk
+# count 1, 2, 4 or 8 makes no difference to either at this vocabulary.
+_head_piece = torch.compile(_head_piece_eager, dynamic=False)
+
+
 class LM(nn.Module):
     def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512, mixer="spin"):
         """mixer: "spin" (plain carrier), "gspin" (input and output gates), "fspin" (input and recurrence
@@ -102,6 +118,7 @@ class LM(nn.Module):
         self.mix = nn.ModuleList([mk(d) for _ in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
+        self.head_compile = True                    # tests flip it to compare against the eager form
         self.apply(self._init)
 
     @staticmethod
@@ -128,17 +145,14 @@ class LM(nn.Module):
         The logits are B x T x V; at B32 T1024 V16384 that is 2.1 GB in fp32 and several copies of it live
         through softmax and its backward, which is what ran a 36 GiB cap out of memory. The head is applied to
         the batch in chunks under activation checkpointing, so at most one chunk's logits exist at a time and
-        they are recomputed in backward. The trunk is compiled; this is not, and need not be."""
+        they are recomputed in backward. The chunk itself is compiled (see _head_piece); the loop is not."""
         y = y.reshape(-1); hf = h.reshape(-1, h.shape[-1]); n = hf.shape[0]
         E = self.e.weight
-        def piece(hc, yc):
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                lg = F.linear(hc, E)
-            return F.cross_entropy(lg.float(), yc, reduction="sum")
+        piece = _head_piece if (h.is_cuda and self.head_compile) else _head_piece_eager
         total = 0.0
         for i in range(chunks):
             sl = slice(i * n // chunks, (i + 1) * n // chunks)
-            total = total + torch.utils.checkpoint.checkpoint(piece, hf[sl], y[sl], use_reentrant=False)
+            total = total + torch.utils.checkpoint.checkpoint(piece, hf[sl], y[sl], E, use_reentrant=False)
         return total / n
 
     def forward(self, x, return_hidden=False, hidden_layer=None):
