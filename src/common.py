@@ -217,10 +217,18 @@ def eval_bpb(model, tok, bins, ks, ps, rng, n_batches=20, B=8, T=512, vocab=8192
                 j = rng.integers(0, len(a) - T - 2)
                 o[i] = a[j:j + T + 1]
             x = torch.from_numpy(o).cuda()
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                lg = model(x[:, :T]).float()
             y = x[:, 1:T + 1]
-            nats += F.cross_entropy(lg.reshape(-1, vocab), y.reshape(-1), reduction="sum").item()
+            # CHUNKED, like the training loss: all the logits at once are B x T x V in fp32, which at B8
+            # T8192 V8192 is 2.0 GiB and is exactly what killed run20's eval at ctx 8192 inside a 14 GiB cap
+            # on 2026-09-17. Rows in blocks of 4096 hold one block of logits at 128 MiB instead.
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                h = model.trunk(x[:, :T])
+            hf = h.reshape(-1, h.shape[-1]); yf = y.reshape(-1)
+            for s0 in range(0, hf.shape[0], 4096):
+                hc = hf[s0:s0 + 4096]
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    lg = F.linear(hc, model.e.weight)
+                nats += F.cross_entropy(lg.float(), yf[s0:s0 + 4096], reduction="sum").item()
             for b in range(B):
                 nbytes += len(tok.decode([int(t) for t in y[b]]).encode("utf-8"))
     model.train()
