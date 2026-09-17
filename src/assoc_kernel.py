@@ -203,21 +203,35 @@ def _prefix_bwd(sent_ptr, al_ptr, dsent_ptr, dsfin_ptr, dkv_ptr, dal_ptr, ds0_pt
     tl.store(ds0_ptr + bh * D * D + off, R)
 
 
+def _chunk_kv(k, v, w, NC):
+    """Each chunk's KV contribution, (B,H,NC,D,D) fp32, from the bf16 k and v the output kernel reads and the
+    per-token weight w = exp(L_C - L_s), (B,H,NC,C,1) fp32. The weighted k is rounded to bf16 for the dot."""
+    B, H, T, D = k.shape
+    kw = (k.view(B, H, NC, -1, D).float() * w).to(torch.bfloat16)
+    return (kw.transpose(-1, -2) @ v.view(B, H, NC, -1, D)).float()
+
+
 @torch.library.custom_op("membrae::prefix_scan", mutates_args=())
-def _op_prefix(KV: torch.Tensor, a_log: torch.Tensor, S0: torch.Tensor, has_s0: bool, bv: int) -> tuple[torch.Tensor, torch.Tensor]:
-    B, H, NC, D, _ = KV.shape; BH = B * H
-    sent = torch.empty(B, H, NC, D, D, device=KV.device, dtype=torch.bfloat16)   # see _op_delta_fwd: bf16 saved states
-    sfin = torch.empty(B, H, D, D, device=KV.device, dtype=torch.float32)
-    _prefix_fwd[(BH, D // bv)](KV.contiguous(), a_log.contiguous(), S0.contiguous() if has_s0 else sfin,
+def _op_prefix(k: torch.Tensor, v: torch.Tensor, w: torch.Tensor, a_log: torch.Tensor, S0: torch.Tensor,
+               has_s0: bool, bv: int) -> tuple[torch.Tensor, torch.Tensor]:
+    # THE KV MATMUL LIVES INSIDE THE OP. Traced by autograd it kept the fp32 k for the weighting's backward
+    # and both bf16 operands for its own, 44 MiB per layer at B4 T2048, on top of the bf16 k and v the output
+    # kernel saves; inside the op nothing is saved but those same k and v, and the backward recomputes the
+    # weighted k (one elementwise pass) from them.
+    B, H, NC = w.shape[:3]; D = k.shape[-1]; BH = B * H
+    KV = _chunk_kv(k, v, w, NC)
+    sent = torch.empty(B, H, NC, D, D, device=k.device, dtype=torch.bfloat16)   # see _op_delta_fwd: bf16 saved states
+    sfin = torch.empty(B, H, D, D, device=k.device, dtype=torch.float32)
+    _prefix_fwd[(BH, D // bv)](KV, a_log.contiguous(), S0.contiguous() if has_s0 else sfin,
                                sent, sfin, NC, HAS_S0=has_s0, D=D, BV=bv)
     return sent, sfin
 
 
 @_op_prefix.register_fake
-def _(KV, a_log, S0, has_s0, bv):
-    B, H, NC, D, _ = KV.shape
-    return (torch.empty(B, H, NC, D, D, device=KV.device, dtype=torch.bfloat16),
-            torch.empty(B, H, D, D, device=KV.device, dtype=torch.float32))
+def _(k, v, w, a_log, S0, has_s0, bv):
+    B, H, NC = w.shape[:3]; D = k.shape[-1]
+    return (torch.empty(B, H, NC, D, D, device=k.device, dtype=torch.bfloat16),
+            torch.empty(B, H, D, D, device=k.device, dtype=torch.float32))
 
 
 @torch.library.custom_op("membrae::prefix_scan_bwd", mutates_args=())
@@ -241,16 +255,26 @@ def _(sent, a_log, dsent, dsfin, bv):
 
 
 def _prefix_setup(ctx, inputs, output):
-    KV, a_log, S0, has_s0, bv = inputs
-    ctx.save_for_backward(a_log, output[0]); ctx.has_s0 = has_s0; ctx.bv = bv
+    k, v, w, a_log, S0, has_s0, bv = inputs
+    ctx.save_for_backward(k, v, w, a_log, output[0]); ctx.has_s0 = has_s0; ctx.bv = bv
 
 
 def _prefix_backward(ctx, dsent, dsfin):
-    a_log, sent = ctx.saved_tensors
+    k, v, w, a_log, sent = ctx.saved_tensors
+    B, H, NC = w.shape[:3]; D = k.shape[-1]
     if dsent is None: dsent = torch.zeros(sent.shape, device=sent.device, dtype=torch.float32)
     if dsfin is None: dsfin = torch.zeros(sent.shape[0], sent.shape[1], sent.shape[3], sent.shape[4], device=sent.device)
     dKV, dal, dS0 = _op_prefix_bwd(sent, a_log, dsent, dsfin, ctx.bv)
-    return dKV, dal.sum(0), (dS0 if ctx.has_s0 else None), None, None
+    # through KV_c = (k w)^T v per chunk, the weighted k recomputed
+    kc = k.view(B, H, NC, -1, D); vc = v.view(B, H, NC, -1, D)
+    kw = (kc.float() * w).to(torch.bfloat16)
+    dKVb = dKV.to(torch.bfloat16)
+    dkw = (vc @ dKVb.transpose(-1, -2)).float()                                 # (B,H,NC,C,D)
+    dv = (kw @ dKVb).float()
+    dk = dkw * w
+    dw = (dkw * kc.float()).sum(-1, keepdim=True)
+    return (dk.view(k.shape).to(k.dtype), dv.view(v.shape).to(v.dtype), dw, dal.sum(0),
+            (dS0 if ctx.has_s0 else None), None, None)
 
 
 _op_prefix.register_autograd(_prefix_backward, setup_context=_prefix_setup)
@@ -269,13 +293,13 @@ def assoc_scan_kernel(q, k, v, logalpha, S0=None, bv: int = 16):
     L = lc.cumsum(-1)
     a_log = lc.sum(-1)                                                          # log of each chunk's total decay
     w = torch.exp(a_log.unsqueeze(-1) - L).unsqueeze(-1)                        # exp(L_C - L_s), (B,H,NC,C,1)
-    kp = torch.nn.functional.pad(k, (0, 0, 0, pad)).view(B, H, NC, C, D)
-    vp = torch.nn.functional.pad(v, (0, 0, 0, pad)).view(B, H, NC, C, D)
-    KV = ((kp.float() * w).to(torch.bfloat16).transpose(-1, -2) @ vp.to(torch.bfloat16)).float()   # (B,H,NC,D,D)
+    kb = k.to(torch.bfloat16); vb = v.to(torch.bfloat16)
+    if pad:                                                                     # the prefix op wants whole chunks
+        kb = torch.nn.functional.pad(kb, (0, 0, 0, pad)); vb = torch.nn.functional.pad(vb, (0, 0, 0, pad))
     has = S0 is not None
     s0 = S0.float() if has else torch.zeros(B, H, D, D, device=q.device, dtype=torch.float32)
-    sent, sfin = _op_prefix(KV, a_log, s0, has, bv)
-    o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), v.to(torch.bfloat16), la, sent, C)
+    sent, sfin = _op_prefix(kb, vb, w, a_log, s0, has, bv)
+    o = _op_out(q.to(torch.bfloat16), kb[..., :T, :], vb[..., :T, :], la, sent, C)
     return o.to(q.dtype), sfin
 
 
