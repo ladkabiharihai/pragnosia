@@ -184,5 +184,32 @@ if dev == "cuda":
         check(f"delta D={Dk}: all six gradients within bf16 precision of the reference", max(worst.values()) < 1e-2,
               " ".join(f"{n} {x:.1e}" for n, x in worst.items()))
 
+    print("\nthe fused plumbing kernel (normalise, gate, rotate, cast) against the torch form")
+    from src.assoc_kernel import prep_kernel
+    def prep_ref(qp, kp, vp, gl, theta, pos):
+        q_, k_, v_ = [F.normalize(t.transpose(1, 2).float(), dim=-1) for t in (qp, kp, vp)]
+        if gl is not None:
+            k_ = k_ * torch.sigmoid(gl.float()).transpose(1, 2).unsqueeze(-1)
+        return rotate(q_, theta, pos), rotate(k_, theta, pos), v_
+    rel = lambda a, b: ((a.float() - b.float()).abs().max() / (b.float().abs().max() + 1e-12)).item()
+    torch.manual_seed(0)
+    for Dk, Tp, gate, p0 in ((64, 2048, True, 0), (64, 333, False, 1000), (128, 512, True, 4096)):
+        Hp = 3
+        mk = lambda: (torch.randn(2, Tp, Hp, Dk, device=dev) * 3).to(torch.bfloat16).requires_grad_()
+        qp, kp, vp = mk(), mk(), mk()
+        gl = (torch.randn(2, Tp, Hp, device=dev) * 2).to(torch.bfloat16).requires_grad_() if gate else None
+        th = (10000.0 ** (-torch.arange(0, Dk, 2, device=dev).float() / Dk)).unsqueeze(0).repeat(Hp, 1).requires_grad_()
+        pos = p0 + torch.arange(Tp, device=dev)
+        outs = prep_kernel(qp, kp, vp, gl, th, pos); refs = prep_ref(qp, kp, vp, gl, th, pos)
+        e_out = max(rel(a, b) for a, b in zip(outs, refs))
+        ws = [torch.randn_like(r) for r in refs]
+        ins = [qp, kp, vp, th] + ([gl] if gate else [])
+        gk = torch.autograd.grad(sum((o.float() * w).sum() for o, w in zip(outs, ws)), ins)
+        gr = torch.autograd.grad(sum((r * w).sum() for r, w in zip(refs, ws)), ins)
+        e_gr = max(rel(a, b) for a, b in zip(gk, gr))
+        check(f"D={Dk}, T={Tp}, gate={gate}, positions from {p0}: outputs and every gradient (projections, theta"
+              + (", gate" if gate else "") + ") within bf16 precision", e_out < 1e-2 and e_gr < 1e-2,
+              f"out {e_out:.1e} grads {e_gr:.1e}")
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

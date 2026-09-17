@@ -23,6 +23,7 @@ number of heads at d/D. Inputs any float dtype; the matmuls run in bf16 with fp3
 the state in fp32.
 """
 from __future__ import annotations
+from typing import Optional
 import torch
 import triton
 import triton.language as tl
@@ -636,3 +637,190 @@ def _inv_backward(ctx, dX):
 
 
 _op_inv.register_autograd(_inv_backward, setup_context=_inv_setup)
+
+
+# ------------------------------------------------------------------ the plumbing before the scan, fused
+# What the carrier does between its projections and the scan: unit-normalise q, k and v per head, scale k
+# by the write gate (plain rule), rotate q and k by pos * theta per channel pair, cast to bf16, and lay the
+# result out (B,H,T,D)-contiguous for the kernels. Under torch.compile that was three kernels per layer
+# (two forward, one backward) at 0.19 ms per layer, B4 T2048, with fp32 intermediates of every tensor kept
+# for the backward. Here one forward pass reads the three bf16 projections and the gate logits and writes
+# the three bf16 outputs; one backward pass recomputes the norms, the angles and the gate from the same
+# inputs (all cheap: one sum of squares per row, one cos and sin per pair) and writes the grads of the
+# projections in THEIR layout, (B,T,H,D), which is what the projection GEMMs' backward reads without a
+# transpose. The gate's grad is per (b,t,h); theta's is a reduction over batch and time, accumulated per
+# program into a partial buffer and summed by the traced caller. The rotation is orthogonal, so the gate
+# can be applied on either side of it; the write gate's sigmoid is taken in fp32 here where the torch form
+# rounded it to bf16.
+_PREP_CFGS = [triton.Config({"BT": bt}, num_warps=w) for bt in (16, 32, 64) for w in (2, 4, 8)]
+
+
+@triton.jit
+def _pairs(x):
+    """(BT, D) -> the even and odd columns as two (BT, D/2) tiles: loaded as one contiguous tile, split in
+    registers. Loading the columns with stride 2 instead cost 2x (no vector loads): 106 us per layer backward."""
+    return tl.split(tl.reshape(x, (x.shape[0], x.shape[1] // 2, 2)))
+
+
+@triton.jit
+def _interleave(a, b):
+    return tl.reshape(tl.join(a, b), (a.shape[0], a.shape[1] * 2))
+
+
+@triton.jit
+def _unit(x1, x2):
+    return 1.0 / tl.maximum(tl.sqrt(tl.sum(x1 * x1 + x2 * x2, 1)), 1e-12)
+
+
+@triton.autotune(configs=_PREP_CFGS, key=["T", "D", "HAS_GATE"])
+@triton.jit
+def _prep_fwd(qp_ptr, kp_ptr, vp_ptr, gl_ptr, th_ptr, pos_ptr, q_ptr, k_ptr, v_ptr, T, H,
+              HAS_GATE: tl.constexpr, D: tl.constexpr, BT: tl.constexpr):
+    bh = tl.program_id(0); pt = tl.program_id(1)
+    b = bh // H; h = bh % H
+    t = pt * BT + tl.arange(0, BT); tm = t < T
+    d = tl.arange(0, D); i = tl.arange(0, D // 2)
+    m = tm[:, None] & (d[None, :] >= 0)
+    in_off = ((b * T + t)[:, None] * H + h) * D + d[None, :]                  # (B,T,H,D)
+    out_off = (bh * T + t)[:, None] * D + d[None, :]                           # (B,H,T,D)
+    pos = tl.load(pos_ptr + t, mask=tm, other=0).to(tl.float32)
+    th = tl.load(th_ptr + h * (D // 2) + i)
+    ang = pos[:, None] * th[None, :]
+    c = tl.cos(ang); s = tl.sin(ang)
+    # q: normalise, rotate
+    x1, x2 = _pairs(tl.load(qp_ptr + in_off, mask=m, other=0.).to(tl.float32))
+    inv = _unit(x1, x2)
+    tl.store(q_ptr + out_off, (_interleave(x1 * c - x2 * s, x1 * s + x2 * c) * inv[:, None]).to(tl.bfloat16), mask=m)
+    # k: normalise, gate, rotate
+    x1, x2 = _pairs(tl.load(kp_ptr + in_off, mask=m, other=0.).to(tl.float32))
+    inv = _unit(x1, x2)
+    if HAS_GATE:
+        g = tl.load(gl_ptr + (b * T + t) * H + h, mask=tm, other=0.).to(tl.float32)
+        inv = inv * tl.sigmoid(g)
+    tl.store(k_ptr + out_off, (_interleave(x1 * c - x2 * s, x1 * s + x2 * c) * inv[:, None]).to(tl.bfloat16), mask=m)
+    # v: normalise
+    x = tl.load(vp_ptr + in_off, mask=m, other=0.).to(tl.float32)
+    inv = 1.0 / tl.maximum(tl.sqrt(tl.sum(x * x, 1)), 1e-12)
+    tl.store(v_ptr + out_off, (x * inv[:, None]).to(tl.bfloat16), mask=m)
+
+
+@triton.autotune(configs=_PREP_CFGS, key=["T", "D", "HAS_GATE"])
+@triton.jit
+def _prep_bwd(qp_ptr, kp_ptr, vp_ptr, gl_ptr, th_ptr, pos_ptr, dq_ptr, dk_ptr, dv_ptr,
+              dqp_ptr, dkp_ptr, dvp_ptr, dgl_ptr, dth_ptr, T, H, NT,
+              HAS_GATE: tl.constexpr, D: tl.constexpr, BT: tl.constexpr):
+    """With u = x / |x|, r = R(ang) u and g the grad on r: du = R^T g, dx = (du - u (u . du)) / |x|, and
+    d ang = g2 r1 - g1 r2 per pair (the derivative of a rotation is the rotation by a quarter turn)."""
+    bh = tl.program_id(0); pt = tl.program_id(1)
+    b = bh // H; h = bh % H
+    t = pt * BT + tl.arange(0, BT); tm = t < T
+    d = tl.arange(0, D); i = tl.arange(0, D // 2)
+    m = tm[:, None] & (d[None, :] >= 0)
+    in_off = ((b * T + t)[:, None] * H + h) * D + d[None, :]
+    out_off = (bh * T + t)[:, None] * D + d[None, :]
+    pos = tl.load(pos_ptr + t, mask=tm, other=0).to(tl.float32)
+    th = tl.load(th_ptr + h * (D // 2) + i)
+    ang = pos[:, None] * th[None, :]
+    c = tl.cos(ang); s = tl.sin(ang)
+    # q
+    x1, x2 = _pairs(tl.load(qp_ptr + in_off, mask=m, other=0.).to(tl.float32))
+    inv = _unit(x1, x2)
+    u1 = x1 * inv[:, None]; u2 = x2 * inv[:, None]
+    g1, g2 = _pairs(tl.load(dq_ptr + out_off, mask=m, other=0.).to(tl.float32))
+    dang = g2 * (u1 * c - u2 * s) - g1 * (u1 * s + u2 * c)
+    du1 = g1 * c + g2 * s; du2 = g2 * c - g1 * s
+    dot = tl.sum(u1 * du1 + u2 * du2, 1)
+    tl.store(dqp_ptr + in_off, _interleave(du1 - u1 * dot[:, None], du2 - u2 * dot[:, None]) * inv[:, None], mask=m)
+    # k
+    x1, x2 = _pairs(tl.load(kp_ptr + in_off, mask=m, other=0.).to(tl.float32))
+    inv = _unit(x1, x2)
+    u1 = x1 * inv[:, None]; u2 = x2 * inv[:, None]
+    g1, g2 = _pairs(tl.load(dk_ptr + out_off, mask=m, other=0.).to(tl.float32))
+    r1 = u1 * c - u2 * s; r2 = u1 * s + u2 * c                                 # R u, before the gate
+    if HAS_GATE:
+        sg = tl.sigmoid(tl.load(gl_ptr + (b * T + t) * H + h, mask=tm, other=0.).to(tl.float32))
+        dsg = tl.sum(g1 * r1 + g2 * r2, 1)
+        tl.store(dgl_ptr + (b * T + t) * H + h, dsg * sg * (1.0 - sg), mask=tm)
+        g1 = g1 * sg[:, None]; g2 = g2 * sg[:, None]                           # the rest sees sg * g
+    dang += g2 * r1 - g1 * r2
+    du1 = g1 * c + g2 * s; du2 = g2 * c - g1 * s
+    dot = tl.sum(u1 * du1 + u2 * du2, 1)
+    tl.store(dkp_ptr + in_off, _interleave(du1 - u1 * dot[:, None], du2 - u2 * dot[:, None]) * inv[:, None], mask=m)
+    # theta: this program's share of the reduction over batch and time
+    tl.store(dth_ptr + ((b * NT + pt) * H + h) * (D // 2) + i, tl.sum(dang * pos[:, None], 0))
+    # v
+    x = tl.load(vp_ptr + in_off, mask=m, other=0.).to(tl.float32)
+    inv = 1.0 / tl.maximum(tl.sqrt(tl.sum(x * x, 1)), 1e-12)
+    u = x * inv[:, None]
+    g = tl.load(dv_ptr + out_off, mask=m, other=0.).to(tl.float32)
+    dot = tl.sum(u * g, 1)
+    tl.store(dvp_ptr + in_off, (g - u * dot[:, None]) * inv[:, None], mask=m)
+
+
+_PREP_BT_MIN = 16                                  # the smallest tile in _PREP_CFGS sizes the theta partials
+
+
+@torch.library.custom_op("membrae::assoc_prep", mutates_args=())
+def _op_prep(qp: torch.Tensor, kp: torch.Tensor, vp: torch.Tensor, gl: Optional[torch.Tensor],
+             theta: torch.Tensor, pos: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    B, T, H, D = qp.shape
+    e = lambda: torch.empty(B, H, T, D, device=qp.device, dtype=torch.bfloat16)
+    q, k, v = e(), e(), e()
+    has = gl is not None
+    _prep_fwd[lambda meta: (B * H, triton.cdiv(T, meta["BT"]))](
+        qp.contiguous(), kp.contiguous(), vp.contiguous(), gl.contiguous() if has else theta,
+        theta.contiguous().float(), pos.contiguous(), q, k, v, T, H, HAS_GATE=has, D=D)
+    return q, k, v
+
+
+@_op_prep.register_fake
+def _(qp, kp, vp, gl, theta, pos):
+    B, T, H, D = qp.shape
+    e = lambda: torch.empty(B, H, T, D, device=qp.device, dtype=torch.bfloat16)
+    return e(), e(), e()
+
+
+@torch.library.custom_op("membrae::assoc_prep_bwd", mutates_args=())
+def _op_prep_bwd(qp: torch.Tensor, kp: torch.Tensor, vp: torch.Tensor, gl: Optional[torch.Tensor],
+                 theta: torch.Tensor, pos: torch.Tensor, dq: torch.Tensor, dk: torch.Tensor,
+                 dv: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    B, T, H, D = qp.shape; NT = triton.cdiv(T, _PREP_BT_MIN)
+    dqp = torch.empty_like(qp); dkp = torch.empty_like(kp); dvp = torch.empty_like(vp)
+    dgl = torch.empty(B, T, H, device=qp.device, dtype=torch.float32)
+    dth = torch.zeros(B * NT, H, D // 2, device=qp.device, dtype=torch.float32)   # a larger tile fills fewer rows
+    has = gl is not None
+    _prep_bwd[lambda meta: (B * H, triton.cdiv(T, meta["BT"]))](
+        qp.contiguous(), kp.contiguous(), vp.contiguous(), gl.contiguous() if has else theta,
+        theta.contiguous().float(), pos.contiguous(), dq.contiguous(), dk.contiguous(), dv.contiguous(),
+        dqp, dkp, dvp, dgl, dth, T, H, NT, HAS_GATE=has, D=D)
+    return dqp, dkp, dvp, dgl, dth
+
+
+@_op_prep_bwd.register_fake
+def _(qp, kp, vp, gl, theta, pos, dq, dk, dv):
+    B, T, H, D = qp.shape; NT = triton.cdiv(T, _PREP_BT_MIN)
+    return (torch.empty_like(qp), torch.empty_like(kp), torch.empty_like(vp),
+            torch.empty(B, T, H, device=qp.device, dtype=torch.float32),
+            torch.empty(B * NT, H, D // 2, device=qp.device, dtype=torch.float32))
+
+
+def _prep_setup(ctx, inputs, output):
+    qp, kp, vp, gl, theta, pos = inputs
+    ctx.has_gate = gl is not None
+    ctx.save_for_backward(qp, kp, vp, theta, pos, *([gl] if ctx.has_gate else []))
+
+
+def _prep_backward(ctx, dq, dk, dv):
+    qp, kp, vp, theta, pos = ctx.saved_tensors[:5]
+    gl = ctx.saved_tensors[5] if ctx.has_gate else None
+    dqp, dkp, dvp, dgl, dth = _op_prep_bwd(qp, kp, vp, gl, theta, pos, dq, dk, dv)
+    return dqp, dkp, dvp, (dgl.to(gl.dtype) if ctx.has_gate else None), dth.sum(0).to(theta.dtype), None
+
+
+_op_prep.register_autograd(_prep_backward, setup_context=_prep_setup)
+
+
+def prep_kernel(qp, kp, vp, gate_logits, theta, pos):
+    """qp, kp, vp: the projections as (B,T,H,D) views; gate_logits: (B,T,H) or None (delta rule); theta:
+    (H, D/2); pos: (T,) integer positions. Returns bf16 q, k, v as (B,H,T,D), ready for the scan kernels."""
+    return _op_prep(qp, kp, vp, gate_logits, theta, pos)

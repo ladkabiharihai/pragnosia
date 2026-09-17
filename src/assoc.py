@@ -316,18 +316,26 @@ class AssocCarrier(nn.Module):
         """h0: (state S (B,H,dk,dk), position offset) from a previous window, or None."""
         B, T, D = x.shape
         z = self.ln(x)
-        q, k, v = [t(z).view(B, T, self.h, self.dk).transpose(1, 2) for t in (self.q, self.k, self.v)]
-        q, k, v = F.normalize(q, dim=-1), F.normalize(k, dim=-1), F.normalize(v, dim=-1)   # scores in [-1, 1], unit writes
-        if not self.delta:
-            k = k * torch.sigmoid(self.wi(z)).transpose(1, 2).unsqueeze(-1)        # write gate per head
         S0, p0 = (None, pos0) if h0 is None else h0
         # p0 may be a 0-d tensor: a CUDA-graphed decode step needs the position on the device, not baked in
         pos = p0 + torch.arange(T, device=x.device)
-        q, k = rotate(q, self.theta, pos), rotate(k, self.theta, pos)
+        kern = self.kernel and x.is_cuda and self.dk in (64, 128) and T > 1
+        if kern:
+            # normalise, gate, rotate and cast in one kernel each way, straight from the projections' layout
+            # into the scan kernels' (B,H,T,D); measured against the torch form below in tests/test_assoc.py
+            from .assoc_kernel import prep_kernel
+            qp, kp, vp = [t(z).view(B, T, self.h, self.dk) for t in (self.q, self.k, self.v)]
+            q, k, v = prep_kernel(qp, kp, vp, None if self.delta else self.wi(z), self.theta, pos)
+        else:
+            q, k, v = [t(z).view(B, T, self.h, self.dk).transpose(1, 2) for t in (self.q, self.k, self.v)]
+            q, k, v = F.normalize(q, dim=-1), F.normalize(k, dim=-1), F.normalize(v, dim=-1)   # scores in [-1, 1], unit writes
+            if not self.delta:
+                k = k * torch.sigmoid(self.wi(z)).transpose(1, 2).unsqueeze(-1)    # write gate per head
+            q, k = rotate(q, self.theta, pos), rotate(k, self.theta, pos)
         la = self.logalpha(z).transpose(1, 2)                                     # (B,H,T)
         mm = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") and x.is_cuda else None
         bt = torch.sigmoid(self.wb(z)).transpose(1, 2) if self.delta else None     # (B,H,T)
-        if self.kernel and x.is_cuda and self.dk in (64, 128) and T > 1:
+        if kern:
             if self.delta:
                 from .assoc_kernel import delta_scan_kernel
                 o, S = delta_scan_kernel(q, k, v, la, bt, S0, chunk=self.chunk if self.chunk in (64, 128) else 64,
@@ -335,6 +343,7 @@ class AssocCarrier(nn.Module):
             else:
                 from .assoc_kernel import assoc_scan_kernel
                 o, S = assoc_scan_kernel(q, k, v, la, S0)
+            o = o.to(qp.dtype)          # the projections' dtype: bf16 under autocast (no copy), fp32 otherwise
         else:
             o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk, recompute=self.recompute, mm=mm, beta=bt,
                               kernel=self.kernel and self.dk in (64, 128))
