@@ -271,9 +271,17 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = Fa
 
 class AssocCarrier(nn.Module):
     def __init__(self, d: int, heads: int | None = None, chunk: int = 64, recompute: bool = False,
-                 delta: bool = False, head_dim: int | None = None, kernel: bool = True):
+                 delta: bool = False, head_dim: int | None = None, kernel: bool = True, key_topk: int = 0):
         super().__init__()
         self.d = d; self.recompute = recompute; self.delta = delta
+        # SPARSE KEYS. An outer-product memory with dense unit keys in d_k dimensions holds about d_k patterns
+        # before crosstalk swamps the read: two random unit vectors in 128 dimensions have expected |cos| of
+        # 0.088, so n stored pairs give signal 1 against noise growing as sqrt(n/d_k), and by 8,192 tokens the
+        # noise is 8x the signal. Measured 2026-09-17: the carrier's copy gain halves by 1,000 tokens of
+        # separation and goes NEGATIVE by 4,000, where attention still holds +1.59. Keeping only the largest
+        # key_topk coordinates of each key means two keys collide only when they share an active coordinate,
+        # so capacity rises combinatorially rather than linearly. 0 keeps the dense key.
+        self.key_topk = key_topk
         # kernel: the Triton scan (src/assoc_kernel.py) when it applies (CUDA, plain rule, head dim 64 or 128,
         # more than one token); the PyTorch two-pass form otherwise, and always for the T=1 decode step, which
         # is CUDA-graphed already and has nothing for a chunk kernel to do.
@@ -320,14 +328,21 @@ class AssocCarrier(nn.Module):
         # p0 may be a 0-d tensor: a CUDA-graphed decode step needs the position on the device, not baked in
         pos = p0 + torch.arange(T, device=x.device)
         kern = self.kernel and x.is_cuda and self.dk in (64, 128) and T > 1
+        kp = self.k(z).view(B, T, self.h, self.dk)
+        if self.key_topk:
+            # straight through: the mask selects, the surviving coordinates keep their gradient unchanged and
+            # the dropped ones get none, which is what a selection should do
+            m = torch.zeros_like(kp).scatter_(-1, kp.abs().topk(self.key_topk, dim=-1).indices, 1.0)
+            kp = kp * m
         if kern:
             # normalise, gate, rotate and cast in one kernel each way, straight from the projections' layout
             # into the scan kernels' (B,H,T,D); measured against the torch form below in tests/test_assoc.py
             from .assoc_kernel import prep_kernel
-            qp, kp, vp = [t(z).view(B, T, self.h, self.dk) for t in (self.q, self.k, self.v)]
+            qp, vp = self.q(z).view(B, T, self.h, self.dk), self.v(z).view(B, T, self.h, self.dk)
             q, k, v = prep_kernel(qp, kp, vp, None if self.delta else self.wi(z), self.theta, pos)
         else:
-            q, k, v = [t(z).view(B, T, self.h, self.dk).transpose(1, 2) for t in (self.q, self.k, self.v)]
+            q, k, v = [t.view(B, T, self.h, self.dk).transpose(1, 2)
+                       for t in (self.q(z), kp.reshape(B, T, self.d), self.v(z))]
             q, k, v = F.normalize(q, dim=-1), F.normalize(k, dim=-1), F.normalize(v, dim=-1)   # scores in [-1, 1], unit writes
             if not self.delta:
                 k = k * torch.sigmoid(self.wi(z)).transpose(1, 2).unsqueeze(-1)    # write gate per head

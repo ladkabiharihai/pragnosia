@@ -122,7 +122,12 @@ class LM(nn.Module):
               # constraint: at ctx 2048 the delta rule was 0.014 bits/byte ahead of the eleven-head carrier
               # and at ctx 8192 it was 0.026 behind the four-head wide one (2026-09-17).
               "hspin": lambda d: AssocCarrier(d, head_dim=128),
-              "hdspin": lambda d: AssocCarrier(d, delta=True, head_dim=128), "attn": Attn}[mixer]
+              "hdspin": lambda d: AssocCarrier(d, delta=True, head_dim=128),
+              # SPARSE KEYS on top of the wide delta carrier: only the 8 largest coordinates of each 128-dim
+              # key survive. The copy probe of 2026-09-17 put the carrier's exact recall at zero beyond 1,000
+              # tokens against attention's +1.59 at 4,000, and the cause is key crosstalk, which sparsity
+              # attacks directly. Everything else is identical to hdspin, so the pair isolates it.
+              "sdspin": lambda d: AssocCarrier(d, delta=True, head_dim=128, key_topk=8), "attn": Attn}[mixer]
         self.mix = nn.ModuleList([mk(d) for _ in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
