@@ -462,3 +462,35 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
   Read honestly. Against the wide carrier at the SAME 42,000 steps and the same width, the delta rule is 0.026 bits/byte WORSE on long documents and gets 2.6x less out of context, having been 0.014 BETTER at ctx 2048 against the eleven-head plain rule. Attention's absolute lead here is not a fair comparison: it has 132,000 steps against 42,000. But attention's context-use, -0.0105, is the same as the delta rule's and weaker than the wide carrier's, which is the shape goal 9 predicted and the one measurement in this table that is properly paired on tokens.
   So the delta write rule earns its 15% throughput at short context and loses it at long. The thing that helps long documents is state SIZE (wspin's four heads of 176 against eleven of 64, 2.8x the associative state), not a cleverer write rule. That is a result about where the capacity has to go, and it points the next experiment at a wide carrier WITH the delta rule rather than at either alone.
   run20 itself: 18.2 minutes for 12,000 steps at ctx 8192, 307 ktok/s, 164 spike-skips and 6 non-finite batches absorbed by the fixed guard with the weights finite throughout, BPB on the long-document eval 1.0424 at 32k -> 0.9541 at 42k.
+- `2026-09-17 09:06:20 UTC` **train** (9.4 min) ok
+  d704 L12 mlp4 ctx2048 B4 200 steps -> /mnt/kv_cache/_xsmoke
+  (log `logs/20260917-085658-train.log`, seed 0)
+- `2026-09-17 09:51:13 UTC` **train** (40.4 min) ok
+  d768 L12 mlp4 ctx2048 B4 20000 steps -> /mnt/kv_cache/run21_hspin
+  (log `logs/20260917-091052-train.log`, seed 0)
+- `2026-09-17 10:08:00 UTC` **train** (16.7 min) ok
+  d768 L12 mlp4 ctx8192 B2 28000 steps -> /mnt/kv_cache/run21_hspin
+  (log `logs/20260917-095118-train.log`, seed 0)
+- `2026-09-17 10:52:43 UTC` **train** (44.6 min) ok
+  d768 L12 mlp4 ctx2048 B4 20000 steps -> /mnt/kv_cache/run22_hdspin
+  (log `logs/20260917-100805-train.log`, seed 0)
+- `2026-09-17 11:12:24 UTC` **train** (19.6 min) ok
+  d768 L12 mlp4 ctx8192 B2 28000 steps -> /mnt/kv_cache/run22_hdspin
+  (log `logs/20260917-105247-train.log`, seed 0)
+- `2026-09-17 11:51:26 UTC` **train** (39.0 min) ok
+  d768 L12 mlp4 ctx2048 B4 20000 steps -> /mnt/kv_cache/run23_attn
+  (log `logs/20260917-111229-train.log`, seed 0)
+- `2026-09-17 12:13:16 UTC` **train** (21.8 min) ok
+  d768 L12 mlp4 ctx8192 B2 28000 steps -> /mnt/kv_cache/run23_attn
+  (log `logs/20260917-115131-train.log`, seed 0)
+- `2026-09-17 12:30:18 UTC` The three-way paired experiment is finished, and it says two opposite things. The delta rule WINS once the memory is wide, and attention wins long documents by a wider margin than any carrier has yet closed.
+  Three models, d768, 93M, six heads of 128, identical seed, steps, data, schedule and evaluation sample: 20,000 steps at ctx 2048 then 8,000 at ctx 8192 on long documents.
+    short phase, BPB at 5k / 10k / 15k / 20k
+      wide + delta (run22): 1.4351 / 1.3092 / 1.2503 / 1.2262
+      wide plain   (run21): 1.4754 / 1.3346 / 1.2724 / 1.2471
+      attention    (run23): 1.4500 / 1.3154 / 1.2575 / 1.2348
+    long-document phase, BPB at 28k: wide+delta 0.9868, wide plain 1.0115, attention 0.9388
+  THE FIRST HONEST WIN. At ctx 2048, token-matched, the wide carrier with the delta rule beats attention 1.2262 to 1.2348, and beats the same carrier without the delta rule 1.2262 to 1.2471. Every earlier comparison against attention in this project was against a run with three times the training; this one is not. And the delta rule's sign flipped with memory size: at 64-dim heads it LOST long documents by 0.026, at 128-dim heads it WINS them by 0.025. The read-before-write only pays once there is enough state for "what this key currently means" to be worth reading. That is the result of the day.
+  THE LOSS, equally clear. The context probe, paired, same eight single-document passages: wide+delta 0.7590 -> 0.7445 (uses context -0.0145), wide plain 0.7701 -> 0.7512 (-0.0189), attention 0.7024 -> 0.6554 (-0.0470). Attention is 0.089 bits/byte better in absolute terms at 32k of context and gets 3.2x more out of its context than the better carrier. At equal training this is the widest attention lead the project has measured, because every earlier long-context comparison flattered the carrier by giving attention a shorter schedule on a harder window. Goal 9 is NOT met: usable context equals the training window for the carrier, but attention uses that window far better.
+  KNOWLEDGE, ARITHMETIC, REASONING, all three models, four-way so chance is 25%: facts 41.7 / 39.6 / 39.6, arithmetic 21.7 / 25.0 / 25.0, reasoning 36.8 / 39.5 / 31.6, generated arithmetic 0/60 for all three. Nothing can do arithmetic. The confidence separation is now non-trivial on reasoning (+0.158 wide+delta, +0.177 attention) but near zero on arithmetic, which is the honest shape of a model that knows a little about language and nothing about number.
+  WHAT THIS SETS UP. The carrier is now ahead of attention at short context, at equal cost, which was the project's first real goal. The long-document gap is the whole remaining problem and it is a gap in how well the state is USED, not how big it is: doubling the state helped the delta rule but moved the context gain from -0.0279 (narrow wide-carrier) to -0.0189. More state alone is not the answer either.
