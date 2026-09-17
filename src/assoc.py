@@ -348,4 +348,7 @@ class AssocCarrier(nn.Module):
             o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk, recompute=self.recompute, mm=mm, beta=bt,
                               kernel=self.kernel and self.dk in (64, 128))
         o = self.on(o).transpose(1, 2).reshape(B, T, D)
-        return x + torch.sigmoid(self.gate) * self.o(o), (S, p0 + T)
+        # the output gate on the projection's WEIGHT, not its output: as a multiply on the output it kept that
+        # output alive for the gate's gradient, 11 MiB per layer at B4 T2048; on the weight it is 1 MiB, the
+        # same function
+        return x + F.linear(o, self.o.weight * torch.sigmoid(self.gate)), (S, p0 + T)

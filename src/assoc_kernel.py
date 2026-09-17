@@ -196,7 +196,7 @@ def _prefix_fwd(kv_ptr, al_ptr, s0_ptr, sent_ptr, sfin_ptr, NC, HAS_S0: tl.const
         S = tl.zeros([D, BV], dtype=tl.float32)
     for c in range(NC):
         base = (bh * NC + c) * D * D
-        tl.store(sent_ptr + base + off, S)
+        tl.store(sent_ptr + base + off, S.to(sent_ptr.dtype.element_ty))
         e = tl.exp(tl.load(al_ptr + bh * NC + c))
         S = e * S + tl.load(kv_ptr + base + off)
     tl.store(sfin_ptr + bh * D * D + off, S)
@@ -213,33 +213,50 @@ def _prefix_bwd(sent_ptr, al_ptr, dsent_ptr, dsfin_ptr, dkv_ptr, dal_ptr, ds0_pt
         c = NC - 1 - i
         base = (bh * NC + c) * D * D
         e = tl.exp(tl.load(al_ptr + bh * NC + c))
-        S = tl.load(sent_ptr + base + off)
+        S = tl.load(sent_ptr + base + off).to(tl.float32)
         tl.store(dkv_ptr + base + off, R)                                       # S_{c+1} = e S_c + KV_c
         tl.store(dal_ptr + (jb * NBH + bh) * NC + c, e * tl.sum(tl.sum(R * S, 1), 0))
         R = tl.load(dsent_ptr + base + off) + e * R                             # gradient on S_c
     tl.store(ds0_ptr + bh * D * D + off, R)
 
 
+def _chunk_kv(k, v, w, NC):
+    """Each chunk's KV contribution, (B,H,NC,D,D) fp32, from the bf16 k and v the output kernel reads and the
+    per-token weight w = exp(L_C - L_s), (B,H,NC,C,1) fp32. The weighted k is rounded to bf16 for the dot."""
+    B, H, T, D = k.shape
+    kw = (k.view(B, H, NC, -1, D).float() * w).to(torch.bfloat16)
+    return (kw.transpose(-1, -2) @ v.view(B, H, NC, -1, D)).float()
+
+
 @torch.library.custom_op("membrae::prefix_scan", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
-def _op_prefix(KV: torch.Tensor, a_log: torch.Tensor, S0: torch.Tensor, has_s0: bool, bv: int) -> tuple[torch.Tensor, torch.Tensor]:
-    B, H, NC, D, _ = KV.shape; BH = B * H
-    sent = torch.empty_like(KV); sfin = torch.empty(B, H, D, D, device=KV.device, dtype=torch.float32)
-    _prefix_fwd[(BH, D // bv)](KV.contiguous(), a_log.contiguous(), S0.contiguous() if has_s0 else sfin,
+def _op_prefix(k: torch.Tensor, v: torch.Tensor, w: torch.Tensor, a_log: torch.Tensor, S0: torch.Tensor,
+               has_s0: bool, bv: int) -> tuple[torch.Tensor, torch.Tensor]:
+    # THE KV MATMUL LIVES INSIDE THE OP. Traced by autograd it kept the fp32 k for the weighting's backward
+    # and both bf16 operands for its own, 44 MiB per layer at B4 T2048, on top of the bf16 k and v the output
+    # kernel saves; inside the op nothing is saved but those same k and v, and the backward recomputes the
+    # weighted k (one elementwise pass) from them.
+    B, H, NC = w.shape[:3]; D = k.shape[-1]; BH = B * H
+    KV = _chunk_kv(k, v, w, NC)
+    sent = torch.empty(B, H, NC, D, D, device=k.device, dtype=torch.bfloat16)   # see _op_delta_fwd: bf16 saved states
+    sfin = torch.empty(B, H, D, D, device=k.device, dtype=torch.float32)
+    _prefix_fwd[(BH, D // bv)](KV, a_log.contiguous(), S0.contiguous() if has_s0 else sfin,
                                sent, sfin, NC, HAS_S0=has_s0, D=D, BV=bv)
     return sent, sfin
 
 
 @_op_prefix.register_fake
-def _(KV, a_log, S0, has_s0, bv):
-    B, H, NC, D, _ = KV.shape
-    return torch.empty_like(KV), torch.empty(B, H, D, D, device=KV.device, dtype=torch.float32)
+def _(k, v, w, a_log, S0, has_s0, bv):
+    B, H, NC = w.shape[:3]; D = k.shape[-1]
+    return (torch.empty(B, H, NC, D, D, device=k.device, dtype=torch.bfloat16),
+            torch.empty(B, H, D, D, device=k.device, dtype=torch.float32))
 
 
 @torch.library.custom_op("membrae::prefix_scan_bwd", mutates_args=(), tags=(torch.Tag.needs_contiguous_strides,))
 def _op_prefix_bwd(sent: torch.Tensor, a_log: torch.Tensor, dsent: torch.Tensor, dsfin: torch.Tensor,
                    bv: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     B, H, NC, D, _ = sent.shape; BH = B * H; NB = D // bv
-    dKV = torch.empty_like(sent); dal = torch.empty(NB, B, H, NC, device=sent.device, dtype=torch.float32)
+    dKV = torch.empty(sent.shape, device=sent.device, dtype=torch.float32)
+    dal = torch.empty(NB, B, H, NC, device=sent.device, dtype=torch.float32)
     dS0 = torch.empty(B, H, D, D, device=sent.device, dtype=torch.float32)
     _prefix_bwd[(BH, NB)](sent.contiguous(), a_log.contiguous(), dsent.contiguous(), dsfin.contiguous().float(),
                           dKV, dal, dS0, NC, BH, D=D, BV=bv)
@@ -249,21 +266,34 @@ def _op_prefix_bwd(sent: torch.Tensor, a_log: torch.Tensor, dsent: torch.Tensor,
 @_op_prefix_bwd.register_fake
 def _(sent, a_log, dsent, dsfin, bv):
     B, H, NC, D, _ = sent.shape; NB = D // bv
-    return (torch.empty_like(sent), torch.empty(NB, B, H, NC, device=sent.device, dtype=torch.float32),
+    return (torch.empty(sent.shape, device=sent.device, dtype=torch.float32),
+            torch.empty(NB, B, H, NC, device=sent.device, dtype=torch.float32),
             torch.empty(B, H, D, D, device=sent.device, dtype=torch.float32))
 
 
 def _prefix_setup(ctx, inputs, output):
-    KV, a_log, S0, has_s0, bv = inputs
-    ctx.save_for_backward(a_log, output[0]); ctx.has_s0 = has_s0; ctx.bv = bv
+    k, v, w, a_log, S0, has_s0, bv = inputs
+    ctx.save_for_backward(k, v, w, a_log, output[0]); ctx.has_s0 = has_s0; ctx.bv = bv
 
 
 def _prefix_backward(ctx, dsent, dsfin):
-    a_log, sent = ctx.saved_tensors
-    if dsent is None: dsent = torch.zeros_like(sent)
+    k, v, w, a_log, sent = ctx.saved_tensors
+    B, H, NC = w.shape[:3]; D = k.shape[-1]
+    if dsent is None: dsent = torch.zeros(sent.shape, device=sent.device, dtype=torch.float32)
     if dsfin is None: dsfin = torch.zeros(sent.shape[0], sent.shape[1], sent.shape[3], sent.shape[4], device=sent.device)
-    dKV, dal, dS0 = _op_prefix_bwd(sent, a_log, dsent, dsfin, ctx.bv)
-    return dKV, dal.sum(0), (dS0 if ctx.has_s0 else None), None, None
+    # contiguous in the TRACED backward, where the copy fuses into the kernel that produced the gradient;
+    # inside the op it was an eager copy (the 2026-09-17 finding on the other ops' glue)
+    dKV, dal, dS0 = _op_prefix_bwd(sent, a_log, dsent.contiguous(), dsfin.contiguous(), ctx.bv)
+    # through KV_c = (k w)^T v per chunk, the weighted k recomputed
+    kc = k.view(B, H, NC, -1, D); vc = v.view(B, H, NC, -1, D)
+    kw = (kc.float() * w).to(torch.bfloat16)
+    dKVb = dKV.to(torch.bfloat16)
+    dkw = (vc @ dKVb.transpose(-1, -2)).float()                                 # (B,H,NC,C,D)
+    dv = (kw @ dKVb).float()
+    dk = dkw * w
+    dw = (dkw * kc.float()).sum(-1, keepdim=True)
+    return (dk.view(k.shape).to(k.dtype), dv.view(v.shape).to(v.dtype), dw, dal.sum(0),
+            (dS0 if ctx.has_s0 else None), None, None)
 
 
 _op_prefix.register_autograd(_prefix_backward, setup_context=_prefix_setup)
@@ -282,13 +312,13 @@ def assoc_scan_kernel(q, k, v, logalpha, S0=None, bv: int = 16):
     L = lc.cumsum(-1)
     a_log = lc.sum(-1)                                                          # log of each chunk's total decay
     w = torch.exp(a_log.unsqueeze(-1) - L).unsqueeze(-1)                        # exp(L_C - L_s), (B,H,NC,C,1)
-    kp = torch.nn.functional.pad(k, (0, 0, 0, pad)).view(B, H, NC, C, D)
-    vp = torch.nn.functional.pad(v, (0, 0, 0, pad)).view(B, H, NC, C, D)
-    KV = ((kp.float() * w).to(torch.bfloat16).transpose(-1, -2) @ vp.to(torch.bfloat16)).float()   # (B,H,NC,D,D)
+    kb = k.to(torch.bfloat16); vb = v.to(torch.bfloat16)
+    if pad:                                                                     # the prefix op wants whole chunks
+        kb = torch.nn.functional.pad(kb, (0, 0, 0, pad)); vb = torch.nn.functional.pad(vb, (0, 0, 0, pad))
     has = S0 is not None
     s0 = S0.float() if has else torch.zeros(B, H, D, D, device=q.device, dtype=torch.float32)
-    sent, sfin = _op_prefix(KV, a_log, s0, has, bv)
-    o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), v.to(torch.bfloat16), la, sent, C)
+    sent, sfin = _op_prefix(kb, vb, w, a_log, s0, has, bv)
+    o = _op_out(q.to(torch.bfloat16), kb[..., :T, :], vb[..., :T, :], la, sent, C)
     return o.to(q.dtype), sfin
 
 
@@ -318,7 +348,7 @@ def _delta_loop_fwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, s0_ptr, w_ptr, sent_ptr
         kk = tl.load(k_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rd[None, :], mask=tm[:, None], other=0.0)
         vv = tl.load(v_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], mask=tm[:, None], other=0.0).to(tl.float32)
         X = tl.load(x_ptr + (bh * NC + c) * BC * BC + rt[:, None] * BC + rt[None, :])
-        tl.store(sent_ptr + (bh * NC + c) * D * D + rd[:, None] * D + rj[None, :], S)
+        tl.store(sent_ptr + (bh * NC + c) * D * D + rd[:, None] * D + rj[None, :], S.to(sent_ptr.dtype.element_ty))
         # rhs = beta (v - eL k S);  W = X rhs;  S = a S + (k w)^T W
         ks = tl.dot(kk.to(tl.bfloat16), S.to(tl.bfloat16), out_dtype=tl.float32)
         rhs = be[:, None] * (vv - eL[:, None] * ks)
@@ -334,7 +364,11 @@ def _op_delta_fwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.
                   S0: torch.Tensor, has_s0: bool, bc: int, bv: int, bvb: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     B, H, T, D = k.shape; NC = X.shape[2]; BH = B * H
     W = torch.empty(B, H, T, D, device=k.device, dtype=torch.bfloat16)     # the output kernel's value slot
-    sent = torch.empty(B, H, NC, D, D, device=k.device, dtype=torch.float32)
+    # THE SAVED STATES IN bf16. The forward's accumulator stays fp32 in registers; this is the copy of the
+    # state entering each chunk that the backward reads, and every consumer feeds it to a bf16 dot except the
+    # decay's per-chunk inner product <S, dS>. fp32 it was 22 MiB per layer at B4 T2048, the largest single
+    # item of the carrier's 1 GiB over attention (the memory audit of 2026-09-17).
+    sent = torch.empty(B, H, NC, D, D, device=k.device, dtype=torch.bfloat16)
     sfin = torch.empty(B, H, D, D, device=k.device, dtype=torch.float32)
     _delta_loop_fwd[(BH, D // bv)](k.contiguous(), v.contiguous(), la.contiguous(), be.contiguous(), X.contiguous(),
                                    S0.contiguous() if has_s0 else sfin, W, sent, sfin,
@@ -347,7 +381,8 @@ def _op_delta_fwd(k: torch.Tensor, v: torch.Tensor, la: torch.Tensor, be: torch.
 def _(k, v, la, be, X, S0, has_s0, bc, bv, bvb):
     B, H, T, D = k.shape; NC = X.shape[2]
     e = lambda *sh: torch.empty(*sh, device=k.device, dtype=torch.float32)
-    return torch.empty(B, H, T, D, device=k.device, dtype=torch.bfloat16), e(B, H, NC, D, D), e(B, H, D, D)
+    return (torch.empty(B, H, T, D, device=k.device, dtype=torch.bfloat16),
+            torch.empty(B, H, NC, D, D, device=k.device, dtype=torch.bfloat16), e(B, H, D, D))
 
 
 @triton.jit
@@ -378,7 +413,7 @@ def _delta_loop_bwd(k_ptr, v_ptr, la_ptr, be_ptr, x_ptr, w_ptr, sent_ptr, gs_ptr
         kk = tl.load(k_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rd[None, :], mask=tm[:, None], other=0.0).to(tl.float32)
         vv = tl.load(v_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], mask=tm[:, None], other=0.0).to(tl.float32)
         W = tl.load(w_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], mask=tm[:, None], other=0.0)
-        S = tl.load(sent_ptr + (bh * NC + c) * D * D + rd[:, None] * D + rj[None, :])
+        S = tl.load(sent_ptr + (bh * NC + c) * D * D + rd[:, None] * D + rj[None, :]).to(tl.float32)
         G = tl.load(gs_ptr + (bh * NC + c) * D * D + rd[:, None] * D + rj[None, :])
         dWo = tl.load(dw_ptr + bh * s_bh_t + (t0 + rt)[:, None] * D + rj[None, :], mask=tm[:, None], other=0.0).to(tl.float32)
         X = tl.load(x_ptr + (bh * NC + c) * BC * BC + rt[:, None] * BC + rt[None, :])
@@ -462,7 +497,7 @@ def _delta_setup(ctx, inputs, output):
 
 def _delta_backward(ctx, dW, gsent, dsfin):
     k, v, la, be, X, W, sent = ctx.saved_tensors
-    if gsent is None: gsent = torch.zeros_like(sent)
+    if gsent is None: gsent = torch.zeros(sent.shape, device=sent.device, dtype=torch.float32)
     if dsfin is None: dsfin = torch.zeros(sent.shape[0], sent.shape[1], sent.shape[3], sent.shape[4], device=k.device)
     dk, dv, dla, dbe, dX, dS0 = _op_delta_bwd(k, v, la, be, X, W, sent, gsent.contiguous(), dW.contiguous(),
                                               dsfin.contiguous(), ctx.bc, ctx.bv)
@@ -500,7 +535,9 @@ def delta_scan_kernel(q, k, v, logalpha, beta, S0=None, chunk: int = 64, bv: int
         X = _unit_lower_inverse(bcc.unsqueeze(-1) * ((kp @ kp.transpose(-1, -2)) * dec).tril(-1))
     has = S0 is not None
     s0 = S0.float() if has else torch.zeros(B, H, D, D, device=q.device, dtype=torch.float32)
-    W, sent, sfin = _op_delta_fwd(k.to(torch.bfloat16), v, la, be, X, s0, has, Cc, bv, bv_bwd)
+    # v in bf16: the loop kernel rounds the right-hand side beta (v - e^L k S) to bf16 for its dot in any
+    # case, and the fp32 v the op saved for its backward was 22 MiB per layer at B4 T2048
+    W, sent, sfin = _op_delta_fwd(k.to(torch.bfloat16), v.to(torch.bfloat16), la, be, X, s0, has, Cc, bv, bv_bwd)
     o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), W, la, sent, Cc)
     return o.to(q.dtype), sfin
 
