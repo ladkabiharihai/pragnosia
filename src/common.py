@@ -209,6 +209,26 @@ def eval_bpb(model, tok, bins, ks, ps, rng, n_batches=20, B=8, T=512, vocab=8192
     import numpy as np, torch, torch.nn.functional as F
     model.eval()
     nats = 0.0; nbytes = 0
+    # HALVE AND RETRY. The eval runs while the training graph pool still holds its reserve, so the batch that
+    # fits for one architecture does not fit for another: the 1-in-4 hybrid died here at ctx 8192 with 9 GiB
+    # already reserved (2026-09-18), and the chunked-logits fix of the day before did not cover the trunk's
+    # own activations. An evaluation that changes its batch size measures the same thing; one that dies does
+    # not measure anything.
+    while True:
+        try:
+            return _eval_bpb(model, tok, bins, ks, ps, rng, n_batches, B, T, vocab)
+        except torch.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if B == 1:
+                raise
+            B = max(1, B // 2); n_batches = n_batches * 2
+            print(f"[eval] out of memory; retrying at batch {B}", flush=True)
+
+
+def _eval_bpb(model, tok, bins, ks, ps, rng, n_batches, B, T, vocab):
+    import numpy as np, torch, torch.nn.functional as F
+    model.eval()
+    nats = 0.0; nbytes = 0
     with torch.no_grad():
         for _ in range(n_batches):
             o = np.empty((B, T + 1), dtype=np.int64)
