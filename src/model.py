@@ -64,6 +64,19 @@ class Attn(nn.Module):
         q, k, v = [t(z).view(B_, T_, self.h, D // self.h).transpose(1, 2) for t in (self.q, self.k, self.v)]
         q, k = self.qn(q), self.kn(k)
         if h0 is not None:
+            if self.window and h0[0].shape[2] == self.window:
+                # A RING, NOT A LIST. Once the cache is full, decoding rolls it: the shapes never change again,
+                # so the whole decode step can be captured as a CUDA graph. Measured 2026-09-18: a hybrid
+                # decoded at 16.8 ms per token against the pure carrier's 1.92 purely because its cache grew by
+                # one token per step and the graph could not hold it. The oldest column is dropped, the newest
+                # written at the end, and the mask below still reads left to right.
+                k = torch.cat([h0[0][:, :, 1:], k], dim=2); v = torch.cat([h0[1][:, :, 1:], v], dim=2)
+                Lk = k.shape[2]
+                i = torch.arange(Lk - T_, Lk, device=x.device).unsqueeze(1)
+                j = torch.arange(Lk, device=x.device).unsqueeze(0)
+                a = F.scaled_dot_product_attention(q, k, v, attn_mask=(j <= i).view(1, 1, T_, Lk))
+                a = self._state_read(a, z, mem, B_, T_, D)
+                return x + self.o(a), (k, v)
             k = torch.cat([h0[0], k], dim=2); v = torch.cat([h0[1], v], dim=2)
             if self.window:
                 # A WINDOWED LAYER MUST NOT KEEP AN UNBOUNDED CACHE. Trained on independent 512-token blocks,
@@ -94,6 +107,10 @@ class Attn(nn.Module):
             i = torch.arange(Lk - T_, Lk, device=x.device).unsqueeze(1)
             j = torch.arange(Lk, device=x.device).unsqueeze(0)
             a = F.scaled_dot_product_attention(q, k, v, attn_mask=(j <= i).view(1, 1, T_, Lk))
+        return x + self.o(self._state_read(a, z, mem, B_, T_, D)), (k, v)
+
+    def _state_read(self, a, z, mem, B_, T_, D):
+        """Fold in this layer's read of the carrier's memory, if it has one, and flatten the heads."""
         C = self.rs_chunk if self.read_state else 0
         NC = min(T_ // C, mem.shape[2]) if (C and mem is not None) else 0
         if NC:
@@ -112,7 +129,7 @@ class Attn(nn.Module):
             a = a + torch.sigmoid(self.rg) * F.pad(rr, (0, 0, 0, T_ - n))
         else:
             a = a.transpose(1, 2).reshape(B_, T_, D)
-        return x + self.o(a), (k, v)
+        return a
 
     def spectral_parameters(self):
         return []

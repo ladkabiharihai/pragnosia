@@ -53,7 +53,9 @@ class Ours:
         # layer's key and value cache grows by one token per step, so a model with any attention layer in it
         # decodes eagerly. Gating on the mixer NAME was wrong the moment hybrids existed: the graphed path
         # tried to copy a 7-token cache into a 6-token buffer (2026-09-18).
-        self.graphable = not any(type(b).__name__ == "Attn" for b in self.m.mix)
+        # A windowed attention layer's cache is a RING once it is full, so its shape stops changing and the
+        # graph can hold it; an unwindowed one grows for ever and cannot be graphed.
+        self.graphable = all(type(b).__name__ != "Attn" or getattr(b, "window", 0) for b in self.m.mix)
 
     def encode(self, text): return self.tok.encode(text).ids
     def decode(self, ids): return self.tok.decode(ids)
@@ -154,6 +156,13 @@ class Ours:
                     out.append(tuple(s_))
             return out
         fresh = flat(states)
+        # fill every windowed attention cache to its full width before capture, so the ring is already at the
+        # size it will keep for the rest of the decode
+        for i, blk in enumerate(self.m.mix):
+            win = getattr(blk, "window", 0)            # NOT w: w is the context width the position wraps on,
+            if win and isinstance(fresh[i], tuple) and torch.is_tensor(fresh[i][0]) and fresh[i][0].shape[2] < win:
+                pad = win - fresh[i][0].shape[2]       # and clobbering it made the wrap a modulo by zero
+                fresh[i] = tuple(torch.cat([t[:, :, :1].expand(-1, -1, pad, -1), t], dim=2) for t in fresh[i])
         if getattr(self, "_g", None) is None:
             st = [tuple(t.clone().contiguous() for t in s_) for s_ in fresh]
             tok = torch.zeros(1, 1, dtype=torch.long, device=dev)
