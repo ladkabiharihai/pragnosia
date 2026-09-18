@@ -49,6 +49,11 @@ class Ours:
         self.device = device
         self.max_ctx = 1 << 20                      # no architectural limit: the state carries
         self.mixer = sd["cfg"]["mixer"]
+        # A CUDA-graphed decode needs every layer's state to keep its shape. A carrier's does; an attention
+        # layer's key and value cache grows by one token per step, so a model with any attention layer in it
+        # decodes eagerly. Gating on the mixer NAME was wrong the moment hybrids existed: the graphed path
+        # tried to copy a 7-token cache into a 6-token buffer (2026-09-18).
+        self.graphable = not any(type(b).__name__ == "Attn" for b in self.m.mix)
 
     def encode(self, text): return self.tok.encode(text).ids
     def decode(self, ids): return self.tok.decode(ids)
@@ -115,7 +120,7 @@ class Ours:
             lg = F.linear(self.m.n(h[:, -1:]), self.m.e.weight)[0, -1].float()
             pw = nn_ % w
         out = []
-        if self.mixer != "attn" and n > 8:
+        if self.graphable and n > 8:
             return out + self._generate_graphed(states, pw, lg, n, temp, g)
         for _ in range(n):
             nxt = int(lg.argmax()) if temp == 0 else int(torch.multinomial(torch.softmax(lg / temp, -1), 1, generator=g))

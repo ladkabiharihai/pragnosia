@@ -65,6 +65,13 @@ class Attn(nn.Module):
         q, k = self.qn(q), self.kn(k)
         if h0 is not None:
             k = torch.cat([h0[0], k], dim=2); v = torch.cat([h0[1], v], dim=2)
+            if self.window:
+                # A WINDOWED LAYER MUST NOT KEEP AN UNBOUNDED CACHE. Trained on independent 512-token blocks,
+                # this layer had never decoded before 2026-09-18, and the decode path was attending over the
+                # whole cache: a different function from the one trained, and a cache that grows for ever,
+                # which is precisely the cost the carrier exists to avoid. Sliding rather than block-aligned,
+                # so a token sees the same span it saw in training and never more.
+                k = k[:, :, -self.window:]; v = v[:, :, -self.window:]
         Lk = k.shape[2]
         if self.window and Lk == T_ and T_ % self.window == 0 and T_ > self.window:
             # BLOCK-LOCAL, not a masked full attention. An explicit sliding-window mask costs a T x T boolean
