@@ -181,6 +181,8 @@ class LM(nn.Module):
               "sdspin": lambda d: AssocCarrier(d, delta=True, head_dim=128, key_topk=8),
               # the wide delta carrier with a structural floor under each head's forgetting
               "tspin": lambda d: AssocCarrier(d, delta=True, head_dim=128, hl_floor=True),
+              # no write decision at all: every token replaces what its key held, at full strength
+              "aspin1": lambda d: AssocCarrier(d, delta=True, head_dim=128, write_all=True),
               # and the same with one state-reading attention layer in four, which is where exact recall came
               # from; if the floor fixes general context use these two together close both halves
               "trspin": lambda d, i: (Attn(d, window=512, read_state=128) if i % 4 == 3 else

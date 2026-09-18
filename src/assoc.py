@@ -272,7 +272,7 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = Fa
 class AssocCarrier(nn.Module):
     def __init__(self, d: int, heads: int | None = None, chunk: int = 64, recompute: bool = False,
                  delta: bool = False, head_dim: int | None = None, kernel: bool = True, key_topk: int = 0,
-                 hl_floor: bool = False):
+                 hl_floor: bool = False, write_all: bool = False):
         super().__init__()
         self.d = d; self.recompute = recompute; self.delta = delta
         # SPARSE KEYS. An outer-product memory with dense unit keys in d_k dimensions holds about d_k patterns
@@ -292,6 +292,15 @@ class AssocCarrier(nn.Module):
         # floor, so some heads hold a clause and others hold a chapter, and no amount of short-context training
         # can collapse them together.
         self.hl_floor = hl_floor
+        # WRITE EVERYTHING. Measured 2026-09-18: the state uses 18 of its 128 directions, its heads forget
+        # within 250 tokens, forcing them not to forget changes nothing, and the model writes into its slowest
+        # heads at strength 0.15 whether or not they are slow. Capacity is not the constraint and decay is not
+        # the constraint; the WRITE POLICY is. Attention decides what to retrieve at read time, with the query
+        # in hand; this architecture has to decide what to keep at write time, thousands of tokens before it
+        # learns whether it mattered. This removes the decision: every token is written at full strength, which
+        # wastes capacity the model was not using anyway, and tests whether the policy was the thing holding
+        # long context back.
+        self.write_all = write_all
         # kernel: the Triton scan (src/assoc_kernel.py) when it applies (CUDA, plain rule, head dim 64 or 128,
         # more than one token); the PyTorch two-pass form otherwise, and always for the T=1 decode step, which
         # is CUDA-graphed already and has nothing for a chunk kernel to do.
@@ -369,6 +378,8 @@ class AssocCarrier(nn.Module):
         la = self.logalpha(z).transpose(1, 2)                                     # (B,H,T)
         mm = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") and x.is_cuda else None
         bt = torch.sigmoid(self.wb(z)).transpose(1, 2) if self.delta else None     # (B,H,T)
+        if self.delta and self.write_all:
+            bt = torch.ones_like(bt)                                              # replace outright, every token
         if kern:
             if self.delta:
                 from .assoc_kernel import delta_scan_kernel
