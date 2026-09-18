@@ -208,8 +208,14 @@ class LM(nn.Module):
               # rather than trading it for local recall.
               "rspin": lambda d, i: (Attn(d, window=512, read_state=128) if i % 4 == 3 else
                                      AssocCarrier(d, delta=True, head_dim=128)),
+              # TEN carrier layers and two state-reading attention layers. The state-reading hybrid won exact
+              # recall outright but its context gain was worse than the pure carrier's, and the five-model
+              # table of 2026-09-18 showed context gain tracking the number of carrier layers exactly. This is
+              # the same read-side mechanism with the ratio moved back toward memory.
+              "r6spin": lambda d, i: (Attn(d, window=512, read_state=128) if i % 6 == 5 else
+                                      AssocCarrier(d, delta=True, head_dim=128)),
               "attn": Attn}[mixer]
-        self.mix = nn.ModuleList([mk(d, i) if mixer in ("altspin", "alt4spin", "rspin", "trspin") else mk(d) for i in range(layers)])
+        self.mix = nn.ModuleList([mk(d, i) if mixer in ("altspin", "alt4spin", "rspin", "trspin", "r6spin") else mk(d) for i in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
         self.head_compile = True                    # tests flip it to compare against the eager form
