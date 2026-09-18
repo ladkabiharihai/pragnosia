@@ -67,7 +67,7 @@ def main():
     ap.add_argument("--graph-step", type=int, default=1,
                     help="capture forward+loss+backward as ONE CUDA graph and replay it per micro-batch")
     ap.add_argument("--resume", default="")
-    ap.add_argument("--mixer", default="spin", choices=["spin", "gspin", "fspin", "aspin", "dspin", "wspin", "xspin", "w2spin", "hspin", "hdspin", "sdspin", "altspin", "alt4spin", "rspin", "attn"])
+    ap.add_argument("--mixer", default="spin", choices=["spin", "gspin", "fspin", "aspin", "dspin", "wspin", "xspin", "w2spin", "hspin", "hdspin", "sdspin", "altspin", "alt4spin", "rspin", "tspin", "trspin", "attn"])
     ap.add_argument("--spike", type=float, default=4.0)
     ap.add_argument("--eval-every", type=int, default=2000)
     a = ap.parse_args()

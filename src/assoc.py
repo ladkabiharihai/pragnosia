@@ -271,7 +271,8 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = Fa
 
 class AssocCarrier(nn.Module):
     def __init__(self, d: int, heads: int | None = None, chunk: int = 64, recompute: bool = False,
-                 delta: bool = False, head_dim: int | None = None, kernel: bool = True, key_topk: int = 0):
+                 delta: bool = False, head_dim: int | None = None, kernel: bool = True, key_topk: int = 0,
+                 hl_floor: bool = False):
         super().__init__()
         self.d = d; self.recompute = recompute; self.delta = delta
         # SPARSE KEYS. An outer-product memory with dense unit keys in d_k dimensions holds about d_k patterns
@@ -282,6 +283,15 @@ class AssocCarrier(nn.Module):
         # key_topk coordinates of each key means two keys collide only when they share an active coordinate,
         # so capacity rises combinatorially rather than linearly. 0 keeps the dense key.
         self.key_topk = key_topk
+        # A FLOOR ON EACH HEAD'S HALF-LIFE. Measured on 2026-09-18, the trained model's heads had half-lives of
+        # 2, 5, 19, 246, 250 and 217 tokens, and the slowest head anywhere in twelve layers was 1,502: the
+        # initialisation spreads them from 7 to 7,000 tokens and training collapses every one of them, because
+        # a model trained at 2,048 tokens is never rewarded for remembering further. The state was not full
+        # when this was measured, it was using 18 of its 128 directions, so the limit on long context was
+        # forgetting and not capacity. This makes the spread structural: head h may not forget faster than its
+        # floor, so some heads hold a clause and others hold a chapter, and no amount of short-context training
+        # can collapse them together.
+        self.hl_floor = hl_floor
         # kernel: the Triton scan (src/assoc_kernel.py) when it applies (CUDA, plain rule, head dim 64 or 128,
         # more than one token); the PyTorch two-pass form otherwise, and always for the T=1 decode step, which
         # is CUDA-graphed already and has nothing for a chunk kernel to do.
@@ -307,6 +317,11 @@ class AssocCarrier(nn.Module):
         if delta:
             self.wb = nn.Linear(d, self.h)
         self.A = nn.Parameter(torch.linspace(math.log(0.1 / 0.69), math.log(1e-4 / 0.69), self.h))
+        if hl_floor:
+            # geometric from 8 tokens to 131,072: the fastest head still tracks a clause, the slowest keeps
+            # essentially everything within any window this project trains on
+            hl = torch.logspace(math.log10(8.0), math.log10(131072.0), self.h)
+            self.register_buffer("la_floor", -math.log(2.0) / hl, persistent=False)
         # the spin: rotation frequencies per channel pair, learned; geometric init like RoPE (base 10000)
         base = 10000.0 ** (-torch.arange(0, self.dk, 2).float() / self.dk)
         self.theta = nn.Parameter(base.unsqueeze(0).repeat(self.h, 1))
@@ -319,7 +334,10 @@ class AssocCarrier(nn.Module):
         return [self.A, self.theta, self.gate]
 
     def logalpha(self, z):
-        return -F.softplus(self.wa(z)) * torch.exp(self.A)                        # (B,T,H), <= 0
+        la = -F.softplus(self.wa(z)) * torch.exp(self.A)                          # (B,T,H), <= 0
+        if self.hl_floor:
+            la = la.clamp(min=self.la_floor)                                      # no faster than the floor
+        return la
 
     def forward(self, x, h0=None, pos0: int = 0):
         """h0: (state S (B,H,dk,dk), position offset) from a previous window, or None."""

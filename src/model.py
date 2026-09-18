@@ -179,6 +179,12 @@ class LM(nn.Module):
               # tokens against attention's +1.59 at 4,000, and the cause is key crosstalk, which sparsity
               # attacks directly. Everything else is identical to hdspin, so the pair isolates it.
               "sdspin": lambda d: AssocCarrier(d, delta=True, head_dim=128, key_topk=8),
+              # the wide delta carrier with a structural floor under each head's forgetting
+              "tspin": lambda d: AssocCarrier(d, delta=True, head_dim=128, hl_floor=True),
+              # and the same with one state-reading attention layer in four, which is where exact recall came
+              # from; if the floor fixes general context use these two together close both halves
+              "trspin": lambda d, i: (Attn(d, window=512, read_state=128) if i % 4 == 3 else
+                                      AssocCarrier(d, delta=True, head_dim=128, hl_floor=True)),
               # ALTERNATING: odd layers are the wide delta carrier, even layers are attention over a 512-token
               # window. The copy probe of 2026-09-17 showed the carrier has no exact recall past 1,000 tokens
               # while attention holds +1.59 at 4,000; a bounded window buys back exact recall of the recent
@@ -198,7 +204,7 @@ class LM(nn.Module):
               "rspin": lambda d, i: (Attn(d, window=512, read_state=128) if i % 4 == 3 else
                                      AssocCarrier(d, delta=True, head_dim=128)),
               "attn": Attn}[mixer]
-        self.mix = nn.ModuleList([mk(d, i) if mixer in ("altspin", "alt4spin", "rspin") else mk(d) for i in range(layers)])
+        self.mix = nn.ModuleList([mk(d, i) if mixer in ("altspin", "alt4spin", "rspin", "trspin") else mk(d) for i in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
         self.head_compile = True                    # tests flip it to compare against the eager form
