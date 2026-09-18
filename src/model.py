@@ -87,15 +87,22 @@ class Attn(nn.Module):
             i = torch.arange(Lk - T_, Lk, device=x.device).unsqueeze(1)
             j = torch.arange(Lk, device=x.device).unsqueeze(0)
             a = F.scaled_dot_product_attention(q, k, v, attn_mask=(j <= i).view(1, 1, T_, Lk))
-        if self.read_state and mem is not None and mem.shape[2] * self.rs_chunk >= T_:
+        C = self.rs_chunk if self.read_state else 0
+        NC = min(T_ // C, mem.shape[2]) if (C and mem is not None) else 0
+        if NC:
             # r_t = q_t S_c for the chunk c that token t starts in: one batched matmul of (NC,C,dk) by
             # (NC,dk,dk) per head. The read is normalised and gated so an untrained layer adds nothing.
-            hh, dk = mem.shape[1], mem.shape[3]; C = self.rs_chunk; NC = T_ // C
-            qm = self.rq(z).view(B_, T_, hh, dk).transpose(1, 2).reshape(B_, hh, NC, C, dk)
+            # A sequence whose length is not a multiple of the chunk leaves a TAIL with no entering state of
+            # its own; those tokens read nothing and rely on this layer's own block, which covers exactly the
+            # recent past they sit in. Training always used multiples of 64, so this path first mattered at
+            # inference, where it raised rather than silently misaligning (2026-09-18).
+            hh, dk = mem.shape[1], mem.shape[3]; n = NC * C
+            qm = self.rq(z[:, :n]).view(B_, n, hh, dk).transpose(1, 2).reshape(B_, hh, NC, C, dk)
             qm = F.normalize(qm, dim=-1).to(mem.dtype)
-            r = torch.matmul(qm, mem[:, :, :NC].to(mem.dtype)).view(B_, hh, T_, dk)
-            r = self.rn(r.float()).to(a.dtype).transpose(1, 2).reshape(B_, T_, hh * dk)
-            a = a.transpose(1, 2).reshape(B_, T_, D) + torch.sigmoid(self.rg) * r
+            rr = torch.matmul(qm, mem[:, :, :NC].to(mem.dtype)).view(B_, hh, n, dk)
+            rr = self.rn(rr.float()).to(a.dtype).transpose(1, 2).reshape(B_, n, hh * dk)
+            a = a.transpose(1, 2).reshape(B_, T_, D)
+            a = a + torch.sigmoid(self.rg) * F.pad(rr, (0, 0, 0, T_ - n))
         else:
             a = a.transpose(1, 2).reshape(B_, T_, D)
         return x + self.o(a), (k, v)
