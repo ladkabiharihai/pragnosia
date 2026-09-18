@@ -278,6 +278,93 @@ class LM(nn.Module):
         return logits
 
     @torch.no_grad()
+    def _grow_assoc(self, dn: int):
+        """Widen a model whose layers are associative carriers, attention blocks, or both (vision goal 7).
+
+        The rule is the one the diagonal carrier's growth established: in the residual stream every WRITER of a
+        new dimension starts at zero and every READER starts random, so the function is preserved on step zero
+        and the new capacity has a gradient on step one. Here the private space inside a layer is a HEAD, and
+        the head dimension is fixed by the kernels (64 or 128), so widening d adds whole new heads rather than
+        widening the existing ones. New heads are new memory: their q, k, v rows are random writers into a
+        private space, their output columns are zero readers of it, and their timescale and frequency
+        parameters are drawn across the SAME range as the existing heads rather than appended past the end of
+        a linspace, or the new memory would all be the fastest or all the slowest."""
+        import math as _m
+        d = self.d; k = dn - d
+        fresh = LM(self.vocab, dn, self.layers, self.mlp[0].a.weight.shape[0] // d, self.ctx, self.mixer)
+        fresh = fresh.to(self.e.weight.device)
+        grown = {}
+        def put(mod, name, new):
+            old = getattr(mod, name); newp = nn.Parameter(new)
+            setattr(mod, name, newp); grown[newp] = (old, tuple(old.shape))
+        def widen(mod, name, src, zero_rows=False, zero_cols=False):
+            old = getattr(mod, name).data
+            new = src.detach().clone().to(old.dtype)
+            if zero_rows: new[old.shape[0]:] = 0
+            if zero_cols and new.dim() == 2: new[:, old.shape[1]:] = 0
+            new[tuple(slice(0, s) for s in old.shape)] = old
+            put(mod, name, new)
+        def widen_ln(ln):
+            ow, ob = ln.weight.data, ln.bias.data
+            w = torch.zeros(dn, device=ow.device, dtype=ow.dtype); w[:d] = ow * _m.sqrt(d / dn)
+            b = torch.zeros(dn, device=ob.device, dtype=ob.dtype); b[:d] = ob
+            put(ln, "weight", w); put(ln, "bias", b); ln.normalized_shape = (dn,)
+        widen(self.e, "weight", fresh.e.weight, zero_cols=True)
+        widen(self.p, "weight", fresh.p.weight, zero_cols=True)
+        self.e.embedding_dim = self.p.embedding_dim = dn
+        for mx, fx in zip(self.mix, fresh.mix):
+            if isinstance(mx, AssocCarrier):
+                for nm in ("q", "k", "v"):                                    # writers into the new heads
+                    widen(getattr(mx, nm), "weight", getattr(fx, nm).weight)
+                widen(mx.o, "weight", fx.o.weight, zero_rows=True, zero_cols=True)   # readers of them: zero
+                for nm in ("wa", "wi") + (("wb",) if mx.delta else ()):        # per-head gates: one row per head
+                    widen(getattr(mx, nm), "weight", getattr(fx, nm).weight)
+                    widen(getattr(mx, nm), "bias", getattr(fx, nm).bias)
+                    getattr(mx, nm).in_features = dn; getattr(mx, nm).out_features = fx.h
+                hn = fx.h - mx.h
+                A_new = torch.linspace(float(mx.A.data.min()), float(mx.A.data.max()), hn, device=mx.A.device)
+                put(mx, "A", torch.cat([mx.A.data, A_new]))
+                put(mx, "theta", torch.cat([mx.theta.data, fx.theta.data[mx.h:]]))
+                widen_ln(mx.ln)
+                for nm in ("q", "k", "v", "o"):
+                    getattr(mx, nm).in_features = getattr(mx, nm).out_features = dn
+                mx.d = dn; mx.h = fx.h
+            else:
+                # AN ATTENTION BLOCK. Its heads stay at the same count and each head gets WIDER, so the new
+                # dimensions land inside the dot product that makes the scores. Zero on both q and k would
+                # never learn (each one's gradient is proportional to the other), so k's new rows are zero and
+                # q's are random: the scores are unchanged on step zero and k has a gradient on step one.
+                widen(mx.q, "weight", fx.q.weight); widen(mx.q, "bias", fx.q.bias, zero_rows=True)
+                widen(mx.k, "weight", fx.k.weight, zero_rows=True)
+                widen(mx.k, "bias", fx.k.bias, zero_rows=True)
+                widen(mx.v, "weight", fx.v.weight); widen(mx.v, "bias", fx.v.bias, zero_rows=True)
+                # QK-norm divides by the RMS over the head dimension, and appending zeros lowers that RMS, so
+                # the surviving entries are scaled by sqrt(old/new) exactly as the LayerNorms are
+                for nm, fn_ in (("qn", fx.qn), ("kn", fx.kn)):
+                    ln_ = getattr(mx, nm); ow = ln_.weight.data; od = ow.shape[0]; nd = fn_.weight.shape[0]
+                    w = torch.zeros(nd, device=ow.device, dtype=ow.dtype)
+                    w[:od] = ow * _m.sqrt(od / nd)
+                    put(ln_, "weight", w); ln_.normalized_shape = (nd,)
+                widen(mx.o, "weight", fx.o.weight, zero_rows=True, zero_cols=True)
+                widen(mx.o, "bias", fx.o.bias, zero_rows=True)
+                if getattr(mx, "read_state", 0):
+                    widen(mx.rq, "weight", fx.rq.weight)
+                    mx.rq.in_features = mx.rq.out_features = dn
+                widen_ln(mx.n)
+                for nm in ("q", "k", "v", "o"):
+                    getattr(mx, nm).in_features = getattr(mx, nm).out_features = dn
+                mx.h = fx.h
+        for mp, fp in zip(self.mlp, fresh.mlp):
+            widen(mp.a, "weight", fp.a.weight); widen(mp.a, "bias", fp.a.bias, zero_rows=True)
+            widen(mp.b, "weight", fp.b.weight, zero_rows=True, zero_cols=True)
+            widen(mp.b, "bias", fp.b.bias, zero_rows=True)
+            widen_ln(mp.n)
+            mp.a.in_features = dn; mp.a.out_features = fp.a.out_features
+            mp.b.in_features = fp.b.in_features; mp.b.out_features = dn
+        widen_ln(self.n)
+        self.d = dn
+        return grown
+
     def grow(self, d_new: int):
         """Widen the model IN PLACE from d to d_new, preserving the function it computes (vision goal 7).
 
@@ -304,7 +391,11 @@ class LM(nn.Module):
         whose mean is already near zero; the test measures it. (RMSNorm would make it exact; LayerNorm is kept
         so the grown model stays the same architecture as the runs it is compared with.)"""
         d, dn = self.d, d_new
-        assert dn > d and self.mixer in ("spin", "gspin", "fspin")
+        assert dn > d, (d, dn)
+        assert self.mixer in ("spin", "gspin", "fspin", "aspin", "dspin", "hspin", "hdspin",
+                              "altspin", "alt4spin", "rspin", "attn"), self.mixer
+        if self.mixer not in ("spin", "gspin", "fspin"):
+            return self._grow_assoc(dn)
         fresh = LM(self.vocab, dn, self.layers, self.mlp[0].a.weight.shape[0] // d, self.ctx, self.mixer)
         fresh = fresh.to(self.e.weight.device)
         grown = {}
