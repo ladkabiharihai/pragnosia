@@ -151,8 +151,14 @@ class LM(nn.Module):
               # blocks are 4 d^2, so this has the same parameter count as twelve of either.
               "altspin": lambda d, i: (Attn(d, window=512) if i % 2 else
                                        AssocCarrier(d, delta=True, head_dim=128)),
+              # ONE ATTENTION LAYER IN FOUR instead of one in two. The 1:2 hybrid recovered three quarters of
+              # attention's exact recall but its context gain went POSITIVE (+0.0837 from 512 to 32k tokens,
+              # measured 2026-09-17): six carrier layers cannot hold what twelve held. Nine carrier layers and
+              # three windowed attention layers is the same question with the ratio moved back toward memory.
+              "alt4spin": lambda d, i: (Attn(d, window=512) if i % 4 == 3 else
+                                        AssocCarrier(d, delta=True, head_dim=128)),
               "attn": Attn}[mixer]
-        self.mix = nn.ModuleList([mk(d, i) if mixer == "altspin" else mk(d) for i in range(layers)])
+        self.mix = nn.ModuleList([mk(d, i) if mixer in ("altspin", "alt4spin") else mk(d) for i in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
         self.head_compile = True                    # tests flip it to compare against the eager form
