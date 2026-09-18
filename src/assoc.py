@@ -367,19 +367,24 @@ class AssocCarrier(nn.Module):
             # into the scan kernels' (B,H,T,D); measured against the torch form below in tests/test_assoc.py
             from .assoc_kernel import prep_kernel
             qp, vp = self.q(z).view(B, T, self.h, self.dk), self.v(z).view(B, T, self.h, self.dk)
-            q, k, v = prep_kernel(qp, kp, vp, None if self.delta else self.wi(z), self.theta, pos)
+            gate = None if (self.delta or self.write_all) else self.wi(z)   # write_all: no gate at all
+            q, k, v = prep_kernel(qp, kp, vp, gate, self.theta, pos)
         else:
             q, k, v = [t.view(B, T, self.h, self.dk).transpose(1, 2)
                        for t in (self.q(z), kp.reshape(B, T, self.d), self.v(z))]
             q, k, v = F.normalize(q, dim=-1), F.normalize(k, dim=-1), F.normalize(v, dim=-1)   # scores in [-1, 1], unit writes
-            if not self.delta:
-                k = k * torch.sigmoid(self.wi(z)).transpose(1, 2).unsqueeze(-1)    # write gate per head
+            if not self.delta and not self.write_all:
+                k = k * torch.sigmoid(self.wi(z)).transpose(1, 2).unsqueeze(-1)  # write gate per head
             q, k = rotate(q, self.theta, pos), rotate(k, self.theta, pos)
         la = self.logalpha(z).transpose(1, 2)                                     # (B,H,T)
         mm = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") and x.is_cuda else None
         bt = torch.sigmoid(self.wb(z)).transpose(1, 2) if self.delta else None     # (B,H,T)
         if self.delta and self.write_all:
-            bt = torch.ones_like(bt)                                              # replace outright, every token
+            # beta = 1 is NOT a safe way to say "write everything": the delta rule's chunk inverse is
+            # (I + N)^-1 with N = beta * strictly_lower(K K^T dec), and at beta = 1 two similar keys inside one
+            # chunk make it singular. Measured 2026-09-18: the weights went non-finite in 70 seconds. Floored
+            # well below 1 instead, which still removes most of the decision without breaking the solve.
+            bt = bt.clamp(min=0.75)
         if kern:
             if self.delta:
                 from .assoc_kernel import delta_scan_kernel

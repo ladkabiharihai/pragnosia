@@ -183,6 +183,9 @@ class LM(nn.Module):
               "tspin": lambda d: AssocCarrier(d, delta=True, head_dim=128, hl_floor=True),
               # no write decision at all: every token replaces what its key held, at full strength
               "aspin1": lambda d: AssocCarrier(d, delta=True, head_dim=128, write_all=True),
+              # the PLAIN rule with no write gate at all: every token is written, nothing is selected. No
+              # chunk inverse, so nothing to make singular, which is what killed the delta version in 70 s.
+              "hspin1": lambda d: AssocCarrier(d, head_dim=128, write_all=True),
               # and the same with one state-reading attention layer in four, which is where exact recall came
               # from; if the floor fixes general context use these two together close both halves
               "trspin": lambda d, i: (Attn(d, window=512, read_state=128) if i % 4 == 3 else
