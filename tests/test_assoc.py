@@ -151,7 +151,7 @@ if dev == "cuda":
         qk = F.normalize(torch.randn(2, 3, 333, Dk, device=dev), dim=-1); kk_ = F.normalize(torch.randn_like(qk), dim=-1)
         vk = F.normalize(torch.randn_like(qk), dim=-1); lak = -F.softplus(torch.randn(2, 3, 333, device=dev)) * 0.05
         S0k = torch.randn(2, 3, Dk, Dk, device=dev) * 0.1
-        yr, Sr = assoc_scan(qk, kk_, vk, lak, S0k, chunk=64, mm=torch.bfloat16); yk, Sk = assoc_scan_kernel(qk, kk_, vk, lak, S0k)
+        yr, Sr = assoc_scan(qk, kk_, vk, lak, S0k, chunk=64, mm=torch.bfloat16); yk, Sk, _ = assoc_scan_kernel(qk, kk_, vk, lak, S0k)
         check(f"D={Dk}, T=333 (partial last chunk), carried S0: forward within bf16 precision",
               ((yk - yr).abs().max() / yr.abs().max()).item() < 1e-2 and ((Sk - Sr).abs().max() / Sr.abs().max()).item() < 1e-2,
               f"y {((yk-yr).abs().max()/yr.abs().max()).item():.1e} S {((Sk-Sr).abs().max()/Sr.abs().max()).item():.1e}")
@@ -175,7 +175,7 @@ if dev == "cuda":
         ak = [t.clone().requires_grad_(True) for t in (qk, kk_, vk, lak, bek, S0k)]
         wk = torch.randn_like(qk); wS = torch.randn_like(S0k)
         yr, Sr = assoc_scan(*ar[:4], ar[5], chunk=64, beta=ar[4], kernel=False)
-        yk, Sk = delta_scan_kernel(*ak[:4], ak[4], ak[5])
+        yk, Sk, _ = delta_scan_kernel(*ak[:4], ak[4], ak[5])
         rel = lambda a, b: ((a - b).abs().max() / (b.abs().max() + 1e-12)).item()
         check(f"delta D={Dk}, T=333, carried S0: forward and final state within bf16 precision",
               rel(yk, yr) < 1e-2 and rel(Sk, Sr) < 1e-2, f"y {rel(yk, yr):.1e} S {rel(Sk, Sr):.1e}")

@@ -319,7 +319,8 @@ def assoc_scan_kernel(q, k, v, logalpha, S0=None, bv: int = 16):
     s0 = S0.float() if has else torch.zeros(B, H, D, D, device=q.device, dtype=torch.float32)
     sent, sfin = _op_prefix(kb, vb, w, a_log, s0, has, bv)
     o = _op_out(q.to(torch.bfloat16), kb[..., :T, :], vb[..., :T, :], la, sent, C)
-    return o.to(q.dtype), sfin
+    # sent is the state ENTERING each chunk, (B,H,NC,D,D), returned so a later layer can read this memory
+    return o.to(q.dtype), sfin, sent
 
 
 # ------------------------------------------------------------------ the delta rule's loop over chunks
@@ -539,7 +540,10 @@ def delta_scan_kernel(q, k, v, logalpha, beta, S0=None, chunk: int = 64, bv: int
     # case, and the fp32 v the op saved for its backward was 22 MiB per layer at B4 T2048
     W, sent, sfin = _op_delta_fwd(k.to(torch.bfloat16), v.to(torch.bfloat16), la, be, X, s0, has, Cc, bv, bv_bwd)
     o = _op_out(q.to(torch.bfloat16), k.to(torch.bfloat16), W, la, sent, Cc)
-    return o.to(q.dtype), sfin
+    # sent is the state ENTERING each chunk, (B,H,NC,D,D). Returned so a later layer can read this memory with
+    # its own queries: the 1:2 hybrid of 2026-09-17 showed attention recovers exact recall the carrier cannot,
+    # and the state is the only place the carrier's long-range content actually lives.
+    return o.to(q.dtype), sfin, sent
 
 
 # ------------------------------------------------------------------ the delta rule's inverse, in Triton

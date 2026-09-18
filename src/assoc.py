@@ -312,6 +312,7 @@ class AssocCarrier(nn.Module):
         self.theta = nn.Parameter(base.unsqueeze(0).repeat(self.h, 1))
         self.on = nn.RMSNorm(self.dk)
         self.gate = nn.Parameter(torch.zeros(()))
+        self.sent = None                            # set by forward on the kernel path; read by rspin layers
 
     def spectral_parameters(self):
         """Timescales and frequencies take small absolute steps, as in the diagonal carrier."""
@@ -353,17 +354,20 @@ class AssocCarrier(nn.Module):
         if kern:
             if self.delta:
                 from .assoc_kernel import delta_scan_kernel
-                o, S = delta_scan_kernel(q, k, v, la, bt, S0, chunk=self.chunk if self.chunk in (64, 128) else 64,
-                                         bv=self.bv)
+                o, S, sent = delta_scan_kernel(q, k, v, la, bt, S0, chunk=self.chunk if self.chunk in (64, 128) else 64,
+                                               bv=self.bv)
             else:
                 from .assoc_kernel import assoc_scan_kernel
-                o, S = assoc_scan_kernel(q, k, v, la, S0)
+                o, S, sent = assoc_scan_kernel(q, k, v, la, S0)
             o = o.to(qp.dtype)          # the projections' dtype: bf16 under autocast (no copy), fp32 otherwise
         else:
             o, S = assoc_scan(q, k, v, la, S0, chunk=self.chunk, recompute=self.recompute, mm=mm, beta=bt,
                               kernel=self.kernel and self.dk in (64, 128))
+            sent = None
         o = self.on(o).transpose(1, 2).reshape(B, T, D)
         # the output gate on the projection's WEIGHT, not its output: as a multiply on the output it kept that
         # output alive for the gate's gradient, 11 MiB per layer at B4 T2048; on the weight it is 1 MiB, the
         # same function
+        # the per-chunk entering states, kept for a later layer that reads this memory with its own queries
+        self.sent = sent
         return x + F.linear(o, self.o.weight * torch.sigmoid(self.gate)), (S, p0 + T)

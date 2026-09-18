@@ -32,17 +32,28 @@ class Attn(nn.Module):
     norm median rose 1.15 -> 5.0 and every step from 15,400 on was skipped by the spike guard while the spin
     run at identical settings took 57 skips in 120,000. The control must be the strongest attention I can
     field, or "spin wins" means nothing."""
-    def __init__(self, d: int, heads: int = 8, window: int = 0):
+    def __init__(self, d: int, heads: int = 8, window: int = 0, read_state: int = 0):
         super().__init__()
         self.n = nn.LayerNorm(d); self.h = heads
+        # read_state: head dimension of the carrier memory this layer is allowed to read, 0 for none. The
+        # 1:2 hybrid recovered three quarters of attention's exact recall with a 512-token window but its
+        # context gain went POSITIVE (+0.0837 over 512 -> 32k, 2026-09-17): block attention cannot see past
+        # its own block and half the carrier layers cannot hold what twelve held. This lets the attention
+        # layer put its OWN query into the previous carrier layer's state, which is where everything older
+        # than the block actually lives. The read is at chunk granularity, which is all the state has.
+        self.read_state = read_state
         self.q = nn.Linear(d, d); self.k = nn.Linear(d, d); self.v = nn.Linear(d, d); self.o = nn.Linear(d, d)
         self.qn = nn.RMSNorm(d // heads); self.kn = nn.RMSNorm(d // heads)
+        if read_state:
+            self.rq = nn.Linear(d, d, bias=False)          # the query this layer puts into the carrier's state
+            self.rn = nn.RMSNorm(read_state); self.rg = nn.Parameter(torch.zeros(()))
+            self.rs_chunk = 64
         # window > 0 restricts each token to the last `window` positions. The cost is then linear in length and
         # the cache is bounded, which is the only form of attention that can sit in this project without
         # giving back what the carrier was built to win.
         self.window = window
 
-    def forward(self, x, h0=None):
+    def forward(self, x, h0=None, mem=None):
         """h0 is a KV cache (k, v) from earlier tokens of the SAME window, for incremental decoding.
 
         Without it, decoding one token at a time gives attention a context of exactly that one token, which is
@@ -76,7 +87,17 @@ class Attn(nn.Module):
             i = torch.arange(Lk - T_, Lk, device=x.device).unsqueeze(1)
             j = torch.arange(Lk, device=x.device).unsqueeze(0)
             a = F.scaled_dot_product_attention(q, k, v, attn_mask=(j <= i).view(1, 1, T_, Lk))
-        a = a.transpose(1, 2).reshape(B_, T_, D)
+        if self.read_state and mem is not None and mem.shape[2] * self.rs_chunk >= T_:
+            # r_t = q_t S_c for the chunk c that token t starts in: one batched matmul of (NC,C,dk) by
+            # (NC,dk,dk) per head. The read is normalised and gated so an untrained layer adds nothing.
+            hh, dk = mem.shape[1], mem.shape[3]; C = self.rs_chunk; NC = T_ // C
+            qm = self.rq(z).view(B_, T_, hh, dk).transpose(1, 2).reshape(B_, hh, NC, C, dk)
+            qm = F.normalize(qm, dim=-1).to(mem.dtype)
+            r = torch.matmul(qm, mem[:, :, :NC].to(mem.dtype)).view(B_, hh, T_, dk)
+            r = self.rn(r.float()).to(a.dtype).transpose(1, 2).reshape(B_, T_, hh * dk)
+            a = a.transpose(1, 2).reshape(B_, T_, D) + torch.sigmoid(self.rg) * r
+        else:
+            a = a.transpose(1, 2).reshape(B_, T_, D)
         return x + self.o(a), (k, v)
 
     def spectral_parameters(self):
@@ -157,8 +178,13 @@ class LM(nn.Module):
               # three windowed attention layers is the same question with the ratio moved back toward memory.
               "alt4spin": lambda d, i: (Attn(d, window=512) if i % 4 == 3 else
                                         AssocCarrier(d, delta=True, head_dim=128)),
+              # the same 1:4 ratio, but the attention layers also put their own query into the state of the
+              # carrier layer beneath them. This is the only variant so far that attacks long-range recall
+              # rather than trading it for local recall.
+              "rspin": lambda d, i: (Attn(d, window=512, read_state=128) if i % 4 == 3 else
+                                     AssocCarrier(d, delta=True, head_dim=128)),
               "attn": Attn}[mixer]
-        self.mix = nn.ModuleList([mk(d, i) if mixer in ("altspin", "alt4spin") else mk(d) for i in range(layers)])
+        self.mix = nn.ModuleList([mk(d, i) if mixer in ("altspin", "alt4spin", "rspin") else mk(d) for i in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
         self.head_compile = True                    # tests flip it to compare against the eager form
@@ -176,10 +202,19 @@ class LM(nn.Module):
                 nn.init.zeros_(m.bias)
 
     def trunk(self, x):
-        """Everything but the output head: the normalised final representation, (B, T, d)."""
+        """Everything but the output head: the normalised final representation, (B, T, d).
+
+        `mem` carries the most recent carrier layer's per-chunk states forward, so an attention layer built
+        with read_state can query the memory the layers beneath it wrote."""
         h = self.e(x) + self.p(torch.arange(x.shape[1], device=x.device))
+        mem = None
         for mx, mp in zip(self.mix, self.mlp):
-            h = mp(mx(h)[0])
+            if getattr(mx, "read_state", 0):
+                h = mp(mx(h, mem=mem)[0])
+            else:
+                h = mp(mx(h)[0])
+                if getattr(mx, "sent", None) is not None:
+                    mem = mx.sent
         return self.n(h)
 
     def loss(self, h, y, chunks=4):
@@ -202,9 +237,14 @@ class LM(nn.Module):
         """hidden_layer selects WHICH representation to return. The final one is what the output head reads,
         so it is the least informative place to look for signal the head has not already used."""
         h = self.e(x) + self.p(torch.arange(x.shape[1], device=x.device))
-        grab = None
+        grab = None; mem = None
         for i, (mx, mp) in enumerate(zip(self.mix, self.mlp)):
-            h = mp(mx(h)[0])
+            if getattr(mx, "read_state", 0):
+                h = mp(mx(h, mem=mem)[0])
+            else:
+                h = mp(mx(h)[0])
+                if getattr(mx, "sent", None) is not None:
+                    mem = mx.sent
             if hidden_layer is not None and i == hidden_layer:
                 grab = h
         h = self.n(h)
