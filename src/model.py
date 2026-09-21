@@ -107,6 +107,11 @@ class Attn(nn.Module):
             i = torch.arange(Lk - T_, Lk, device=x.device).unsqueeze(1)
             j = torch.arange(Lk, device=x.device).unsqueeze(0)
             a = F.scaled_dot_product_attention(q, k, v, attn_mask=(j <= i).view(1, 1, T_, Lk))
+        if self.window:
+            # the cache this layer hands back is never longer than its window, whichever path built it: a
+            # prefill of 1,006 tokens handed back all 1,006 and the graphed decode's 512-slot ring could not
+            # take it (2026-09-21)
+            k = k[:, :, -self.window:]; v = v[:, :, -self.window:]
         return x + self.o(self._state_read(a, z, mem, B_, T_, D)), (k, v)
 
     def _state_read(self, a, z, mem, B_, T_, D):
