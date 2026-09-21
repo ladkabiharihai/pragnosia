@@ -64,6 +64,8 @@ def main():
     ap.add_argument("--grow-to", type=int, default=0, help="width to grow to at --grow-at")
     ap.add_argument("--fused", type=int, default=1, help="one compiled kernel group per parameter update")
     ap.add_argument("--graph", type=int, default=1, help="replay the optimizer step as a CUDA graph")
+    ap.add_argument("--ctx-mix", default="", help="train on a MIX of context lengths, e.g. 1024,2048,4096,8192; "
+                    "the batch scales so every length carries the same tokens per micro-step")
     ap.add_argument("--graph-step", type=int, default=1,
                     help="capture forward+loss+backward as ONE CUDA graph and replay it per micro-batch")
     ap.add_argument("--resume", default="")
@@ -71,6 +73,10 @@ def main():
     ap.add_argument("--spike", type=float, default=4.0)
     ap.add_argument("--eval-every", type=int, default=2000)
     a = ap.parse_args()
+    # the positional table is sized to the model's context, so a mix must build the model at its LONGEST:
+    # capturing a graph at 4,096 on a model with 2,048 rows indexes past the table and asserts on the device
+    if a.ctx_mix:
+        a.ctx = max(int(v) for v in a.ctx_mix.split(",") if v)
     os.makedirs(a.out, exist_ok=True)
 
     require_prod()
@@ -106,17 +112,27 @@ def main():
         # ctx 2048: delta 143 -> 264 ktok/s, plain 282 -> 295, attention 312 -> 325. torch.compile's own
         # "reduce-overhead" mode could not do this (it refuses grads that outlive the replay); manual capture
         # can. Copying the batch into the static buffer is the only per-step host work left.
-        def capture():
+        # A MIX OF LENGTHS, not a sequence of two. Measured 2026-09-21: after 305,000 steps at 2,048 and
+        # 13,000 at 8,192 the model was the best ever measured at exactly 8,192 and the worst of three at
+        # every other length, and its long-range recall had gone backwards. Training at two lengths teaches
+        # two lengths. Each length gets its own captured graph, and the batch scales inversely so a micro-step
+        # always carries the same number of tokens whichever length it draws.
+        mix = [int(v) for v in a.ctx_mix.split(",") if v] or [a.ctx]
+        tok_per_micro = a.batch * max(mix)
+        shapes = [(t, max(1, tok_per_micro // t)) for t in mix]
+
+        def capture(T=None, B=None):
             if not (a.graph_step and a.compile): return None
-            xs = torch.empty((a.batch, a.ctx + 1), dtype=torch.long, device="cuda")
-            xs.copy_(batch(bins, ks, ps, np.random.default_rng(11), a.batch, a.ctx))
+            T = T or a.ctx; B = B or a.batch
+            xs = torch.empty((B, T + 1), dtype=torch.long, device="cuda")
+            xs.copy_(batch(bins, ks, ps, np.random.default_rng(11), B, T))
             for p_ in m.parameters():
                 if p_.grad is None: p_.grad = torch.zeros_like(p_)
             out = {}
             def micro():
                 with torch.autocast("cuda", dtype=torch.bfloat16):
-                    h = trunk(xs[:, :a.ctx])
-                l_ = m.loss(h, xs[:, 1:a.ctx + 1], chunks=max(1, a.chunks))
+                    h = trunk(xs[:, :T])
+                l_ = m.loss(h, xs[:, 1:T + 1], chunks=max(1, a.chunks))
                 (l_ / a.accum).backward()
                 out["loss"] = l_.detach()
             s_ = torch.cuda.Stream(); s_.wait_stream(torch.cuda.current_stream())
@@ -177,7 +193,8 @@ def main():
             else:
                 r.log("WARNING: checkpoint carries no optimizer state; the first steps will be a shock")
             r.log(f"resumed from {a.resume} at step {start}, loss {sd['loss']:.4f}")
-        gs = capture()
+        graphs = {(B_, T_): capture(T_, B_) for T_, B_ in shapes}          # one captured graph per length
+        gs = graphs[(shapes[0][1], shapes[0][0])]
         if gs is not None:
             set_none = False
             r.log(f"micro-step captured as a CUDA graph; {torch.cuda.memory_reserved()/2**30:.1f} GiB reserved after capture")
@@ -193,7 +210,8 @@ def main():
         hist = torch.zeros(1000, device="cuda"); skips_t = torch.zeros((), device="cuda"); ema_t = None
         nonfin = torch.zeros((), device="cuda"); nf_prev = 0
         marks = []; bpbs = []; skipped = 0
-        nxt = [batch(bins, ks, ps, rng, a.batch, a.ctx) for _ in range(a.accum)]
+        T_n, B_n = shapes[0]
+        nxt = [batch(bins, ks, ps, rng, B_n, T_n) for _ in range(a.accum)]
         for i in range(start, a.steps):
             w = min(1.0, (i + 1) / a.warm)
             # cosine over the whole budget: a flat rate lets a model equilibrate at that rate's noise floor,
@@ -224,8 +242,9 @@ def main():
             loss = None
             for _acc in range(a.accum):
                 x = nxt[_acc]
-                if gs is not None:
-                    gs[1].copy_(x); gs[0].replay(); l_ = gs[2].clone()
+                g_ = graphs.get((x.shape[0], x.shape[1] - 1)) if len(shapes) > 1 else gs
+                if g_ is not None:
+                    g_[1].copy_(x); g_[0].replay(); l_ = g_[2].clone()
                 elif a.chunks > 1:
                     with torch.autocast("cuda", dtype=torch.bfloat16):
                         h = trunk(x[:, :a.ctx])
@@ -233,12 +252,13 @@ def main():
                 else:
                     with torch.autocast("cuda", dtype=torch.bfloat16):
                         l_ = F.cross_entropy(fwd(x[:, :a.ctx]).reshape(-1, a.vocab), x[:, 1:a.ctx + 1].reshape(-1))
-                if gs is None: (l_ / a.accum).backward()      # the graph replay already did
+                if (g_ if len(shapes) > 1 else gs) is None: (l_ / a.accum).backward()   # else the replay did
                 loss = l_.detach() if loss is None else loss + l_.detach()
             loss = loss / a.accum
             # the next step's batches are sampled NOW, while the card is still busy with this one; the
             # gradient-norm read below is a sync and everything after it is a gap the card sits through
-            nxt = [batch(bins, ks, ps, rng, a.batch, a.ctx) for _ in range(a.accum)]
+            T_n, B_n = shapes[rng.integers(len(shapes))] if len(shapes) > 1 else shapes[0]
+            nxt = [batch(bins, ks, ps, rng, B_n, T_n) for _ in range(a.accum)]
             gn = torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)          # a device scalar, not read
             # SPIKE GUARD. The previous run went from loss 4.0998 to NaN between step 14,200 and 14,400, a
             # sudden spike rather than a drift. Clipping bounds the step but still applies a direction taken
