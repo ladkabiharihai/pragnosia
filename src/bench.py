@@ -369,9 +369,17 @@ def gen_cost_vs_context(model, bins, ks, ps, tok, contexts=(512, 2048, 8192, 327
     return out
 
 
-def facts(model, FACTS):
-    """Top-1 among four same-kind candidates by mean completion log-probability, and whether confidence
-    separates right from wrong: a model that knows what it knows is more confident when it is right."""
+def facts(model, FACTS, rule="sum"):
+    """Top-1 among four same-kind candidates by completion log-probability, and whether confidence separates
+    right from wrong: a model that knows what it knows is more confident when it is right.
+    rule "sum" (default) is the TOTAL log-probability of the option, which is the plain question "which of
+    these four continuations does the model find most likely". "mean" divides by the number of TOKENS, and so
+    depends on how finely each vocabulary cuts the option: 1.00 pieces for GPT-2 on the induction options
+    against 1.91 for our 8,192-vocabulary, and switching rules moves our induction score by 11 points while
+    leaving GPT-2's unchanged. "byte" divides by the option's length in bytes, which is vocabulary-neutral but
+    puts every model BELOW CHANCE on the letter-counting items (5.3%), so it is not a safe default either.
+    Every multiple-choice number in this project before 2026-09-21 13:00 UTC used "mean" and is restated in
+    PROGRESS.md under this rule."""
     right = 0; rc = []; wc = []
     for stem, ans, wrongs in FACTS:
         lps = []
@@ -380,7 +388,8 @@ def facts(model, FACTS):
             lg = model.logits_last(ids, 1).float().log_softmax(-1)
             nc = min(len(model.encode(c)), lg.shape[1] - 1)
             y = torch.tensor(ids[-nc:], device=lg.device)
-            lps.append(float(lg[0, -nc - 1:-1].gather(-1, y.unsqueeze(-1)).mean()))
+            lp = lg[0, -nc - 1:-1].gather(-1, y.unsqueeze(-1))
+            lps.append(float(lp.mean() if rule == "mean" else lp.sum() / (len(c.encode()) if rule == "byte" else 1)))
         a = np.array(lps); p = np.exp(a - a.max()); p /= p.sum()
         if int(p.argmax()) == 0: right += 1; rc.append(p.max())
         else: wc.append(p.max())
