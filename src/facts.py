@@ -157,3 +157,54 @@ def reasoning_items():
  ("The shop was closed, so she could not"," enter",[" sleep"," breathe"," think"]),
  ("The ice was left in the sun, so it"," melted",[" froze"," grew"," burned"]),
     ]
+
+
+# ---------------------------------------------------------------- reasoning, GENERATED at scale
+# Thirty-eight hand-written items cannot separate two models: 18 against 20 correct is noise. These are the
+# same seven kinds, generated deterministically in the hundreds, with distractors of the same kind. Chance is
+# 25%; the standard error at n=400 is about 2 points, so a 5-point gap means something and a 2-point gap does not.
+def reasoning_items_large(n=400, seed=0):
+    import random
+    r = random.Random(seed)
+    names = ["Anna", "Ben", "Carl", "Dana", "Eli", "Fay", "Gus", "Hana", "Ivan", "Jo", "Kim", "Lee"]
+    words = ["cat", "table", "house", "river", "planet", "bottle", "garden", "window", "letter", "orange"]
+    nums = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+    colours = ["red", "blue", "green", "yellow", "black", "white", "brown", "grey"]
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    out = []
+    while len(out) < n:
+        kind = len(out) % 7
+        if kind == 0:                                              # comparison
+            a, b = r.sample(range(2, 99), 2); big = max(a, b); small = min(a, b)
+            if r.random() < 0.5:
+                out.append((f"Which is larger, {a} or {b}? The larger is", f" {big}", [f" {small}", f" {big-1 if big-1 != small else big+2}", f" {a+b}"]))
+            else:
+                out.append((f"Which is smaller, {a} or {b}? The smaller is", f" {small}", [f" {big}", f" {small+1 if small+1 != big else small-1}", f" {a+b}"]))
+        elif kind == 1:                                            # ordering
+            xs = r.sample(range(1, 60), 3); s_ = sorted(xs)
+            if r.random() < 0.5:
+                out.append((f"Sorted from smallest to largest: {xs[0]}, {xs[1]}, {xs[2]}. The first is", f" {s_[0]}", [f" {s_[1]}", f" {s_[2]}", f" {sum(xs)}"]))
+            else:
+                out.append((f"Sorted from smallest to largest: {xs[0]}, {xs[1]}, {xs[2]}. The last is", f" {s_[2]}", [f" {s_[0]}", f" {s_[1]}", f" {sum(xs)}"]))
+        elif kind == 2:                                            # transitive
+            p, q, w, x = r.sample(names, 4); rel = r.choice([("taller", "tallest", "shortest"), ("faster", "fastest", "slowest"), ("older", "oldest", "youngest")])
+            if r.random() < 0.5:
+                out.append((f"{p} is {rel[0]} than {q}. {q} is {rel[0]} than {w}. The {rel[1]} is", f" {p}", [f" {q}", f" {w}", f" {x}"]))
+            else:
+                out.append((f"{p} is {rel[0]} than {q}. {q} is {rel[0]} than {w}. The {rel[2]} is", f" {w}", [f" {p}", f" {q}", f" {x}"]))
+        elif kind == 3:                                            # counting letters
+            wd = r.choice(words); k = len(wd)
+            wrong = [nums[i] for i in (k - 2, k, k + 1) if 0 <= i < 10 and i != k - 1][:3]
+            while len(wrong) < 3: wrong.append(nums[(k + len(wrong) + 2) % 10])
+            out.append((f"The word {wd} has how many letters? It has", f" {nums[k-1]}", [f" {v}" for v in wrong]))
+        elif kind == 4:                                            # pattern continuation, the memory case
+            c1, c2, c3 = r.sample(colours, 3); extra = r.choice([c for c in colours if c not in (c1, c2, c3)])
+            out.append((f"Pattern: {c1} {c2} {c3} {c1} {c2} {c3} {c1} {c2}", f" {c3}", [f" {c1}", f" {c2}", f" {extra}"]))
+        elif kind == 5:                                            # recall of a stated fact within the prompt
+            p = r.choice(names); k = r.randint(10, 99); wrong = [k + 1, int(str(k)[::-1]) if str(k)[::-1] != str(k) else k + 10, k - 1]
+            out.append((f"{p}'s key is number {k}. Later, {p}'s key is number", f" {k}", [f" {v}" for v in wrong]))
+        else:                                                      # arithmetic-free sequence: days of the week
+            i = r.randint(0, 6)
+            out.append((f"Pattern: {days[i]} {days[(i+1)%7]} {days[(i+2)%7]} {days[i]} {days[(i+1)%7]}", f" {days[(i+2)%7]}",
+                        [f" {days[i]}", f" {days[(i+1)%7]}", f" {days[(i+3)%7]}"]))
+    return out
