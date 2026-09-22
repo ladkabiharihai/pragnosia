@@ -70,7 +70,13 @@ class Attn(nn.Module):
                 # decoded at 16.8 ms per token against the pure carrier's 1.92 purely because its cache grew by
                 # one token per step and the graph could not hold it. The oldest column is dropped, the newest
                 # written at the end, and the mask below still reads left to right.
-                k = torch.cat([h0[0][:, :, 1:], k], dim=2); v = torch.cat([h0[1][:, :, 1:], v], dim=2)
+                # Drop as many of the oldest columns as there are new ones, not exactly one: this branch is
+                # entered whenever the cache happens to be exactly one window long, and a prefill continuing
+                # from a full cache arrives with T_ > 1. With T_ = 6 it handed back 511 + 6 = 517 and the
+                # graphed decode's 512-slot ring could not take it (2026-09-22). For the decode step this is
+                # T_ = 1 and the behaviour and the shapes are unchanged, so the graph still captures.
+                k = torch.cat([h0[0], k], dim=2)[:, :, -self.window:]
+                v = torch.cat([h0[1], v], dim=2)[:, :, -self.window:]
                 Lk = k.shape[2]
                 i = torch.arange(Lk - T_, Lk, device=x.device).unsqueeze(1)
                 j = torch.arange(Lk, device=x.device).unsqueeze(0)
