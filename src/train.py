@@ -57,6 +57,8 @@ def main():
     ap.add_argument("--sources", default="", help="comma-separated subset of the mix (long-context phase)")
     ap.add_argument("--data2", default="", help="a second corpus directory, sampled for --data2-frac of the sequences")
     ap.add_argument("--data2-frac", type=float, default=0.0)
+    ap.add_argument("--ul", type=float, default=0.0, help="unlikelihood weight on recently emitted tokens (0 = off)")
+    ap.add_argument("--ul-window", type=int, default=128, help="how far back the unlikelihood term looks")
     ap.add_argument("--vocab", type=int, default=8192, help="must match the tokenizer the data was made with")
     ap.add_argument("--chunks", type=int, default=1, help="head chunks for the loss; >1 never holds all logits at once")
     ap.add_argument("--accum", type=int, default=1, help="gradient-accumulation steps: --batch is the MICRO-batch; tokens per update = accum*batch*ctx. At ctx 2048 the 78M carrier peaks at 20.2 GiB with batch 16 and 5.9 GiB with batch 4 x accum 4, at 88% of the speed")
@@ -157,7 +159,7 @@ def main():
             def micro():
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     h = trunk(xs[:, :T])
-                l_ = m.loss(h, xs[:, 1:T + 1], chunks=max(1, a.chunks))
+                l_ = m.loss(h, xs[:, 1:T + 1], chunks=max(1, a.chunks), ul_alpha=a.ul, ul_window=a.ul_window)
                 (l_ / a.accum).backward()
                 out["loss"] = l_.detach()
             s_ = torch.cuda.Stream(); s_.wait_stream(torch.cuda.current_stream())
@@ -273,7 +275,7 @@ def main():
                 elif a.chunks > 1:
                     with torch.autocast("cuda", dtype=torch.bfloat16):
                         h = trunk(x[:, :a.ctx])
-                    l_ = m.loss(h, x[:, 1:a.ctx + 1], chunks=a.chunks)
+                    l_ = m.loss(h, x[:, 1:a.ctx + 1], chunks=a.chunks, ul_alpha=a.ul, ul_window=a.ul_window)
                 else:
                     with torch.autocast("cuda", dtype=torch.bfloat16):
                         l_ = F.cross_entropy(fwd(x[:, :a.ctx]).reshape(-1, a.vocab), x[:, 1:a.ctx + 1].reshape(-1))

@@ -883,3 +883,18 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
   THE PERIODIC EVAL EVALUATED AT THE TRAINING WINDOW, which put a 32,768-token forward beside a 32.6 GiB graph pool; the halve-and-retry went 8, 4, 2, 1 and still died, taking the run with it at its first eval. Eval is now bounded at min(ctx, 8192) with batch 4 and an empty_cache either side, which also makes bits per byte comparable across runs for the first time -- every run until now evaluated at its own window.
   MEMORY IS LINEAR IN THE WINDOW AND FULLY ACCOUNTED: 5.49 GiB for the 8,192 graph plus 17.86 GiB for the 32,768 one is the 23.3 GiB reserved, and parameters, gradients and optimizer state are 1.5 GB of it. Per token it IMPROVES with length: 0.67, 0.59, 0.55 MB per token at 8k, 16k, 32k. The cap of 28 GiB is a ceiling chosen so prod, which peaks near 53 GB of the card's 95.8, keeps its headroom; at 34 GiB the card sat at 91.6 GB and that margin was too thin to leave running.
   THROUGHPUT AT THE LONG WINDOWS IS 527-533 ktok/s, against run38's 198 and run33's 262. Longer windows suit the chunked scan and four accumulation steps amortise the optimizer update. The 600 ktok/s target is 14% away, not 3x.
+- `2026-09-22 09:57:27 UTC` **train** (146.0 min) ok
+  d768 L12 mlp4 ctx32768 B1 360000 steps -> /mnt/kv_cache/run41_vlong
+  (log `logs/20260922-073126-train.log`, seed 0)
+- `2026-09-22 10:03:24 UTC` **train** (0.7 min) ok
+  d768 L12 mlp4 ctx1024 B1 60 steps -> /tmp/claude-1000/-opt-code-membrae/ab0dd831-724a-4bd0-be9e-dd7e1ea6f491/scratchpad/memtest
+  (log `logs/20260922-100244-train.log`, seed 0)
+- `2026-09-22 10:04:11 UTC` **train** (0.7 min) ok
+  d768 L12 mlp4 ctx2048 B1 60 steps -> /tmp/claude-1000/-opt-code-membrae/ab0dd831-724a-4bd0-be9e-dd7e1ea6f491/scratchpad/memtest
+  (log `logs/20260922-100329-train.log`, seed 0)
+- `2026-09-22 10:04:59 UTC` **train** (0.7 min) ok
+  d768 L12 mlp4 ctx4096 B1 60 steps -> /tmp/claude-1000/-opt-code-membrae/ab0dd831-724a-4bd0-be9e-dd7e1ea6f491/scratchpad/memtest
+  (log `logs/20260922-100416-train.log`, seed 0)
+- `2026-09-22 10:05:34 UTC` **train** (0.5 min) ok
+  d768 L12 mlp4 ctx8192 B1 60 steps -> /tmp/claude-1000/-opt-code-membrae/ab0dd831-724a-4bd0-be9e-dd7e1ea6f491/scratchpad/memtest
+  (log `logs/20260922-100504-train.log`, seed 0)

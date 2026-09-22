@@ -173,6 +173,31 @@ def _head_piece_eager(hc, yc, E):
 _head_piece = torch.compile(_head_piece_eager, dynamic=False)
 
 
+def _head_piece_ul_eager(hc, yc, negc, mskc, E, alpha):
+    """One chunk of the head, with an UNLIKELIHOOD term on the tokens just emitted.
+
+    Maximum likelihood never conditions on the model's own output: every position is scored against ground
+    truth, so nothing in the objective ever discourages repeating what was just said. At generation the model
+    conditions on itself, and the measured result is a stream that stays in a judge's band for about 4,000
+    tokens and then loops. The data, the window, the kernel, the carried state and the sampler have each been
+    ruled out by measurement (see PROGRESS.md, 2026-09-22), which leaves the objective.
+
+    So for every position, the tokens that occurred in the previous `ul_window` positions are made LESS likely,
+    except the one that is actually correct there: loss += -alpha * sum log(1 - p(previous token)). It needs
+    only the probabilities of those few tokens, not the whole row, so it costs one gather of W columns and
+    leaves the chunked head's memory behaviour untouched."""
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        lg = F.linear(hc, E)
+    lp = lg.float().log_softmax(-1)
+    ce = F.nll_loss(lp, yc, reduction="sum")
+    p_neg = lp.gather(-1, negc).exp()
+    ul = -(torch.log1p(-p_neg.clamp(max=1.0 - 1e-4)) * mskc).sum()
+    return ce + alpha * ul
+
+
+_head_piece_ul = torch.compile(_head_piece_ul_eager, dynamic=False)
+
+
 class LM(nn.Module):
     def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512, mixer="spin"):
         """mixer: "spin" (plain carrier), "gspin" (input and output gates), "fspin" (input and recurrence
@@ -276,20 +301,33 @@ class LM(nn.Module):
                     mem = mx.sent
         return self.n(h)
 
-    def loss(self, h, y, chunks=4):
+    def loss(self, h, y, chunks=4, ul_alpha=0.0, ul_window=128):
         """Cross-entropy from the trunk output WITHOUT materialising all the logits at once (goal 6).
 
         The logits are B x T x V; at B32 T1024 V16384 that is 2.1 GB in fp32 and several copies of it live
         through softmax and its backward, which is what ran a 36 GiB cap out of memory. The head is applied to
         the batch in chunks under activation checkpointing, so at most one chunk's logits exist at a time and
         they are recomputed in backward. The chunk itself is compiled (see _head_piece); the loop is not."""
+        negf = mskf = None
+        if ul_alpha:
+            # the previous ul_window targets for each position, per sequence, with the true token masked out
+            B_, T_ = y.shape
+            W_ = min(ul_window, T_ - 1)
+            off = torch.arange(1, W_ + 1, device=y.device)
+            pos = torch.arange(T_, device=y.device).unsqueeze(1) - off.unsqueeze(0)      # (T, W)
+            neg = y[:, pos.clamp(min=0)]                                                 # (B, T, W)
+            msk = (pos >= 0).unsqueeze(0) & (neg != y.unsqueeze(-1))
+            negf = neg.reshape(-1, W_); mskf = msk.reshape(-1, W_).to(torch.float32)
         y = y.reshape(-1); hf = h.reshape(-1, h.shape[-1]); n = hf.shape[0]
         E = self.e.weight
-        piece = _head_piece if (h.is_cuda and self.head_compile) else _head_piece_eager
+        cmp_ = h.is_cuda and self.head_compile
+        piece = (_head_piece_ul if cmp_ else _head_piece_ul_eager) if ul_alpha else \
+                (_head_piece if cmp_ else _head_piece_eager)
         total = 0.0
         for i in range(chunks):
             sl = slice(i * n // chunks, (i + 1) * n // chunks)
-            total = total + torch.utils.checkpoint.checkpoint(piece, hf[sl], y[sl], E, use_reentrant=False)
+            args = (hf[sl], y[sl], negf[sl], mskf[sl], E, ul_alpha) if ul_alpha else (hf[sl], y[sl], E)
+            total = total + torch.utils.checkpoint.checkpoint(piece, *args, use_reentrant=False)
         return total / n
 
     def forward(self, x, return_hidden=False, hidden_layer=None):
