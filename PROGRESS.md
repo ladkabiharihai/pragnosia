@@ -930,3 +930,17 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
     silence all 9 carrier layers        2.7763   (+1.7987)
   Per layer, the picture is very uneven: layer 2 (carrier) is worth +0.943 on its own, layer 7 (attention) +0.445, layer 3 (attention) +0.142, and every other carrier layer between +0.037 and +0.096.
   LAYER 11, THE LAST ATTENTION LAYER, IS WORTH +0.0089 -- nothing. It can be removed for free as far as this measurement goes, which would return 3M parameters and a twelfth of the mixer time. Worth testing before any scale run, since at 12 layers it is 8% of the stack doing 0.5% of the work.
+- `2026-09-22 12:55:00 UTC` CROSSBREEDING THE ALPHA SIBLINGS IS REFUTED. Averaging the weights of models with a common ancestor usually lands between them; here it lands BELOW both.
+  All four models are run41 continued for the same 0.25B tokens, differing only in the unlikelihood weight, so they never left the ancestor's basin and can be averaged directly. Judged on the full 32,768 tokens at both candidate temperatures, counting blocks inside the 0.954-1.188 band:
+    parent alpha 0.25                   2/8 (at temperature 0.75)
+    parent alpha 0.5                    2/8 (at temperature 0.85)
+    child  0.25 + 0.5                   0/8 at 0.75, 1/8 at 0.85
+    child  0 + 0.25 + 0.5               0/8 at 0.75, 0/8 at 0.85
+  The children loop in their own way rather than in a parent's -- "all the thing that all the thing should all the things", "The Golden Cushn..." repeated -- so the average is not a blend of two behaviours but a third, worse one. The reading: these siblings are not complementary. They differ by one scalar and a quarter of a billion tokens, which is not enough diversity for an average to have anything to exploit, and the failure they share is the same failure at different strengths. Model averaging is not dropped as an idea, but it needs parents that differ in DATA or SEED, not in one coefficient, and building those costs a training run each.
+- `2026-09-22 12:56:00 UTC` WHAT BYTE-LEVEL WOULD COST, MEASURED: 2.4x at a 2,048-token window and 3.7x at 8,192, for the same amount of text.
+    vocab 8192, window  2,048    76.7 k positions/s   0.330 MB of text/s    2.32 GiB
+    vocab  256, window  8,192   135.4 k positions/s   0.135 MB of text/s    5.18 GiB     2.44x the compute
+    vocab 8192, window  8,192   226.9 k positions/s   0.976 MB of text/s    5.26 GiB
+    vocab  256, window 32,768   263.0 k positions/s   0.263 MB of text/s   17.00 GiB     3.71x the compute
+  The prediction was 4.3x, the ratio of bytes to tokens, on the argument that our cost is linear in length where a transformer's is quadratic. It comes in UNDER that at both windows, 2.4x and 3.7x, because the byte model processes more positions per second (135k against 77k, 263k against 227k) -- shorter rows are cheaper per position. So the linear-cost argument holds and is slightly better than the arithmetic suggested.
+  What it would cost in practice: matching the 43 GB of text behind our current model at 0.135-0.263 MB/s is 45 to 88 hours. That is a from-scratch run and it is not affordable inside this deadline. Recorded as the measured cost of the strongest post-deadline direction, not as a plan for today.
