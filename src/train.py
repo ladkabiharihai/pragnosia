@@ -131,6 +131,20 @@ def main():
         mix = [int(v) for v in a.ctx_mix.split(",") if v] or [a.ctx]
         tok_per_micro = a.batch * max(mix)
         shapes = [(t, max(1, tok_per_micro // t)) for t in mix]
+        # A MICRO-BATCH GREATER THAN ONE IS NOT SAFE ON THE STATE-READING MIXER UNDER torch.compile.
+        # Measured 2026-09-22: rspin at ctx 8,192 with batch 4 dies with an illegal memory access inside a
+        # compiled kernel; batch 2 is fine, the all-carrier mixer at batch 4 is fine, and --compile 0 at batch
+        # 4 is fine. The trunk hands the carrier's per-chunk states to the attention layers through a module
+        # attribute, and inductor is free to reuse that buffer. Rather than give up compile, which is worth
+        # roughly twice the throughput, every length runs at batch 1 and the lengths are drawn in proportion
+        # to 1/length so each still contributes the same tokens over a run. Tokens per micro-step then vary,
+        # which the accumulation absorbs.
+        mix_p = None
+        if len(mix) > 1 and any(B_ > 1 for _, B_ in shapes) and getattr(m.mix[3] if len(m.mix) > 3 else m.mix[0], "read_state", 0):
+            shapes = [(t, 1) for t in mix]
+            w_ = np.array([1.0 / t for t in mix]); mix_p = w_ / w_.sum()
+            r.log(f"state-reading mixer: every length at batch 1, drawn with p = "
+                  f"{{{', '.join(f'{t}: {q:.3f}' for t, q in zip(mix, mix_p))}}}")
 
         def capture(T=None, B=None):
             if not (a.graph_step and a.compile): return None
@@ -268,7 +282,7 @@ def main():
             loss = loss / a.accum
             # the next step's batches are sampled NOW, while the card is still busy with this one; the
             # gradient-norm read below is a sync and everything after it is a gap the card sits through
-            T_n, B_n = shapes[rng.integers(len(shapes))] if len(shapes) > 1 else shapes[0]
+            T_n, B_n = shapes[rng.choice(len(shapes), p=mix_p)] if len(shapes) > 1 else shapes[0]
             nxt = [batch(bins, ks, ps, rng, B_n, T_n, extra, a.data2_frac) for _ in range(a.accum)]
             gn = torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)          # a device scalar, not read
             # SPIKE GUARD. The previous run went from loss 4.0998 to NaN between step 14,200 and 14,400, a
@@ -331,8 +345,14 @@ def main():
                 # BITS PER BYTE, not loss per token. Per-token loss depends on the vocabulary and is
                 # comparable to nothing; bits per byte removes the tokenizer and is the only number that can
                 # be set against another model.
+                # BOUNDED, and the same length whatever the run trains at. Evaluating at a.ctx put a
+                # 32,768-token forward beside a 32.6 GiB graph pool and the run died at its first eval with
+                # the batch already halved to one (2026-09-22). A fixed 8,192 also makes the number
+                # comparable across runs, which evaluating at each run's own window never was.
+                torch.cuda.empty_cache()
                 b, nb = eval_bpb(m, tok, bins, ks, ps, np.random.default_rng(1234),
-                                 n_batches=8, B=8, T=a.ctx, vocab=a.vocab)
+                                 n_batches=8, B=4, T=min(a.ctx, 8192), vocab=a.vocab)
+                torch.cuda.empty_cache()
                 r.log(f"  eval step {i+1}: BPB {b:.4f}  ({nb/1e3:.0f}k bytes)")
                 # DEGRADING, not frozen: fspin at 6e-3 went 1.7075 -> 1.7534 -> 2.1130 over three evals while
                 # the skip guard saw only 200 skips in 15k steps. Three consecutive rises, each above the
