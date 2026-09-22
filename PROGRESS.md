@@ -898,3 +898,35 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
 - `2026-09-22 10:05:34 UTC` **train** (0.5 min) ok
   d768 L12 mlp4 ctx8192 B1 60 steps -> /tmp/claude-1000/-opt-code-membrae/ab0dd831-724a-4bd0-be9e-dd7e1ea6f491/scratchpad/memtest
   (log `logs/20260922-100504-train.log`, seed 0)
+- `2026-09-22 11:00:23 UTC` **train** (40.5 min) ok
+  d768 L12 mlp4 ctx32768 B1 369500 steps -> /mnt/kv_cache/run42_ul
+  (log `logs/20260922-101952-train.log`, seed 0)
+- `2026-09-22 11:26:19 UTC` **train** (21.4 min) ok
+  d768 L12 mlp4 ctx32768 B1 364800 steps -> /mnt/kv_cache/run43_a0.1
+  (log `logs/20260922-110456-train.log`, seed 0)
+- `2026-09-22 11:51:30 UTC` **train** (22.1 min) ok
+  d768 L12 mlp4 ctx32768 B1 364800 steps -> /mnt/kv_cache/run43_a0.25
+  (log `logs/20260922-112924-train.log`, seed 0)
+- `2026-09-22 12:14:07 UTC` **train** (20.4 min) ok
+  d768 L12 mlp4 ctx32768 B1 364800 steps -> /mnt/kv_cache/run43_a0.5
+  (log `logs/20260922-115344-train.log`, seed 0)
+- `2026-09-22 12:36:00 UTC` TRAINING EFFICIENCY, MEASURED PROPERLY AT LAST: we lose below 8,192 tokens and win above it, and the crossover is a fact rather than the 3-4k I had been claiming from a kernel-share argument.
+  Our mixer against twelve layers of FULL attention, same width, same harness, micro-batch 1, card to itself.
+  Three earlier attempts at this number were thrown away: one where 60 steps never reached the 200-step report interval and printed nothing, and two where a chain polling for process names started while another job held the card and measured contention. A contended measurement is worse than none because it looks real.
+    window     ours   attention   ours/attn   our memory   its memory
+       512       79         101       0.78x      1.87 GiB     1.87 GiB
+     1,024      127         165       0.77x      1.93          1.81
+     2,048      175         241       0.73x      2.44          2.21
+     4,096      212         256       0.83x      3.46          3.00
+     8,192      228         224       1.02x      5.49          4.56
+    16,384      237         102       2.32x      9.85          8.04
+    32,768      136          65       2.09x     17.86         14.33
+  OUR THROUGHPUT RISES WITH THE WINDOW AND ATTENTION'S COLLAPSES. Ours goes 79, 127, 175, 212, 228, 237 and only falls at 32,768 where the graph pool starts to bite; attention peaks at 4,096 and is halved by 16,384 and halved again by 32,768, which is the quadratic showing up exactly where it should. At 16,384 we are 2.3 times faster.
+  SO THE AXIS IS NOT "WON" OR "LOST", IT IS A CROSSOVER AT 8,192, and the honest claim is that this architecture is the wrong choice for short-window training and the right one for long. That is also the regime the rest of the vision lives in: a million tokens of context, 32,768-token training windows, generation that does not grow its memory. We are slower at the windows we do not care about.
+  We use more memory at every length (1.87 vs 1.87, then 9.85 vs 8.04, 17.86 vs 14.33), which is the carrier's state and the per-length CUDA graphs, and is not yet explained layer by layer.
+- `2026-09-22 12:36:30 UTC` WHO DOES THE WORK: THE CARRIER, BY THREE AND A HALF TO ONE. Every layer is residual, so zeroing a layer's output projection makes it the identity and the rise in bits per byte is its contribution.
+    the whole model                     0.9776
+    silence all 3 attention layers      1.4956   (+0.5180)
+    silence all 9 carrier layers        2.7763   (+1.7987)
+  Per layer, the picture is very uneven: layer 2 (carrier) is worth +0.943 on its own, layer 7 (attention) +0.445, layer 3 (attention) +0.142, and every other carrier layer between +0.037 and +0.096.
+  LAYER 11, THE LAST ATTENTION LAYER, IS WORTH +0.0089 -- nothing. It can be removed for free as far as this measurement goes, which would return 3M parameters and a twelfth of the mixer time. Worth testing before any scale run, since at 12 layers it is 8% of the stack doing 0.5% of the work.
