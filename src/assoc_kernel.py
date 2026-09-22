@@ -574,12 +574,18 @@ def _inv16(n_ptr, base, i, BC: tl.constexpr):
     Nd = tl.load(n_ptr + base + (i * 16 + r)[:, None] * BC + (i * 16 + r)[None, :])
     R = -Nd
     X = tl.where(r[:, None] == r[None, :], 1.0, 0.0) + R
-    R = tl.dot(R.to(tl.bfloat16), R.to(tl.bfloat16), out_dtype=tl.float32)      # (-N)^2
-    X = X + tl.dot(R.to(tl.bfloat16), X.to(tl.bfloat16), out_dtype=tl.float32)   # terms 0..3
-    R = tl.dot(R.to(tl.bfloat16), R.to(tl.bfloat16), out_dtype=tl.float32)      # (-N)^4
-    X = X + tl.dot(R.to(tl.bfloat16), X.to(tl.bfloat16), out_dtype=tl.float32)   # terms 0..7
-    R = tl.dot(R.to(tl.bfloat16), R.to(tl.bfloat16), out_dtype=tl.float32)      # (-N)^8
-    X = X + tl.dot(R.to(tl.bfloat16), X.to(tl.bfloat16), out_dtype=tl.float32)   # terms 0..15: exact
+    # IEEE fp32, NOT bfloat16. The doubling sums terms that reach magnitude ~5,000 to produce an answer whose
+    # entries are at most 1, so the answer sits about 13 bits below the largest term. bfloat16 keeps 8 and
+    # tf32 keeps 10, and both lose it entirely once N's entries approach 1 -- which is exactly what a run of
+    # one repeated token does, since its keys are near-identical and the learned beta reaches 0.99999.
+    # Measured 2026-09-22 on 128 repeated newlines: the true inverse has max |X| = 1, this returned 61.5, and
+    # one carrier's state reached 4.3e14 where the float64 recurrence gives 2.8. See tests/test_assoc.py.
+    R = tl.dot(R, R, out_dtype=tl.float32, input_precision="ieee")               # (-N)^2
+    X = X + tl.dot(R, X, out_dtype=tl.float32, input_precision="ieee")           # terms 0..3
+    R = tl.dot(R, R, out_dtype=tl.float32, input_precision="ieee")               # (-N)^4
+    X = X + tl.dot(R, X, out_dtype=tl.float32, input_precision="ieee")           # terms 0..7
+    R = tl.dot(R, R, out_dtype=tl.float32, input_precision="ieee")               # (-N)^8
+    X = X + tl.dot(R, X, out_dtype=tl.float32, input_precision="ieee")           # terms 0..15: exact
     return X
 
 
@@ -599,16 +605,17 @@ def _inv_solve(n_ptr, x_ptr, NC, BC: tl.constexpr):
     E1 = tl.where(cc[None, :] == r[:, None] + 16, 1.0, 0.0)
     E2 = tl.where(cc[None, :] == r[:, None] + 32, 1.0, 0.0)
     E3 = tl.where(cc[None, :] == r[:, None] + 48, 1.0, 0.0)
-    X0 = tl.dot(_inv16(n_ptr, base, 0, BC).to(tl.bfloat16), E0.to(tl.bfloat16), out_dtype=tl.float32)
-    rhs = E1 - tl.dot(_blk(n_ptr, base, 1, 0, BC).to(tl.bfloat16), X0.to(tl.bfloat16), out_dtype=tl.float32)
-    X1 = tl.dot(_inv16(n_ptr, base, 1, BC).to(tl.bfloat16), rhs.to(tl.bfloat16), out_dtype=tl.float32)
-    rhs = E2 - tl.dot(_blk(n_ptr, base, 2, 0, BC).to(tl.bfloat16), X0.to(tl.bfloat16), out_dtype=tl.float32) \
-             - tl.dot(_blk(n_ptr, base, 2, 1, BC).to(tl.bfloat16), X1.to(tl.bfloat16), out_dtype=tl.float32)
-    X2 = tl.dot(_inv16(n_ptr, base, 2, BC).to(tl.bfloat16), rhs.to(tl.bfloat16), out_dtype=tl.float32)
-    rhs = E3 - tl.dot(_blk(n_ptr, base, 3, 0, BC).to(tl.bfloat16), X0.to(tl.bfloat16), out_dtype=tl.float32) \
-             - tl.dot(_blk(n_ptr, base, 3, 1, BC).to(tl.bfloat16), X1.to(tl.bfloat16), out_dtype=tl.float32) \
-             - tl.dot(_blk(n_ptr, base, 3, 2, BC).to(tl.bfloat16), X2.to(tl.bfloat16), out_dtype=tl.float32)
-    X3 = tl.dot(_inv16(n_ptr, base, 3, BC).to(tl.bfloat16), rhs.to(tl.bfloat16), out_dtype=tl.float32)
+    # the substitution across blocks is in ieee fp32 for the same reason as the doubling inside one
+    X0 = tl.dot(_inv16(n_ptr, base, 0, BC), E0, out_dtype=tl.float32, input_precision="ieee")
+    rhs = E1 - tl.dot(_blk(n_ptr, base, 1, 0, BC), X0, out_dtype=tl.float32, input_precision="ieee")
+    X1 = tl.dot(_inv16(n_ptr, base, 1, BC), rhs, out_dtype=tl.float32, input_precision="ieee")
+    rhs = E2 - tl.dot(_blk(n_ptr, base, 2, 0, BC), X0, out_dtype=tl.float32, input_precision="ieee") \
+             - tl.dot(_blk(n_ptr, base, 2, 1, BC), X1, out_dtype=tl.float32, input_precision="ieee")
+    X2 = tl.dot(_inv16(n_ptr, base, 2, BC), rhs, out_dtype=tl.float32, input_precision="ieee")
+    rhs = E3 - tl.dot(_blk(n_ptr, base, 3, 0, BC), X0, out_dtype=tl.float32, input_precision="ieee") \
+             - tl.dot(_blk(n_ptr, base, 3, 1, BC), X1, out_dtype=tl.float32, input_precision="ieee") \
+             - tl.dot(_blk(n_ptr, base, 3, 2, BC), X2, out_dtype=tl.float32, input_precision="ieee")
+    X3 = tl.dot(_inv16(n_ptr, base, 3, BC), rhs, out_dtype=tl.float32, input_precision="ieee")
     tl.store(x_ptr + base + (r)[:, None] * BC + cc[None, :], X0.to(x_ptr.dtype.element_ty))
     tl.store(x_ptr + base + (r + 16)[:, None] * BC + cc[None, :], X1.to(x_ptr.dtype.element_ty))
     tl.store(x_ptr + base + (r + 32)[:, None] * BC + cc[None, :], X2.to(x_ptr.dtype.element_ty))
