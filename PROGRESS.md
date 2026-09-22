@@ -791,3 +791,29 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
   IT ALSO EXPLAINS THE n=1000 "EROSION". That probe prefixed its colour, weekday and noun items with "Pattern: ", so its 91.5% at 0.66B against 85.5% at 10B was cue-following decaying, not induction. Induction itself, measured on random consonant-vowel pairs with no cue and nothing memorable to fall back on, is 99.2% for us and 99.2% for GPT-2. That axis is closed and I am not reopening it.
   WHAT THE CORPUS SAYS. Occurrences per million bytes over a 1.2 GB sample of our mix: "Pattern:" 0.22, "Sequence:" 0.08, "List:" 0.55, "Continue the pattern" 0.00, against "For example" at 25.63. The labels are rare but not absent; across 337B tokens "Pattern:" appears something like 290,000 times. And the inversion is the interesting part: the one cue that NEVER occurs in our corpus, "Continue the pattern:", is the only one that still helps the 10B models (+7 and +8), while "List:", the commonest, does nothing for them and is worth +25 to GPT-2. The 10B models respond to the ordinary MEANING of the instruction words and not to a format label; GPT-2 responds to the label.
   SO THE REMAINING QUESTION IS WHETHER 10B TOKENS OF THIS MIX DESTROY CUE-FOLLOWING, OR WHETHER A MIX WITH MORE LABELLED STRUCTURE WOULD KEEP IT. The first half is already answered by run33: same architecture, same mix, 0.66B has the ability and 10B does not. The second half needs a corpus filtered for naturally labelled and listed documents out of what we already hold, and a short continuation on it. Filtering our own text for structure is curation; generating weekday cycles to train on would be teaching to the test, and will not be done.
+- `2026-09-21 14:01:20 UTC` **train** (0.3 min) ok
+  d768 L12 mlp4 ctx2048 B4 16000 steps -> /mnt/kv_cache/run39_struct
+  (log `logs/20260921-140101-train.log`, seed 0)
+- `2026-09-21 14:42:35 UTC` **train** (37.7 min) ok
+  d768 L12 mlp4 ctx2048 B4 321000 steps -> /mnt/kv_cache/run39_struct
+  (log `logs/20260921-140452-train.log`, seed 0)
+- `2026-09-21 15:16:47 UTC` **train** (34.1 min) ok
+  d768 L12 mlp4 ctx2048 B4 321000 steps -> /mnt/kv_cache/run40_ctrl
+  (log `logs/20260921-144239-train.log`, seed 0)
+- `2026-09-22 05:50:11 UTC` STRUCTURED TEXT DOES NOT BRING CUE-FOLLOWING BACK. The hypothesis is refuted and I am dropping it.
+  A structured corpus was extracted from our own bins in token space, keeping documents at least 30% of whose lines begin with a bullet, a numbered item, or a short label followed by a colon: 24.63B tokens out of 186.7B scanned, 26.3% of fineweb-edu's documents and 26.3% of finemath's, 8.9% of dclm's, 7.1% of starcoder's, 3.4% of wikipedia's. Then two continuations of the SAME 10B checkpoint, identical in every respect but the corpus, 16,000 steps at ctx 2048, 0.52B tokens, effective learning rate 7.6e-5:
+    model            no cue  Pattern:  Sequence:  The sequence repeats:  Continue the pattern:  List:   gain
+    10B @2048 (base)  58.5     59.5      54.0           56.5                  66.5             63.5    +1.5
+    + structured      56.0     60.0      58.0           59.0                  67.0             65.5    +5.9
+    + ordinary        55.5     56.0      59.5           59.0                  60.0             64.5    +4.3
+    GPT-2 124M        68.0     90.5      90.5           90.0                  87.0             93.5   +22.3
+  +5.9 against +4.3 is 1.6 points with a standard error of about 3 on each cell. There is no structured-text effect. Both arms rose the same small amount over the base, which is the continuation itself and not what it was fed, and both remain a quarter of GPT-2's. Half the sequences drawn from labelled and listed text for half a billion tokens moved nothing, so "our mix is poor in labels" is not the reason we cannot use a prompt label, and the remaining candidates are the amount of training (the ability was strong at 0.66B tokens and gone at 10B, in every architecture we have except plain attention, which never had it) and something about how a rare token modulates the rest of the computation.
+  THE SAME TWO RUNS MOVED THE SCORECARD, AND UNDER THE CORRECTED SCORING RULE WE NOW LEAD GPT-2 ON EVERY AUTOMATIC MEASURE:
+    measure                    structured   ordinary   GPT-2 124M
+    bits per byte                 1.0143     1.0147      1.1400
+    facts (total log-prob)        36/48      35/48       33/48
+    calibration (separation)      +0.249     +0.273      +0.186
+    repeated 4-grams              0.593      0.617       0.899
+    distinct bigrams              0.347      0.294       0.089
+    decode                     411 tok/s  426 tok/s   252 tok/s
+  Facts were a tie at 33-34 against 33 yesterday afternoon; half a billion further tokens at a low rate put them at 35-36 against 33, with better calibration, a third of the repetition and three times the bigram diversity. Bits per byte improved from 1.0193 to 1.0143. Generation stays prose: "The history of the city begins with the founding of the city in the year 1000 BC. The city was founded by the Persian king, who was the first to establish" — grammatical, on topic, still repetitive at paragraph scale, and inventing its facts.

@@ -27,10 +27,15 @@ def loaders(data, only=None):
     return bins, ks, ps
 
 
-def batch(bins, ks, ps, rng, B, T):
+def batch(bins, ks, ps, rng, B, T, extra=None, extra_p=0.0):
+    """extra: a SECOND corpus, drawn for extra_p of the sequences, with its own mix inside it. Used to raise
+    the weight of a form the main mix is poor in without rebuilding the main mix: measured 2026-09-21, labels
+    and lists occur 0.22-0.55 times per million bytes in ours, and a model that could condition on a label in
+    the prompt at 0.66B tokens could no longer do it at 10B."""
     o = np.empty((B, T + 1), dtype=np.int64)
     for i in range(B):
-        a = bins[ks[rng.choice(len(ks), p=ps)]]
+        bn, kn, pn = (extra if (extra is not None and rng.random() < extra_p) else (bins, ks, ps))
+        a = bn[kn[rng.choice(len(kn), p=pn)]]
         j = rng.integers(0, len(a) - T - 2)
         o[i] = a[j:j + T + 1]
     # pinned + non-blocking: a pageable .cuda() waits for every kernel already queued before it returns, so
@@ -50,6 +55,8 @@ def main():
     ap.add_argument("--warm", type=int, default=500)
     ap.add_argument("--data", default="/mnt/kv_cache/tok1b_v8192")
     ap.add_argument("--sources", default="", help="comma-separated subset of the mix (long-context phase)")
+    ap.add_argument("--data2", default="", help="a second corpus directory, sampled for --data2-frac of the sequences")
+    ap.add_argument("--data2-frac", type=float, default=0.0)
     ap.add_argument("--vocab", type=int, default=8192, help="must match the tokenizer the data was made with")
     ap.add_argument("--chunks", type=int, default=1, help="head chunks for the loss; >1 never holds all logits at once")
     ap.add_argument("--accum", type=int, default=1, help="gradient-accumulation steps: --batch is the MICRO-batch; tokens per update = accum*batch*ctx. At ctx 2048 the 78M carrier peaks at 20.2 GiB with batch 16 and 5.9 GiB with batch 4 x accum 4, at 88% of the speed")
@@ -88,6 +95,10 @@ def main():
         assert tok.get_vocab_size() == a.vocab, (tok.get_vocab_size(), a.vocab)
         bins, ks, ps = loaders(a.data, only=[x for x in a.sources.split(",") if x] or None)
         r.log(f"corpora {ks}")
+        extra = None
+        if a.data2:
+            extra = loaders(a.data2)
+            r.log(f"second corpus {a.data2} at {a.data2_frac:.0%}: {extra[1]}")
         m = LM(vocab=a.vocab, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
         # The carrier is 94% of an uncompiled step (195 ms of 206), because its cross-chunk pass is a python
         # loop issuing many tiny kernels. Compiling fuses them: 40 -> 154 ktok/s measured, a 3.8x speedup.
@@ -125,7 +136,7 @@ def main():
             if not (a.graph_step and a.compile): return None
             T = T or a.ctx; B = B or a.batch
             xs = torch.empty((B, T + 1), dtype=torch.long, device="cuda")
-            xs.copy_(batch(bins, ks, ps, np.random.default_rng(11), B, T))
+            xs.copy_(batch(bins, ks, ps, np.random.default_rng(11), B, T, extra, a.data2_frac))
             for p_ in m.parameters():
                 if p_.grad is None: p_.grad = torch.zeros_like(p_)
             out = {}
@@ -211,7 +222,7 @@ def main():
         nonfin = torch.zeros((), device="cuda"); nf_prev = 0
         marks = []; bpbs = []; skipped = 0
         T_n, B_n = shapes[0]
-        nxt = [batch(bins, ks, ps, rng, B_n, T_n) for _ in range(a.accum)]
+        nxt = [batch(bins, ks, ps, rng, B_n, T_n, extra, a.data2_frac) for _ in range(a.accum)]
         for i in range(start, a.steps):
             w = min(1.0, (i + 1) / a.warm)
             # cosine over the whole budget: a flat rate lets a model equilibrate at that rate's noise floor,
@@ -258,7 +269,7 @@ def main():
             # the next step's batches are sampled NOW, while the card is still busy with this one; the
             # gradient-norm read below is a sync and everything after it is a gap the card sits through
             T_n, B_n = shapes[rng.integers(len(shapes))] if len(shapes) > 1 else shapes[0]
-            nxt = [batch(bins, ks, ps, rng, B_n, T_n) for _ in range(a.accum)]
+            nxt = [batch(bins, ks, ps, rng, B_n, T_n, extra, a.data2_frac) for _ in range(a.accum)]
             gn = torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)          # a device scalar, not read
             # SPIKE GUARD. The previous run went from loss 4.0998 to NaN between step 14,200 and 14,400, a
             # sudden spike rather than a drift. Clipping bounds the step but still applies a direction taken
