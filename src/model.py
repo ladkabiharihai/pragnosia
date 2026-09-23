@@ -549,14 +549,62 @@ class LM(nn.Module):
         self.d = dn
         return grown
 
-    def param_groups(self, lr=6e-3, spectral_lr=1e-3):
+    def param_groups(self, lr=6e-3, spectral_lr=1e-3, new_lr=3e-4):
         """Spectral parameters take small ABSOLUTE steps, everything else takes trust-ratio steps.
 
         nu and theta are the per-channel timescale and frequency, not arbitrary weights, so moving them by a
         fraction of their own norm is meaningless. Measured: with ||nu_raw|| about 104, a 6e-3 trust fraction
-        moved the spectrum by 0.6 per step and drove |lambda| from 0.999 to 0.9998 in thirty steps, then NaN."""
-        spec = [p for mx in self.mix for p in mx.spectral_parameters()]
+        moved the spectrum by 0.6 per step and drove |lambda| from 0.999 to 0.9998 in thirty steps, then NaN.
+
+        Layers added by deepen() form a third group, also ABSOLUTE steps: they start with their outputs at
+        exactly zero, and a trust-ratio step is proportional to the parameter's own norm, floored at 1e-3, so a
+        zero tensor would move by lr x 1e-3 per step and take ~100,000 steps to wake up."""
+        new = set(getattr(self, "new_layers", ()))
+        newp = [p for i in sorted(new) for p in list(self.mix[i].parameters()) + list(self.mlp[i].parameters())]
+        nid = {id(p) for p in newp}
+        spec = [p for mx in self.mix for p in mx.spectral_parameters() if id(p) not in nid]
         sid = {id(p) for p in spec}
-        rest = [p for p in self.parameters() if id(p) not in sid]
-        return [{"params": rest, "lr": lr, "trust": True},
-                {"params": spec, "lr": spectral_lr, "trust": False, "factored": False}]
+        rest = [p for p in self.parameters() if id(p) not in sid and id(p) not in nid]
+        groups = [{"params": rest, "lr": lr, "trust": True},
+                  {"params": spec, "lr": spectral_lr, "trust": False, "factored": False}]
+        if newp:
+            groups.append({"params": newp, "lr": new_lr, "trust": False, "factored": False})
+        return groups
+
+    def deepen(self):
+        """DOUBLE THE DEPTH, PRESERVING THE FUNCTION EXACTLY (vision goal 7).
+
+        Widening a trained model is not function-preserving here (LayerNorm over padded zeros moved the loss
+        1.980 -> 2.390 on run45, 2026-09-23). Depth can be: every layer is residual, x + f(x), so a new layer
+        whose output projections are zero is exactly the identity, and the deeper model computes precisely what
+        the shallower one did. It then learns from there.
+
+        Layout for the 1-in-4 attention stack, chosen so the result is an ordinary 2L-layer model of the same
+        mixer and reloads with LM(**cfg): the old layers keep their order and their types, landing on positions
+        0,1,2,7,8,9,10,15,... of 24, and the new ones fill the gaps as blocks of attention + three carriers
+        spread through the depth. Returns the new model; its .new_layers lists the added indices, which
+        param_groups() trains with absolute steps."""
+        L = self.layers
+        assert self.mixer == "rspin", self.mixer
+        big = LM(self.vocab, self.d, 2 * L, self.mlp[0].a.weight.shape[0] // self.d, self.ctx, self.mixer)
+        big = big.to(self.e.weight.device)
+        # old layer j keeps its type: rspin puts attention at i % 4 == 3 in both stacks
+        oldpos, p = [], 0
+        for j in range(L):
+            want_attn = (j % 4 == 3)
+            while (p % 4 == 3) != want_attn or (want_attn and (p // 4) % 2 == 0):
+                p += 1
+            oldpos.append(p); p += 1
+        assert len(set(oldpos)) == L and max(oldpos) < 2 * L, oldpos
+        big.e.load_state_dict(self.e.state_dict()); big.p.load_state_dict(self.p.state_dict())
+        big.n.load_state_dict(self.n.state_dict())
+        for j, q in enumerate(oldpos):
+            big.mix[q].load_state_dict(self.mix[j].state_dict())
+            big.mlp[q].load_state_dict(self.mlp[j].state_dict())
+        big.new_layers = sorted(set(range(2 * L)) - set(oldpos))
+        with torch.no_grad():
+            for i in big.new_layers:
+                big.mix[i].o.weight.zero_()
+                if getattr(big.mix[i].o, "bias", None) is not None: big.mix[i].o.bias.zero_()
+                big.mlp[i].b.weight.zero_(); big.mlp[i].b.bias.zero_()
+        return big

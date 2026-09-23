@@ -1,23 +1,5 @@
-=== 2026-09-23 09:25 UTC ===
+=== 2026-09-23 11:30 UTC ===
 model                       EVERYDAY      SCIQ ARC(4-way)   (48 / 1,000 / 3530 questions; greedy)
-Traceback (most recent call last):
-  File "/opt/code/membrae/eval/qa.py", line 126, in <module>
-    m = run(lab, Mine(ck)); shown[lab] = [m.answer(prompt(q)) for q in SHOW]; del m; torch.cuda.empty_cache()
-                 ^^^^^^^^
-  File "/opt/code/membrae/eval/qa.py", line 81, in __init__
-    self.o = Ours(ck, "/mnt/kv_cache/tok_v8192.json")
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/code/membrae/src/bench.py", line 42, in __init__
-    sd = torch.load(path, map_location=device)
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 1565, in load
-    with _open_file_like(f, "rb") as opened_file:
-         ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 795, in _open_file_like
-    return _open_file(name_or_buffer, mode)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 776, in __init__
-    super().__init__(open(name, mode))  # noqa: SIM115
-                     ^^^^^^^^^^^^^^^^
-FileNotFoundError: [Errno 2] No such file or directory: '/mnt/kv_cache/run48_sft/ckpt.pt'
-KNOW_DONE
+ours-knowledge+factual         45.8%      7.8%      40.5%
+ours-first-finetune            47.9%      7.9%      40.2%
+GPT-2 124M                     16.7%      2.2%      33.8%

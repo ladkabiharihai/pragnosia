@@ -1088,3 +1088,6 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
 - `2026-09-23 09:40:30 UTC` run47 LAUNCHED: the knowledge-dense phase. run45 continued ~2B tokens, prose only with Wikipedia as a
   second corpus at 35% (about 37% Wikipedia, 35% web, 27% educational), no unlikelihood term, fused scan, windows 2,048 and 8,192
   at 16,384 tokens a micro-step. Then run48 = the factual Q&A fine-tune on top, then the same Q&A test as run46.
+- `2026-09-23 11:27:04 UTC` **train** (117.1 min) ok
+  d768 L12 mlp4 ctx32768 B2 438200 steps -> /mnt/kv_cache/run47_know
+  (log `logs/20260923-092959-train.log`, seed 0)

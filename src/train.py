@@ -58,6 +58,7 @@ def main():
     ap.add_argument("--data2", default="", help="a second corpus directory, sampled for --data2-frac of the sequences")
     ap.add_argument("--data2-frac", type=float, default=0.0)
     ap.add_argument("--ul", type=float, default=0.0, help="unlikelihood weight on recently emitted tokens (0 = off)")
+    ap.add_argument("--new-lr", type=float, default=3e-4, help="absolute step for layers added by LM.deepen(), which start at zero output")
     ap.add_argument("--fused-scan", type=int, default=0, help="carrier scan through flash-linear-attention's fused kernel "
                     "(identical maths, 1.5-1.7x faster); switches off the attention layers' state read, which needs "
                     "per-chunk states that kernel does not produce")
@@ -124,10 +125,11 @@ def main():
         trunk = torch.compile(m.trunk) if a.compile else m.trunk
         P = sum(p.numel() for p in m.parameters())
         car = sum(p.numel() for n, p in m.named_parameters() if "mix." in n)
-        base = [a.lr, 1e-3]
+        base = None                                  # set from the optimizer's own groups, just below
         # The eager optimizer was CPU-bound: 19.5 ms issuing ~4,500 kernels per step. Fused and graphed it is
         # a few hundred kernels replayed without python; grads must then be zeroed in place, not set to None.
         opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), cuda_graph=bool(a.graph and a.fused))
+        base = [g["lr"] for g in opt.param_groups]
         set_none = not opt.cuda_graph
         rng = np.random.default_rng(a.seed)
 
@@ -219,6 +221,14 @@ def main():
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
                 opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), cuda_graph=bool(a.graph and a.fused))
             m.load_state_dict(sd["model"]); start = sd["step"]
+            if sd.get("new_layers"):
+                # a checkpoint written by eval/deepen.py: its added layers train with absolute steps (see
+                # LM.param_groups), and it carries no optimizer state, so this is a cold start by design
+                m.new_layers = list(sd["new_layers"])
+                opt = Fabric(m.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused),
+                             cuda_graph=bool(a.graph and a.fused))
+                base = [g["lr"] for g in opt.param_groups]
+                r.log(f"deepened checkpoint: {len(m.new_layers)} new layers {m.new_layers} train at absolute lr {a.new_lr}")
             # RESTORE THE OPTIMIZER TOO. Loading only the weights leaves the optimizer cold, with its second
             # moment at zero, so its first steps after a resume are near-maximal on a model that was already
             # converged to that point. This project measured the same failure at growth events: a rebuilt
