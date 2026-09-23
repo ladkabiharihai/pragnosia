@@ -944,3 +944,19 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
     vocab  256, window 32,768   263.0 k positions/s   0.263 MB of text/s   17.00 GiB     3.71x the compute
   The prediction was 4.3x, the ratio of bytes to tokens, on the argument that our cost is linear in length where a transformer's is quadratic. It comes in UNDER that at both windows, 2.4x and 3.7x, because the byte model processes more positions per second (135k against 77k, 263k against 227k) -- shorter rows are cheaper per position. So the linear-cost argument holds and is slightly better than the arithmetic suggested.
   What it would cost in practice: matching the 43 GB of text behind our current model at 0.135-0.263 MB/s is 45 to 88 hours. That is a from-scratch run and it is not affordable inside this deadline. Recorded as the measured cost of the strongest post-deadline direction, not as a plan for today.
+- `2026-09-22 15:29:03 UTC` **train** (147.1 min) ok
+  d768 L12 mlp4 ctx32768 B1 398000 steps -> /mnt/kv_cache/run44_final
+  (log `logs/20260922-130158-train.log`, seed 0)
+- `2026-09-23 06:33:00 UTC` RETRACTION: EVERY "BLOCKS IN BAND" NUMBER FOR LONG GENERATION IS UNRELIABLE, AND THE AXIS IS OPEN. The judge could not tell prose from symbol soup.
+  Bits per byte under GPT-2 was used as the quality measure for generated text, anchored on the 0.954-1.188 band real held-out text occupies. It catches loops, which are far too predictable, and it cannot catch junk: measured today, a block reading 'C ...\nC ...\nS ...\nG ...\nG ...' scores 0.96 and a block reading 'Nn....\n\nª ..\n\nª ..\n\nNn...' scores 1.14, both squarely INSIDE the band, because unusual rubbish is about as surprising as English. I found this by printing the text next to the score, not by reading the score.
+  THE MEASURE NOW REQUIRES THREE THINGS AT ONCE, and the thresholds are taken from real text rather than invented: the share of whitespace-separated pieces that are ordinary alphabetic words (real text 0.75-0.83), bits per byte inside the band (0.97-1.17), and distinct 4-grams as a share of 4-grams (0.98-0.99). A block is TEXT only if words >= 0.60, bpb in band, and variety >= 0.50.
+    ON THAT MEASURE, EVERY CHECKPOINT SCORES 0 BLOCKS OF 8, AT EVERY TEMPERATURE.
+  AND THE TWO FAILURES ARE OPPOSITE, WHICH IS THE USEFUL PART:
+    run41, no unlikelihood, temperature 0.85
+      words    0.97  1.00  1.00  1.00  0.99  0.96  0.97  0.98
+      variety  0.33  0.01  0.01  0.00  0.01  0.02  0.01  0.02
+    run44, unlikelihood 0.25, temperature 0.85
+      words    0.61  0.52  0.52  0.31  0.25  0.21  0.00  0.00
+      variety  0.55  0.52  0.36  0.40  0.32  0.12  0.03  0.03
+  WITHOUT THE TERM THE MODEL WRITES REAL WORDS FOR ALL 32,768 TOKENS -- 97 to 100 per cent of them -- and says the same handful over and over, variety 0.01. WITH IT, the repetition loosens and the words themselves dissolve, to zero by 24,000 tokens. The unlikelihood term escapes the loop by leaving the space of real words rather than by finding new things to say. That is not the fix, and "2 of 8 blocks in band, seven times the baseline" from 2026-09-22 is withdrawn: it was the broken measure reading junk as prose.
+  WHAT STANDS: the seven won axes are measured on held-out text, fact items and induction items, never on generated output, so this class of error cannot reach them. What falls: the long-generation coherence axis is OPEN, with a horizon nearer 4,000 tokens than anything larger, and the generation-quality axis has to be re-taken against GPT-2 on the corrected measure before it can be claimed either way.
