@@ -973,3 +973,18 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
   AT ITS BEST SETTING GPT-2 IS INDISTINGUISHABLE FROM REAL TEXT on these measures -- words 0.84 against 0.79, variety 0.99 against 0.99, bits per byte 0.96 inside the band. Ours is below real text on two of the three at every temperature: 0.68-0.70 words against 0.79, and 0.80-0.92 variety against 0.99. The samples agree with the numbers; both write plausible sentences, and GPT-2's hold together for longer.
   THE COHERENCE AXIS NEEDS THE SAME TREATMENT AND IS NOT YET SETTLED. Our repetition win (repeated 4-grams 0.593 against GPT-2's 0.899) was measured by `coherence()`, whose default temperature is 0.0 -- greedy decoding, where GPT-2 loops badly and we do not. Under sampling at each model's own best temperature the ordering reverses: variety 0.80-0.92 for us against 0.98-1.00 for GPT-2. Both numbers are real and they answer different questions. Until that is stated as two measurements rather than one, "we beat it on coherence" is half a claim.
   HONEST TALLY AT THIS HOUR: won outright are context rot, inference efficiency, large-context handling, facts with calibration, and induction. Training efficiency is a crossover at 8,192 tokens. Coherence depends on the decoding rule and has to be reported as both. Generation quality is lost. Long-generation coherence is open, with every checkpoint at 0 of 8 blocks.
+- `2026-09-23 07:38:24 UTC` **train** (39.9 min) ok
+  d768 L12 mlp4 ctx32768 B1 407600 steps -> /mnt/kv_cache/run45_prose
+  (log `logs/20260923-065828-train.log`, seed 0)
+- `2026-09-23 07:42:00 UTC` THE LOST GENERATION-QUALITY AXIS IS MOSTLY A DATA PROBLEM. Half a billion tokens of prose closes two-thirds of the gap to GPT-2 on ordinary words.
+  run44 continued for 0.5B tokens with the sources restricted to dclm, fineweb-edu and wikipedia (no starcoder, finemath, open-web-math, arxiv or algebraic-stack, which together are about a quarter of the designed mix), everything else identical. Same probe as the retraction: 1,024 generated tokens, five prompts, three measures at once.
+                            words     bpb   variety
+    REAL HELD-OUT TEXT       0.79    1.15      0.99
+    run44 (designed mix) 0.9  0.68    1.29      0.92
+    run45 (prose only)   0.8  0.71    0.96      0.83
+    run45 (prose only)   0.85 0.74    1.28      0.92
+    run45 (prose only)   0.9  0.79    1.27      0.94
+    GPT-2 124M           0.9  0.85    1.00      1.00
+  WORDS 0.68 -> 0.79, LEVEL WITH REAL TEXT, from 40 minutes of training. The gap to GPT-2 on that measure goes from 0.16 to 0.06. So the axis was lost substantially because of what we fed the model, not because of how it is built, which is the more important of the two things this could have shown before a scale decision.
+  NOT CLOSED: GPT-2 still leads on all three, and our bits per byte sits just above the band at every temperature from 0.85 up (1.27-1.28). The samples read as comparable plausible nonsense from both models.
+  NOT YET RECOMMENDED: dropping code and mathematics may have cost facts, context rot or induction, which are won axes. The full scorecard on run45 is running before this becomes a recommendation rather than a trade.
