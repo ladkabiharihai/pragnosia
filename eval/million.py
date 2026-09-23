@@ -31,7 +31,7 @@ print(f"model ctx {W}, state per layer {m.mix[0].h if hasattr(m.mix[0],'h') else
 TARGETS = (8192, 32768, 131072, 524288, 1048576)
 score = stream[-256:]
 torch.cuda.reset_peak_memory_stats()
-for total in TARGETS:
+def measure(total):
     ids = stream[-(total + 256):]
     st = [None] * m.layers; t0 = time.time()
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
@@ -47,9 +47,22 @@ for total in TARGETS:
         y = torch.tensor(ids[-255:], device="cuda")
         nats = float(F.cross_entropy(lg, y, reduction="sum"))
     nbytes = len(tok.decode([int(t) for t in ids[-255:]]).encode("utf-8"))
-    dt = time.time() - t0
     print(f"  {total:>9,} tokens of context: {nats/nbytes/np.log(2):.4f} bits/byte   "
-          f"{dt:6.1f} s to ingest   peak {torch.cuda.max_memory_allocated()/2**30:.2f} GiB", flush=True)
+          f"{time.time()-t0:6.1f} s to ingest   peak {torch.cuda.max_memory_allocated()/2**30:.2f} GiB", flush=True)
+
+# For a full-attention model the cache grows with every token it reads, so it runs out of memory somewhere
+# on the way to a million. WHERE it runs out is the result, and is printed rather than hidden.
+ran_out = False
+for total in TARGETS:
+    try:
+        measure(total)
+    except torch.OutOfMemoryError:
+        torch.cuda.empty_cache()
+        print(f"  {total:>9,} tokens of context: OUT OF MEMORY at a 20 GiB cap -- this model's cache grows with every token", flush=True)
+        ran_out = True
+        break
+if ran_out:
+    sys.exit(0)
 
 ids = stream[-(1_048_576 + 256):]
 st = [None] * m.layers
