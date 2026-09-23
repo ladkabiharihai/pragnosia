@@ -988,3 +988,14 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
   WORDS 0.68 -> 0.79, LEVEL WITH REAL TEXT, from 40 minutes of training. The gap to GPT-2 on that measure goes from 0.16 to 0.06. So the axis was lost substantially because of what we fed the model, not because of how it is built, which is the more important of the two things this could have shown before a scale decision.
   NOT CLOSED: GPT-2 still leads on all three, and our bits per byte sits just above the band at every temperature from 0.85 up (1.27-1.28). The samples read as comparable plausible nonsense from both models.
   NOT YET RECOMMENDED: dropping code and mathematics may have cost facts, context rot or induction, which are won axes. The full scorecard on run45 is running before this becomes a recommendation rather than a trade.
+- `2026-09-23 07:46:00 UTC` PROSE-ONLY COST NOTHING, SO IT IS A FIX AND NOT A TRADE. run45 is the model to ship.
+  The full scorecard on run45 against run44, held-out text drawn from the full designed mix:
+                                run44      run45      GPT-2 124M
+    bits per byte @512         1.0809     1.0761      1.2167
+    bits per byte @8192        1.0294     1.0258        --
+    decode                   430 tok/s  429 tok/s    250 tok/s
+    facts                      35/48      35/48       33/48
+    calibration               +0.221     +0.238      +0.186
+    induction (unmemorisable)  99.5%      99.5%       98.5%
+  Every won axis held and two moved the right way, including compression measured on the mix that STILL contains code and mathematics. Together with ordinary words going from 0.68 to 0.79, the late-phase data choice was simply wrong and is now corrected.
+  LAYER 11 DELETION: three attempts, three crashes, each from replacing a layer with a pass-through that the decode path does not expect. Dropped inside this deadline. The finding rests on the silencing measurement alone -- +0.0089 bits per byte, nothing -- and removing it goes forward as a recommendation for the next build, not as a measured result.
