@@ -1001,3 +1001,32 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
   LAYER 11 DELETION: three attempts, three crashes, each from replacing a layer with a pass-through that the decode path does not expect. Dropped inside this deadline. The finding rests on the silencing measurement alone -- +0.0089 bits per byte, nothing -- and removing it goes forward as a recommendation for the next build, not as a measured result.
 - `2026-09-23 08:00:00 UTC` CORRECTION: "one million tokens verified on the shipping model" (reported 06:37) was run35 again. `million.py` ignored its argument and loaded a hard-coded run35_mixlen checkpoint, so the chain that passed it run44 measured run35. The architecture is identical, so flat memory carries over as a property of the design, but the numbers were not the final model's and should not have been reported as such. Fixed to read the checkpoint from the command line and remeasured inside eval/run_all.sh.
   THE SCORECARD NOW LIVES IN THE REPOSITORY, not in a scratch directory on a machine that may be purged: eval/nine.py, eval/genqual2.py (generation quality on words, surprise and variety together), eval/isittext.py (long generation), eval/coherence2.py (both decoding rules), eval/million.py, eval/bench_step.py, eval/whodoes.py, and eval/run_all.sh to run them one after another on any checkpoint.
+- `2026-09-23 08:08:00 UTC` THE WORK WAS AIMED AT THE WRONG LIST, AND FOUR VISION GOALS HAD NO EVIDENCE AT ALL. Re-reading VISION.md against the nine axes this session had been measuring:
+    1 surpass the LLMs            partial: ahead of GPT-2 124M on five axes; the controlled head-to-head was never run
+    2 a cognitive model           partial: induction, calibration, memory
+    3 self improving              NONE
+    4 knows what it knows         yes: calibration +0.238 against GPT-2's +0.186
+    5 abstains                    NONE, never measured
+    6 consumer GPU / 4 GB         inference yes (1.22 GiB decoding, 3.50 GiB at 1M); training "at any parameter count" unproven
+    7 growth and continual        growth coded and never demonstrated; continual learning never measured
+    8 everything intrinsic        NO: the learning rate is hand-set in every run, and so are the sampling temperature and
+                                  the unlikelihood weight. The intrinsic-rate optimiser produced NaN in all three designs
+                                  tried on 2026-09-10 and is documented in src/optim.py as not solved.
+    9 solve context rot           yes
+  The investors will judge against VISION.md, so the remaining GPU time goes first to turning blanks into measurements, then
+  to the head-to-head: eval/abstain.py (goal 5), eval/continual.py and eval/growth.sh (goal 7), eval/consumer.sh (goal 6),
+  eval/headtohead.sh (goal 1), chained in eval/vision.sh.
+  THE HEAD-TO-HEAD WAS STOPPED 74 SECONDS INTO ITS FIRST SWEEP RUN (PIDs 825254, 826143, verified) and requeued behind these.
+  Also stopped: PID 2400289, an 18-day-old waiter from an earlier session that would have launched a script with production's
+  Python environment (parakeet_env), which this project may not use. It never fired only because its `pgrep` matched its own
+  command line.
+- `2026-09-23 08:08:30 UTC` GROWTH IS NOT FUNCTION-PRESERVING ON A TRAINED MODEL, although src/model.py says it is. Widening run45
+  from 768 to 1024 changes the logits by 27% and raises loss on real text from 1.980 to 2.390. The docstring already concedes
+  LayerNorm preservation is approximate and assumes the residual stream's mean is near zero; in a trained model it is not, so
+  padding with zeros moves every normalisation. Exact preservation under LayerNorm is not reachable by zero-padding. The claim is
+  withdrawn, and goal 7 is now tested the way that decides whether growth is worth having: grow a trained model and compare it
+  with the same model not grown, and with the large model trained from scratch, at equal tokens (eval/growth.sh).
+- `2026-09-23 08:08:45 UTC` THE FINAL MODEL'S MILLION-TOKEN NUMBERS, measured on run45 for the first time: memory 3.50 GiB, flat from
+  131,072 to 1,048,576 tokens (not the 1.75 GiB quoted from run35, whose window is four times smaller); bits per byte 1.4866-1.4905
+  over that range. Still inside goal 6's 4 GB, with less margin than stated. On the corrected three-measure test run45 keeps its
+  first 2 of 8 blocks of 4,096 tokens as genuine text at temperature 0.85, where run44 kept none.
