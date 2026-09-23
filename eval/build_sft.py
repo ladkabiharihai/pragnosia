@@ -67,6 +67,29 @@ for ds in shards("tau___commonsense_qa", "train"):
         if r["answerKey"] in lab:
             pairs.append(("csqa", r["question"], txt[lab.index(r["answerKey"])].strip() + "."))
 
+# SFT_MIX=factual: the same sources tilted toward SHORT, FACTUAL answers. The first fine-tune taught the form
+# of an answer but got half of eight plain facts wrong, and 60k of its 160k examples were long CAMEL
+# explanations. This keeps Dolly's question-answering categories only, Alpaca and OpenAssistant answers that
+# are short, SciQ's answer with one sentence of support, and a sample of CAMEL.
+if os.environ.get("SFT_MIX") == "factual":
+    dolly_cat = {}
+    for ds in shards("databricks___databricks-dolly-15k"):
+        for r in ds: dolly_cat[r["instruction"]] = r["category"]
+    rng_f = random.Random(1)
+    out = []
+    for src, q, a in pairs:
+        nw = len(a.split())
+        if src == "alpaca" and nw > 60: continue
+        if src == "oasst" and nw > 120: continue
+        if src == "dolly" and dolly_cat.get(q.split("\n\nContext:")[0]) not in ("open_qa", "closed_qa", "general_qa"): continue
+        if src == "sciq":
+            first = a.split(". ")
+            a = ". ".join(first[:2]).rstrip(".") + "."
+        out.append((src, q, a))
+    camel_idx = [i for i, x in enumerate(out) if x[0].startswith("camel")]
+    drop = set(rng_f.sample(camel_idx, max(0, len(camel_idx) - 15000)))
+    pairs = [x for i, x in enumerate(out) if i not in drop]
+
 counts = {}
 for s, _, _ in pairs: counts[s] = counts.get(s, 0) + 1
 print("examples by source:", ", ".join(f"{k} {v:,}" for k, v in sorted(counts.items())), f"-- {len(pairs):,} total")
