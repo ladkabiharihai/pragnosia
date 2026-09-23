@@ -61,7 +61,14 @@ class Attn(nn.Module):
         speed was measured on a model that could not see. The cache is what a real transformer does, and it is
         also the thing that grows with every token while a recurrent state does not."""
         B_, T_, D = x.shape; z = self.n(x)
-        q, k, v = [t(z).view(B_, T_, self.h, D // self.h).transpose(1, 2) for t in (self.q, self.k, self.v)]
+        import src.assoc as _A
+        if _A.FUSED_PROJ:
+            # one matmul for q, k and v: z is read from VRAM once and the product is 3d wide (see AssocCarrier)
+            y = F.linear(z, torch.cat([self.q.weight, self.k.weight, self.v.weight]),
+                         torch.cat([self.q.bias, self.k.bias, self.v.bias]))
+            q, k, v = [t.reshape(B_, T_, self.h, D // self.h).transpose(1, 2) for t in y.split(D, dim=-1)]
+        else:
+            q, k, v = [t(z).view(B_, T_, self.h, D // self.h).transpose(1, 2) for t in (self.q, self.k, self.v)]
         q, k = self.qn(q), self.kn(k)
         if h0 is not None:
             if self.window and h0[0].shape[2] == self.window:

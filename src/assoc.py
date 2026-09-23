@@ -272,6 +272,8 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = Fa
 # Use the fused flash-linear-attention scan where it is exact and nothing needs the per-chunk states. Off
 # unless asked for, so every existing measurement keeps its kernel; see the note at the dispatch below.
 FUSED_SCAN = False
+# One matmul for the carrier's five input projections instead of five; see the note in forward().
+FUSED_PROJ = False
 
 
 class AssocCarrier(nn.Module):
@@ -364,7 +366,19 @@ class AssocCarrier(nn.Module):
         # p0 may be a 0-d tensor: a CUDA-graphed decode step needs the position on the device, not baked in
         pos = p0 + torch.arange(T, device=x.device)
         kern = self.kernel and x.is_cuda and self.dk in (64, 128) and T > 1
-        kp = self.k(z).view(B, T, self.h, self.dk)
+        if FUSED_PROJ and self.delta and not self.key_topk:
+            # ONE MATMUL FOR FIVE PROJECTIONS. q, k, v, the decay gate and the write strength all read z; as five
+            # Linear calls z is read from VRAM five times and each product is only d or h wide, the shape tensor
+            # cores handle worst. Concatenated, z is read once and the product is 3d + 2h wide. Same parameters,
+            # same function (the separate modules are kept so checkpoints and analysis scripts are unchanged).
+            W = torch.cat([self.q.weight, self.k.weight, self.v.weight, self.wa.weight, self.wb.weight])
+            y = F.linear(z, W)
+            qo, ko, vo, ao, bo = y.split([D, D, D, self.h, self.h], dim=-1)
+            kp = ko.view(B, T, self.h, self.dk)
+            self._fused = (qo, vo, ao + self.wa.bias, bo + self.wb.bias)
+        else:
+            self._fused = None
+            kp = self.k(z).view(B, T, self.h, self.dk)
         if self.key_topk:
             # straight through: the mask selects, the surviving coordinates keep their gradient unchanged and
             # the dropped ones get none, which is what a selection should do
@@ -374,19 +388,31 @@ class AssocCarrier(nn.Module):
             # normalise, gate, rotate and cast in one kernel each way, straight from the projections' layout
             # into the scan kernels' (B,H,T,D); measured against the torch form below in tests/test_assoc.py
             from .assoc_kernel import prep_kernel
-            qp, vp = self.q(z).view(B, T, self.h, self.dk), self.v(z).view(B, T, self.h, self.dk)
+            if self._fused is not None:
+                qp, vp = self._fused[0].view(B, T, self.h, self.dk), self._fused[1].view(B, T, self.h, self.dk)
+            else:
+                qp, vp = self.q(z).view(B, T, self.h, self.dk), self.v(z).view(B, T, self.h, self.dk)
             gate = None if (self.delta or self.write_all) else self.wi(z)   # write_all: no gate at all
             q, k, v = prep_kernel(qp, kp, vp, gate, self.theta, pos)
         else:
+            qz = self._fused[0] if self._fused is not None else self.q(z)
+            vz = self._fused[1] if self._fused is not None else self.v(z)
             q, k, v = [t.view(B, T, self.h, self.dk).transpose(1, 2)
-                       for t in (self.q(z), kp.reshape(B, T, self.d), self.v(z))]
+                       for t in (qz, kp.reshape(B, T, self.d), vz)]
             q, k, v = F.normalize(q, dim=-1), F.normalize(k, dim=-1), F.normalize(v, dim=-1)   # scores in [-1, 1], unit writes
             if not self.delta and not self.write_all:
                 k = k * torch.sigmoid(self.wi(z)).transpose(1, 2).unsqueeze(-1)  # write gate per head
             q, k = rotate(q, self.theta, pos), rotate(k, self.theta, pos)
-        la = self.logalpha(z).transpose(1, 2)                                     # (B,H,T)
+        if self._fused is not None:
+            la = -F.softplus(self._fused[2]) * torch.exp(self.A)
+            if self.hl_floor: la = la.clamp(min=self.la_floor)
+            la = la.transpose(1, 2)                                               # (B,H,T)
+            bt = torch.sigmoid(self._fused[3]).transpose(1, 2)
+        else:
+            la = self.logalpha(z).transpose(1, 2)                                 # (B,H,T)
+            bt = torch.sigmoid(self.wb(z)).transpose(1, 2) if self.delta else None # (B,H,T)
         mm = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") and x.is_cuda else None
-        bt = torch.sigmoid(self.wb(z)).transpose(1, 2) if self.delta else None     # (B,H,T)
+        self._fused = None                                                        # do not keep activations alive
         if self.delta and self.write_all:
             # beta = 1 is NOT a safe way to say "write everything": the delta rule's chunk inverse is
             # (I + N)^-1 with N = beta * strictly_lower(K K^T dec), and at beta = 1 two similar keys inside one

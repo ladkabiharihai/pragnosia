@@ -59,6 +59,7 @@ def main():
     ap.add_argument("--data2-frac", type=float, default=0.0)
     ap.add_argument("--ul", type=float, default=0.0, help="unlikelihood weight on recently emitted tokens (0 = off)")
     ap.add_argument("--new-lr", type=float, default=3e-4, help="absolute step for layers added by LM.deepen(), which start at zero output")
+    ap.add_argument("--fused-proj", type=int, default=0, help="one matmul for the carrier's five input projections and attention's q,k,v (same function)")
     ap.add_argument("--fused-scan", type=int, default=0, help="carrier scan through flash-linear-attention's fused kernel "
                     "(identical maths, 1.5-1.7x faster); switches off the attention layers' state read, which needs "
                     "per-chunk states that kernel does not produce")
@@ -94,6 +95,9 @@ def main():
     # mismatched shapes (2026-09-23). A smaller mix simply uses the first rows of a larger table.
     if a.ctx_mix:
         a.ctx = max(a.ctx, max(int(v) for v in a.ctx_mix.split(",") if v))
+    if a.fused_proj:
+        import src.assoc as _A0
+        _A0.FUSED_PROJ = True
     os.makedirs(a.out, exist_ok=True)
 
     require_prod()
