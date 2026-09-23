@@ -1,0 +1,7 @@
+=== optimised fine-tuning loop, timed alone, 09:16 UTC ===
+[    18.8s] step 0: answer loss on held-out pairs 1.7479
+[    55.9s] 100/282  answer loss 1.6604  22 ktok/s  eta 1m
+[    60.6s] 200/282  answer loss 1.5838  175 ktok/s  eta 0m
+[    64.7s] step 282: answer loss on held-out pairs 1.5513
+[    65.2s] done: 282 steps, final held-out answer loss 1.5513
+SPEED_DONE

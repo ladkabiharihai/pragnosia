@@ -87,8 +87,12 @@ def main():
     a = ap.parse_args()
     # the positional table is sized to the model's context, so a mix must build the model at its LONGEST:
     # capturing a graph at 4,096 on a model with 2,048 rows indexes past the table and asserts on the device
+    # ...but never SHRINK it below what was asked for. Resuming a 32,768-window checkpoint with a mix topping out
+    # at 8,192 used to rebuild the model at 8,192, truncate the positional table, leave the optimizer's statistics
+    # for it at 32,768 rows, fail to load them, start cold, and then crash compiling the fused update against the
+    # mismatched shapes (2026-09-23). A smaller mix simply uses the first rows of a larger table.
     if a.ctx_mix:
-        a.ctx = max(int(v) for v in a.ctx_mix.split(",") if v)
+        a.ctx = max(a.ctx, max(int(v) for v in a.ctx_mix.split(",") if v))
     os.makedirs(a.out, exist_ok=True)
 
     require_prod()
@@ -151,7 +155,9 @@ def main():
         # to 1/length so each still contributes the same tokens over a run. Tokens per micro-step then vary,
         # which the accumulation absorbs.
         mix_p = None
-        if len(mix) > 1 and any(B_ > 1 for _, B_ in shapes) and getattr(m.mix[3] if len(m.mix) > 3 else m.mix[0], "read_state", 0):
+        # With --fused-scan the state read is off and the per-chunk states are never materialised, so the buffer
+        # the fault reused does not exist; the all-carrier mixer, which has no state read, never hit it.
+        if len(mix) > 1 and any(B_ > 1 for _, B_ in shapes) and not a.fused_scan and getattr(m.mix[3] if len(m.mix) > 3 else m.mix[0], "read_state", 0):
             shapes = [(t, 1) for t in mix]
             w_ = np.array([1.0 / t for t in mix]); mix_p = w_ / w_.sum()
             r.log(f"state-reading mixer: every length at batch 1, drawn with p = "
@@ -230,10 +236,15 @@ def main():
                         r.log(f"extended the optimizer's statistics for the positional table to {a.ctx} rows")
                     r.log(f"resumed optimizer state ({len(sd['opt'].get('state', {}))} tensors)")
                 except Exception as e:
-                    r.log(f"optimizer state present but not loadable ({type(e).__name__}); starting cold")
+                    r.log(f"optimizer state present but not loadable ({type(e).__name__}: {str(e)[:300]}); starting cold")
             else:
                 r.log("WARNING: checkpoint carries no optimizer state; the first steps will be a shock")
             r.log(f"resumed from {a.resume} at step {start}, loss {sd['loss']:.4f}")
+        # TOKENS ACTUALLY PROCESSED per optimizer step, averaged over the lengths the mix draws. Counting every step
+        # at batch x ctx overstated a mixed-length run 2.5x (2026-09-22) and 4x once the window stopped shrinking
+        # to the mix (2026-09-23): run47 printed 1,138 ktok/s while processing ~285.
+        _pw = mix_p if mix_p is not None else [1.0 / len(shapes)] * len(shapes)
+        tok_per_step = a.accum * sum(q * B_ * T_ for q, (T_, B_) in zip(_pw, shapes))
         graphs = {(B_, T_): capture(T_, B_) for T_, B_ in shapes}          # one captured graph per length
         gs = graphs[(shapes[0][1], shapes[0][0])]
         if gs is not None:
@@ -332,7 +343,7 @@ def main():
                 # reports a throughput it never achieved and an ETA that is wildly optimistic.
                 done = i + 1 - start
                 r.log(f"{i+1}/{a.steps} loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f} "
-                      f"lr {opt.param_groups[0]['lr']:.2e} {done*a.batch*a.ctx*a.accum/el/1e3:.0f} ktok/s "
+                      f"lr {opt.param_groups[0]['lr']:.2e} {done*tok_per_step/el/1e3:.0f} ktok/s "
                       f"eta {(a.steps-i-1)*el/max(1,done)/60:.0f}m"
                       + (f" {torch.cuda.memory_reserved()/2**30:.1f} GiB" if done == 200 else "")
                       + (f" recaptures {opt.recaptures}" if opt.recaptures else ""))

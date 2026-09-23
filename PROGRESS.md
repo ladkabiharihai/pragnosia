@@ -1041,3 +1041,50 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
     SmolLM2-135M              62.5%                 12.7%                      48.4%
   Fine-tuning triples everyday facts and puts us clearly ahead of GPT-2 on all three. SmolLM2-135M -- the same size, ~2T training tokens, about 130 times ours, and NOT instruction-tuned -- is still 15 points ahead on everyday facts. So the limit is how much the model has read, not its size: a model this small can reach 62%. The next step is knowledge-dense continued pretraining, not scaling. The open-answer SciQ numbers are low for every model because the check demands the exact answer word in the first sentence; they compare models, they do not measure absolute ability.
   A direct check of eight questions on run46 got 4 right, and the wrong four were stated as confidently as the right: "The largest planet in our Solar System is Mercury, with a diameter of about 5.5 kilometers."
+- `2026-09-23 09:18:59 UTC` **train** (1.1 min) ok
+  d768 L12 mlp4 ctx2048 B8 400 steps -> /mnt/kv_cache/fusedbench_tmp
+  (log `logs/20260923-091753-train.log`, seed 0)
+- `2026-09-23 09:21:36 UTC` **train** (2.5 min) ok
+  d768 L12 mlp4 ctx2048 B8 400 steps -> /mnt/kv_cache/fusedbench_tmp
+  (log `logs/20260923-091904-train.log`, seed 0)
+- `2026-09-23 09:22:52 UTC` **train** (1.2 min) ok
+  d768 L12 mlp4 ctx8192 B2 400 steps -> /mnt/kv_cache/fusedbench_tmp
+  (log `logs/20260923-092141-train.log`, seed 0)
+- `2026-09-23 09:24:02 UTC` **train** (1.1 min) ok
+  d768 L12 mlp4 ctx8192 B2 400 steps -> /mnt/kv_cache/fusedbench_tmp
+  (log `logs/20260923-092257-train.log`, seed 0)
+- `2026-09-23 09:25:46 UTC` **train** (0.4 min) FAILED: TorchRuntimeError('RuntimeError when making fake tensor call\n  Explanation: Dynamo failed to run FX node with fake tensors: call_method add_(*(FakeTensor(..., device=\'cuda:0\', size=(s89,)), FakeTensor(..., device=\'cuda:0\', size=(s72,))), **{\'alpha\': 1.0 - zf3}): got RuntimeError(\'Attempting to broadcast a dimension of length s72 at -1! Mismatching argument at index 1 had torch.Size([s72]); but expected shape should be broadcastable to [s89]\')\n  Hint: Your code may result in an error when running in eager. Please double check that your code doesn\'t contain a similar error when actually running eager/uncompiled. You can do this by removing the `torch.compile` call, or by using `torch.compiler.set_stance("force_eager")`. \n\n  Developer debug context: \n\n For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb4315.html\n\nfrom user code:\n   File "/opt/code/membrae/src/optim.py", line 41, in _update\n    vr.mul_(b2).add_(sq.mean(dim=1), alpha=1 - b2)\n\nSet TORCHDYNAMO_VERBOSE=1 for the internal stack trace (please do this especially if you\'re reporting a bug to PyTorch). For even more developer context, set TORCH_LOGS="+dynamo"\n')
+  d768 L12 mlp4 ctx8192 B2 438200 steps -> /mnt/kv_cache/run47_know
+  (log `logs/20260923-092521-train.log`, seed 0)
+- `2026-09-23 09:28:33 UTC` **train** (0.3 min) FAILED: TorchRuntimeError('RuntimeError when making fake tensor call\n  Explanation: Dynamo failed to run FX node with fake tensors: call_method add_(*(FakeTensor(..., device=\'cuda:0\', size=(s89,)), FakeTensor(..., device=\'cuda:0\', size=(s72,))), **{\'alpha\': 1.0 - zf3}): got RuntimeError(\'Attempting to broadcast a dimension of length s72 at -1! Mismatching argument at index 1 had torch.Size([s72]); but expected shape should be broadcastable to [s89]\')\n  Hint: Your code may result in an error when running in eager. Please double check that your code doesn\'t contain a similar error when actually running eager/uncompiled. You can do this by removing the `torch.compile` call, or by using `torch.compiler.set_stance("force_eager")`. \n\n  Developer debug context: \n\n For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb4315.html\n\nfrom user code:\n   File "/opt/code/membrae/src/optim.py", line 41, in _update\n    vr.mul_(b2).add_(sq.mean(dim=1), alpha=1 - b2)\n\nSet TORCHDYNAMO_VERBOSE=1 for the internal stack trace (please do this especially if you\'re reporting a bug to PyTorch). For even more developer context, set TORCH_LOGS="+dynamo"\n')
+  d768 L12 mlp4 ctx8192 B2 407620 steps -> /tmp/claude-1000/-opt-code-membrae/ab0dd831-724a-4bd0-be9e-dd7e1ea6f491/scratchpad/dbg
+  (log `logs/20260923-092815-train.log`, seed 0)
+- `2026-09-23 09:29:48 UTC` **train** (0.7 min) ok
+  d768 L12 mlp4 ctx32768 B2 407700 steps -> /tmp/claude-1000/-opt-code-membrae/ab0dd831-724a-4bd0-be9e-dd7e1ea6f491/scratchpad/dbg
+  (log `logs/20260923-092907-train.log`, seed 0)
+- `2026-09-23 09:40:00 UTC` TRAINING EFFICIENCY, MEASURED FAIRLY, AND THREE FIXES THAT PAY.
+  EQUAL TOKENS PER MICRO-STEP (16,384), both mixers, card to itself, one harness:
+    window     ours   attention   ratio        window     ours   attention   ratio
+       512      286       397     0.72x         4,096      291       301     0.97x
+     1,024      291       379     0.77x         8,192      273       235     1.16x
+     2,048      288       348     0.83x        16,384      237       173     1.37x
+  The hypothesis that the earlier batch-1 table was unfair to us was only half right. Batching made both mixers much faster
+  (ours 79 -> 286 at 512), attention gained as much, and it still wins below ~4,096 tokens. What fair batching changed is
+  where the lines cross: ~4,096 rather than ~8,192. Ours is nearly flat across windows; attention's falls. We also use about
+  20% more memory at equal tokens (9.5 against 7.7 GiB).
+  THE ATTENTION LAYERS' STATE READ IS DEAD WEIGHT: switching it off moves held-out bits per byte by -0.0001, +0.0000, +0.0000
+  at 1,024 / 2,048 / 8,192 tokens. Its gates are 0.0033, 0.0005, 0.0069. It is now off whenever --fused-scan is on.
+  THE FUSED SCAN, whole training steps (not one kernel): 268 -> 297 ktok/s (+11%) at 2,048 x 8 and 246 -> 269 (+9%) at 8,192 x 2,
+  same loss. flash-linear-attention's chunked gated delta rule is identical maths to our kernel (whole-model loss 1.98446 vs
+  1.98442; 99.39% of top-1 tokens agree) and 1.50-1.67x faster per layer, because it keeps the state on-chip and recomputes
+  chunk states in the backward pass instead of writing one per chunk to VRAM.
+  THE FINE-TUNING LOOP: 125 -> 175 ktok/s (+40%) from 1,024-token inputs (the attention fast path needs a multiple of 512), the
+  fused optimizer step, and the chunked loss head.
+  TWO TRAINER BUGS, both found starting run47: (1) --ctx-mix rebuilt the model at the mix's LARGEST window even when that was
+  smaller than --ctx, which truncated a resumed checkpoint's positional table but not the optimizer's statistics for it, so the
+  state failed to load, the run started cold and the fused update then failed to compile; the window now only ever grows.
+  (2) Throughput under --ctx-mix counted every step at batch x ctx: run47 printed 1,138 ktok/s while processing ~285. It now
+  counts the tokens the mix actually draws.
+- `2026-09-23 09:40:30 UTC` run47 LAUNCHED: the knowledge-dense phase. run45 continued ~2B tokens, prose only with Wikipedia as a
+  second corpus at 35% (about 37% Wikipedia, 35% web, 27% educational), no unlikelihood term, fused scan, windows 2,048 and 8,192
+  at 16,384 tokens a micro-step. Then run48 = the factual Q&A fine-tune on top, then the same Q&A test as run46.

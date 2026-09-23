@@ -1,1 +1,14 @@
 === equal tokens per micro-step (16,384), 2026-09-23 09:10 UTC ===
+rspin   d768 ctx512 B32:   286 ktok/s   114.6 ms/update  reserved 9.45 GiB
+attn    d768 ctx512 B32:   397 ktok/s    82.5 ms/update  reserved 7.72 GiB
+rspin   d768 ctx1024 B16:   291 ktok/s   112.6 ms/update  reserved 9.47 GiB
+attn    d768 ctx1024 B16:   379 ktok/s    86.4 ms/update  reserved 7.73 GiB
+rspin   d768 ctx2048 B8:   288 ktok/s   113.7 ms/update  reserved 9.50 GiB
+attn    d768 ctx2048 B8:   348 ktok/s    94.1 ms/update  reserved 7.73 GiB
+rspin   d768 ctx4096 B4:   291 ktok/s   112.8 ms/update  reserved 9.50 GiB
+attn    d768 ctx4096 B4:   301 ktok/s   108.9 ms/update  reserved 7.73 GiB
+rspin   d768 ctx8192 B2:   273 ktok/s   119.9 ms/update  reserved 9.56 GiB
+attn    d768 ctx8192 B2:   235 ktok/s   139.3 ms/update  reserved 7.77 GiB
+rspin   d768 ctx16384 B1:   237 ktok/s   138.1 ms/update  reserved 9.85 GiB
+attn    d768 ctx16384 B1:   173 ktok/s   189.2 ms/update  reserved 8.04 GiB
+FAIR_DONE

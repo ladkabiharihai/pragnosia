@@ -1,0 +1,6 @@
+=== whole training steps, fused scan off vs on, 2026-09-23 09:17 UTC ===
+window 2048 batch 8, fused 0: loss 6.2478 268 ktok/s   reserved after capture
+window 2048 batch 8, fused 1: loss 6.2354 297 ktok/s   reserved after capture
+window 8192 batch 2, fused 0: loss 6.3980 246 ktok/s   reserved after capture
+window 8192 batch 2, fused 1: loss 6.3977 269 ktok/s   reserved after capture
+FUSED_DONE

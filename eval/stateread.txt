@@ -1,0 +1,7 @@
+=== 09:17 ===
+3 attention layers read the carrier state; their gates sigmoid(rg) = 0.0033, 0.0005, 0.0069
+
+  window    read on   read off  cost of removing
+   1,024     1.0414     1.0414           -0.0001 bits/byte
+   2,048     1.0171     1.0172           +0.0000 bits/byte
+   8,192     1.0456     1.0457           +0.0000 bits/byte
