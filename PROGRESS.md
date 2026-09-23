@@ -1091,3 +1091,117 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
 - `2026-09-23 11:27:04 UTC` **train** (117.1 min) ok
   d768 L12 mlp4 ctx32768 B2 438200 steps -> /mnt/kv_cache/run47_know
   (log `logs/20260923-092959-train.log`, seed 0)
+- `2026-09-23 12:03:46 UTC` **train** (2.4 min) ok
+  d768 L24 mlp4 ctx8192 B2 300 steps -> /mnt/kv_cache/scratch_speedtmp
+  (log `logs/20260923-120121-train.log`, seed 0)
+- `2026-09-23 12:04:03 UTC` **train** (0.2 min) FAILED: AcceleratorError("CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuCtxSynchronize_v2\n\n")
+  d768 L24 mlp4 ctx8192 B2 300 steps -> /mnt/kv_cache/scratch_speedtmp
+  (log `logs/20260923-120350-train.log`, seed 0)
+- `2026-09-23 12:04:16 UTC` **train** (0.1 min) FAILED: AcceleratorError("CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuCtxSynchronize_v2\n\n")
+  d768 L24 mlp4 ctx8192 B2 183000 steps -> /mnt/kv_cache/run51_scratch
+  (log `logs/20260923-120407-train.log`, seed 0)
+- `2026-09-23 12:12:25 UTC` **train** (0.1 min) FAILED: AcceleratorError("CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuCtxSynchronize_v2\n\n")
+  d768 L24 mlp4 ctx8192 B2 400 steps -> /mnt/kv_cache/scratch_speedtmp
+  (log `logs/20260923-121217-train.log`, seed 0)
+- `2026-09-23 12:15:36 UTC` **train** (3.1 min) ok
+  d768 L24 mlp4 ctx8192 B2 400 steps -> /mnt/kv_cache/scratch_speedtmp
+  (log `logs/20260923-121230-train.log`, seed 0)
+- `2026-09-23 12:16:15 UTC` **train** (0.2 min) FAILED: AcceleratorError("CUDA error: an illegal memory access was encountered\nSearch for `cudaErrorIllegalAddress' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nThe CUDA driver logged these messages, which may provide useful details:\nReturning 700 (CUDA_ERROR_ILLEGAL_ADDRESS) from cuCtxSynchronize_v2\n\n")
+  d768 L24 mlp4 ctx8192 B2 400 steps -> /mnt/kv_cache/scratch_speedtmp
+  (log `logs/20260923-121605-train.log`, seed 0)
+- `2026-09-23 12:26:41 UTC` **train** (2.9 min) ok
+  d256 L12 mlp4 ctx2048 B2 420 steps -> /tmp/claude-1000/-opt-code-membrae/ab0dd831-724a-4bd0-be9e-dd7e1ea6f491/scratchpad/deeptest
+  (log `logs/20260923-122347-train.log`, seed 0)
+- `2026-09-23 12:36:08 UTC` **train** (2.4 min) ok
+  d512 L12 mlp4 ctx8192 B2 250 steps -> /mnt/kv_cache/stagetmp
+  (log `logs/20260923-123344-train.log`, seed 0)
+- `2026-09-23 12:37:34 UTC` **train** (1.4 min) ok
+  d768 L12 mlp4 ctx8192 B2 250 steps -> /mnt/kv_cache/stagetmp
+  (log `logs/20260923-123613-train.log`, seed 0)
+- `2026-09-23 12:39:43 UTC` **train** (2.1 min) ok
+  d768 L24 mlp4 ctx8192 B2 250 steps -> /mnt/kv_cache/stagetmp
+  (log `logs/20260923-123739-train.log`, seed 0)
+- `2026-09-23 12:44:12 UTC` **train** (4.4 min) ok
+  d1024 L24 mlp4 ctx8192 B2 250 steps -> /mnt/kv_cache/stagetmp
+  (log `logs/20260923-123947-train.log`, seed 0)
+- `2026-09-23 12:51:38 UTC` **train** (2.1 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 48.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 9.84 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 664428 has 2.29 GiB memory in use. Process 684381 has 3.60 GiB memory in use. Process 795722 has 38.58 GiB memory in use. Process 797216 has 946.00 MiB memory in use. Process 797217 has 946.00 MiB memory in use. Process 797218 has 946.00 MiB memory in use. Process 797215 has 946.00 MiB memory in use. Including non-PyTorch memory, this process has 34.97 GiB memory in use. 34.00 GiB allowed; Of the allocated memory 33.83 GiB is allocated by PyTorch, with 19.85 GiB allocated in private pools (e.g., CUDA Graphs), and 143.92 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B2 1000 steps -> /mnt/kv_cache/growtest_tmp
+  (log `logs/20260923-124934-train.log`, seed 0)
+- `2026-09-23 12:56:47 UTC` **train** (4.8 min) ok
+  d512 L12 mlp4 ctx8192 B2 1000 steps -> /mnt/kv_cache/growtest_tmp
+  (log `logs/20260923-125201-train.log`, seed 0)
+
+## 2026-09-23 12:58 UTC — growth schedule end-to-end test: every event exact, but training diverges after the mid-run deepen
+- New: a micro-step split op in --grow-schedule (STEP:aN = N x smaller micro-steps, N x the accumulation, same
+  tokens per update) so stage 4 (24L d1024, 37.8 GiB measured) can fit the 34 GiB cap.
+- First attempt OOMed at the deepen: 19.85 GiB of the shallow model's CUDA graphs were still alive because the
+  loop variable g_ and the old compiled wrappers held them. Fixed (g_/fwd/trunk dropped, gc before empty_cache).
+- Second attempt (logs/growtest.out, eval/growtest.sh; 1,000 steps, events at 250:w768, 500:d, 750:a2+w1024):
+  widen 6.1888 -> 6.1888, deepen 5.2451 -> 5.2451, split ok, widen 10.0139 -> 10.0138 -- every event exact.
+  BUT every step after the deepen was rejected by the spike guard (99/100 then 200/200) and the loss climbed
+  to 10.0, above uniform (9.01). The run stopped itself as diverged. The deepened model's gradients are finite
+  and correct in eager mode, so the fault is in the trainer after the event. Ablation running (eval/deepdebug.sh).
+- `2026-09-23 12:59:00 UTC` **train** (0.8 min) ok
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/deepdebug_tmp
+  (log `logs/20260923-125812-train.log`, seed 0)
+- `2026-09-23 13:00:01 UTC` **train** (0.9 min) ok
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/deepdebug_tmp
+  (log `logs/20260923-125904-train.log`, seed 0)
+- `2026-09-23 13:01:31 UTC` **train** (1.1 min) ok
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/deepdebug_tmp
+  (log `logs/20260923-130024-train.log`, seed 0)
+- `2026-09-23 13:04:01 UTC` **train** (2.4 min) ok
+  d512 L12 mlp4 ctx8192 B2 600 steps -> /mnt/kv_cache/deepdebug_tmp
+  (log `logs/20260923-130136-train.log`, seed 0)
+- `2026-09-23 13:05:04 UTC` **train** (0.8 min) ok
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/deepdebug_tmp
+  (log `logs/20260923-130418-train.log`, seed 0)
+- `2026-09-23 13:06:00 UTC` **train** (0.9 min) ok
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/deepdebug_tmp
+  (log `logs/20260923-130508-train.log`, seed 0)
+- `2026-09-23 13:07:11 UTC` **train** (1.1 min) ok
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/deepdebug_tmp
+  (log `logs/20260923-130605-train.log`, seed 0)
+- `2026-09-23 13:10:05 UTC` **train** (1.7 min) ok
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/deepdebug_tmp
+  (log `logs/20260923-130820-train.log`, seed 0)
+- `2026-09-23 13:13:26 UTC` **train** (3.3 min) ok
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/deepdebug_tmp
+  (log `logs/20260923-131010-train.log`, seed 0)
+- `2026-09-23 13:24:59 UTC` **train** (11.5 min) ok
+  d512 L12 mlp4 ctx8192 B2 1000 steps -> /mnt/kv_cache/growtest_tmp
+  (log `logs/20260923-131331-train.log`, seed 0)
+- `2026-09-23 13:31:13 UTC` **train** (5.8 min) ok
+  d1024 L24 mlp4 ctx8192 B1 400 steps -> /mnt/kv_cache/stage4_tmp
+  (log `logs/20260923-132523-train.log`, seed 0)
+- `2026-09-23 13:41:42 UTC` **train** (9.7 min) ok
+  d768 L12 mlp4 ctx8192 B2 800 steps -> /mnt/kv_cache/deepspeed_tmp
+  (log `logs/20260923-133159-train.log`, seed 0)
+- `2026-09-23 13:47:09 UTC` **train** (4.5 min) ok
+  d768 L12 mlp4 ctx8192 B2 400 steps -> /mnt/kv_cache/deepspeed_tmp
+  (log `logs/20260923-134240-train.log`, seed 0)
+
+## 2026-09-23 13:48 UTC — three trainer bugs behind the post-deepen divergence and slowdown, found and fixed
+Ablation (eval/deepdebug.sh, eval/deepdebug.txt): a deepen at step 200 trained, at step 300 it diverged every
+time, with or without either CUDA graph, with or without a prior widen, so neither growth op was at fault.
+1. A SKIPPED STEP STILL MOVED EVERY WEIGHT. The spike guard skips by zeroing gradients, but the momentum still
+   held the old direction and the trust ratio rescaled that decaying momentum back to a full lr*|w| step. Fix
+   (src/optim.py): a tensor whose gradient is exactly zero takes no step.
+2. THE GUARD LOCKED ITSELF OUT. Its history started at zero and rejected steps left zero slots, so the median
+   fell (1.13 -> 0.65) and it rejected ever more. Fix: history starts empty (NaN, nanmedian), and is reset at
+   every growth event so the grown model's gradient scale is learned afresh.
+3. NEW LAYERS HAD NO WARM-UP. Their first absolute steps are sign-like (+-1e-3 on every element, zero output
+   projections included) -> gradient 4x the median -> guard trips -> bug 1. Fix: --new-warm (default 1,000
+   steps) ramps the new-layer group; rates are now set after the growth hook (the rebuilt optimizer had run
+   one step at its unscheduled base rates).
+   Result: deepen at 300 -> loss 6.11 at step 600, 0 skips (was 9.42, 299 skips); widen-then-deepen 6.03, 0 skips.
+4. SLOWDOWN: after a deepen the run did 74-79 ktok/s vs 155 for the same shape fresh. The model was identical
+   in speed (133 vs 139 ms eager); the captured optimizer step went 10 -> 438 ms. The new-layer group had
+   copied the spectral group's dense (unfactored) second moment: 431 ms vs 21 ms factored. Fixed in
+   LM.param_groups.
+Also: stage 4 split (B4@2048 / B1@8192, accum 8) measured 104 ktok/s at 20.8 GiB under the 34 GiB cap (eval/
+stages.txt) vs 108 ktok/s / 37.8 GiB unsplit -- the split costs ~4% and fits. Progress lines now report memory
+and the last-200-step rate every time.
+- `2026-09-23 13:57:31 UTC` **train** (9.4 min) ok
+  d512 L12 mlp4 ctx8192 B2 1400 steps -> /mnt/kv_cache/growtest_tmp
+  (log `logs/20260923-134805-train.log`, seed 0)

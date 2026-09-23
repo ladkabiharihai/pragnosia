@@ -1,0 +1,6 @@
+=== grspin + RMSNorm stages, 16,384 tokens a micro-step, 12:33 ===
+L12 d512: 46.2M params  483 ktok/s  9.5 GiB reserved after capture
+L12 d768: 97.7M params  296 ktok/s  14.4 GiB reserved after capture
+L24 d768: 182.9M params  155 ktok/s  27.9 GiB reserved after capture
+L24 d1024: 319.4M params  108 ktok/s  37.8 GiB reserved after capture
+L24 d1024 split (B4@2048/B1@8192, accum 8), cap 34: 104 ktok/s 20.8 GiB reserved after capture

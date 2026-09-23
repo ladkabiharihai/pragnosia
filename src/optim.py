@@ -67,7 +67,12 @@ def _update(p, g, vr, vc, v, m, lr, b1: float, b2: float, eps: float, wd: float,
         wn = p.float().norm().clamp_min(min_norm)
         un = u.norm().clamp_min(eps)
         u = u * (wn / un).clamp(max=clip)
-    p.sub_(u.to(p.dtype) * lr)
+    # A ZERO GRADIENT MEANS NO STEP. The trainer's spike guard skips a step by zeroing its gradients, but the
+    # momentum still carried the previous direction and the trust ratio rescaled that decaying momentum back
+    # to a full lr * |w| step, so a "skipped" step moved every weight as far as a real one. Measured 2026-09-23:
+    # 299 consecutive skipped steps after a deepen drove the loss from 6.40 to 9.4, above uniform.
+    live = (gf.abs().amax() > 0).to(p.dtype)
+    p.sub_(u.to(p.dtype) * lr * live)
 
 
 _fused = None      # torch.compile(_update), built on first use

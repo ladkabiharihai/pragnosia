@@ -3,7 +3,7 @@
 Run:  .venv/bin/python -m src.train --steps 120000 --out /mnt/kv_cache/run1
 """
 from __future__ import annotations
-import argparse, json, math, os, time
+import argparse, gc, json, math, os, time
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -58,7 +58,11 @@ def main():
     ap.add_argument("--data2", default="", help="a second corpus directory, sampled for --data2-frac of the sequences")
     ap.add_argument("--data2-frac", type=float, default=0.0)
     ap.add_argument("--ul", type=float, default=0.0, help="unlikelihood weight on recently emitted tokens (0 = off)")
+    ap.add_argument("--new-warm", type=int, default=1000, help="steps over which layers added mid-run ramp from 0 to --new-lr")
     ap.add_argument("--new-lr", type=float, default=3e-4, help="absolute step for layers added by LM.deepen(), which start at zero output")
+    ap.add_argument("--norm", default="ln", choices=["ln", "rms"], help="residual-stream norm; rms makes widening exact")
+    ap.add_argument("--grow-schedule", default="", help="growth events as STEP:OP, OP = wN (widen to N), d (double depth) or aN (split each micro-step N ways, N x the accumulation: same tokens per update, less activation memory), e.g. 45750:w768,91500:d,137250:w1024")
+    ap.add_argument("--deepen-at", type=int, default=0, help="step at which to double the depth in place with LM.deepen() (0: never)")
     ap.add_argument("--fused-proj", type=int, default=0, help="one matmul for the carrier's five input projections and attention's q,k,v (same function)")
     ap.add_argument("--fused-scan", type=int, default=0, help="carrier scan through flash-linear-attention's fused kernel "
                     "(identical maths, 1.5-1.7x faster); switches off the attention layers' state read, which needs "
@@ -83,7 +87,7 @@ def main():
     ap.add_argument("--graph-step", type=int, default=1,
                     help="capture forward+loss+backward as ONE CUDA graph and replay it per micro-batch")
     ap.add_argument("--resume", default="")
-    ap.add_argument("--mixer", default="spin", choices=["spin", "gspin", "fspin", "aspin", "dspin", "wspin", "xspin", "w2spin", "hspin", "hdspin", "sdspin", "altspin", "alt4spin", "rspin", "tspin", "trspin", "aspin1", "hspin1", "r6spin", "attn"])
+    ap.add_argument("--mixer", default="spin", choices=["spin", "gspin", "fspin", "aspin", "dspin", "wspin", "xspin", "w2spin", "hspin", "hdspin", "sdspin", "altspin", "alt4spin", "rspin", "tspin", "trspin", "aspin1", "hspin1", "r6spin", "grspin", "attn"])
     ap.add_argument("--spike", type=float, default=4.0)
     ap.add_argument("--eval-every", type=int, default=2000)
     a = ap.parse_args()
@@ -98,6 +102,17 @@ def main():
     if a.fused_proj:
         import src.assoc as _A0
         _A0.FUSED_PROJ = True
+    # THE GROWTH SCHEDULE: step -> widen to N, and steps at which to double the depth. The older single-event
+    # flags fold into it.
+    grow_w, grow_d, grow_a = {}, set(), {}
+    for ev in [e for e in a.grow_schedule.split(",") if e]:
+        st_, op_ = ev.split(":")
+        if op_ == "d": grow_d.add(int(st_))
+        elif op_.startswith("a"): grow_a[int(st_)] = int(op_[1:])
+        elif op_.startswith("w"): grow_w[int(st_)] = int(op_[1:])
+        else: raise ValueError(f"unknown growth op {op_!r} in --grow-schedule")
+    if a.grow_at: grow_w[a.grow_at] = a.grow_to
+    if a.deepen_at: grow_d.add(a.deepen_at)
     os.makedirs(a.out, exist_ok=True)
 
     require_prod()
@@ -113,7 +128,7 @@ def main():
         if a.data2:
             extra = loaders(a.data2)
             r.log(f"second corpus {a.data2} at {a.data2_frac:.0%}: {extra[1]}")
-        m = LM(vocab=a.vocab, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
+        m = LM(vocab=a.vocab, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer, norm=a.norm).cuda()
         if a.fused_scan:
             import src.assoc as _A
             _A.FUSED_SCAN = True
@@ -215,7 +230,7 @@ def main():
                 sd["cfg"]["ctx"] = a.ctx
                 grew_ctx = (old_ctx, sd["cfg"]["d"])
             if sd["cfg"]["d"] != m.d:                      # a grown run: rebuild at the checkpoint's width
-                m = LM(vocab=a.vocab, d=sd["cfg"]["d"], layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
+                m = LM(vocab=a.vocab, d=sd["cfg"]["d"], layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer, norm=a.norm).cuda()
                 if a.fused_scan:
                     import src.assoc as _A
                     _A.FUSED_SCAN = True
@@ -257,6 +272,9 @@ def main():
         # TOKENS ACTUALLY PROCESSED per optimizer step, averaged over the lengths the mix draws. Counting every step
         # at batch x ctx overstated a mixed-length run 2.5x (2026-09-22) and 4x once the window stopped shrinking
         # to the mix (2026-09-23): run47 printed 1,138 ktok/s while processing ~285.
+        # a resumed run past a split point starts at the split micro-batch
+        for st_, f_ in grow_a.items():
+            if st_ < start: shapes = [(t, max(1, B_ // f_)) for t, B_ in shapes]; a.accum *= f_
         _pw = mix_p if mix_p is not None else [1.0 / len(shapes)] * len(shapes)
         tok_per_step = a.accum * sum(q * B_ * T_ for q, (T_, B_) in zip(_pw, shapes))
         graphs = {(B_, T_): capture(T_, B_) for T_, B_ in shapes}          # one captured graph per length
@@ -265,7 +283,7 @@ def main():
             set_none = False
             r.log(f"micro-step captured as a CUDA graph; {torch.cuda.memory_reserved()/2**30:.1f} GiB reserved after capture")
 
-        t0 = time.time(); ema = None
+        t0 = time.time(); ema = None; t_prev = 0.0
         # THE GUARD LIVES ON THE CARD. Reading the gradient norm and the loss every step were the only two
         # syncs left in the loop, and each one drained the queue and left the card idle through the host's
         # bookkeeping: 2 ms of a 128 ms update measured piece by piece. The norm history, its median, the
@@ -273,7 +291,10 @@ def main():
         # steps. A skipped step zeroes its gradients through one foreach multiply instead of a branch, so the
         # optimizer sees a zero gradient (its moments decay once) rather than being skipped outright; on
         # steps that do not spike, which is all but a few per ten thousand, nothing changes.
-        hist = torch.zeros(1000, device="cuda"); skips_t = torch.zeros((), device="cuda"); ema_t = None
+        # the history starts EMPTY (NaN), not at zero: a zero slot drags the median down, the guard then rejects
+        # more steps, each rejection leaves another zero slot, and the run locks itself out (2026-09-23)
+        hist = torch.full((1000,), float("nan"), device="cuda"); g0 = start; grown_at = -10**9
+        skips_t = torch.zeros((), device="cuda"); skips_t = torch.zeros((), device="cuda"); ema_t = None
         nonfin = torch.zeros((), device="cuda"); nf_prev = 0
         marks = []; bpbs = []; skipped = 0
         T_n, B_n = shapes[0]
@@ -284,26 +305,96 @@ def main():
             # which is what drove the previous project's BPB upward for hundreds of thousands of steps.
             f = min(1.0, max(0.0, (i - a.warm) / max(1, a.steps - a.warm)))
             sched = 0.05 + 0.95 * 0.5 * (1 + math.cos(math.pi * f))
-            for gi, g in enumerate(opt.param_groups):
-                g["lr"] = base[gi] * sched * w
-            if a.grow_at and i == a.grow_at and m.d < a.grow_to:
+            if i in grow_a:
+                # SPLIT THE MICRO-STEP before a stage whose activations would not fit under the cap: half the rows
+                # per micro-step, twice the micro-steps, so the update sees the same tokens. The graphs are freed
+                # first and recaptured at the new shape (by the growth event below if one shares this step).
+                graphs.clear(); gs = None; g_ = None; gc.collect(); torch.cuda.empty_cache()
+                shapes = [(t, max(1, B_ // grow_a[i])) for t, B_ in shapes]; a.accum *= grow_a[i]
+                a.batch = shapes[-1][1] if len(shapes) > 1 else max(1, a.batch // grow_a[i])
+                if i not in grow_w and i not in grow_d:
+                    if len(shapes) > 1: graphs.update({(B_, T_): capture(T_, B_) for T_, B_ in shapes})
+                    else: gs = capture()
+                T_n, B_n = shapes[0]
+                nxt = [batch(bins, ks, ps, rng, B_n, T_n, extra, a.data2_frac) for _ in range(a.accum)]
+                r.log(f"    SPLIT micro-steps {grow_a[i]} ways at step {i}: shapes {shapes}, accumulation {a.accum}")
+            if i in grow_w and m.d < grow_w[i]:
                 # GROWTH (vision goal 7): widen in place, function preserved, optimizer state carried. The
                 # loss right before and right after is logged so the cost of the event is a number.
                 xg = batch(bins, ks, ps, np.random.default_rng(7), a.batch, a.ctx)
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                     lb = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
-                for p_, (old_p, sh) in m.grow(a.grow_to).items():
+                # free the old CUDA graphs BEFORE growing: old and new together exceed the cap at the late stages
+                graphs.clear(); gs = None; g_ = None; gc.collect()
+                torch._dynamo.reset(); torch.cuda.empty_cache()
+                for p_, (old_p, sh) in m.grow(grow_w[i]).items():
                     opt.grew(p_, sh, replaces=old_p)
                 opt.zero_grad(set_to_none=True)             # grad buffers are the old shape
-                torch._dynamo.reset()                        # compiled graphs hold the old parameters
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
-                gs = capture()                                # the graph held the old parameters
+                # every window's graph, not only the first: a mixed-length run held stale graphs after widening
+                if len(shapes) > 1:
+                    graphs.update({(B_, T_): capture(T_, B_) for T_, B_ in shapes})
+                else:
+                    gs = capture()
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                     la = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
                 P = sum(p.numel() for p in m.parameters())
                 r.log(f"    GREW to d={m.d} at step {i}: {P/1e6:.1f}M params, same batch loss {lb:.4f} -> {la:.4f}, "
                       f"optimizer state {opt.state_bytes()/2**20:.0f} MiB carried")
+                hist.fill_(float("nan")); g0 = i      # the grown model's gradient norm is its own; re-learn it
+            if i in grow_d:
+                # DEPTH GROWTH MID-RUN (vision goal 7): the model doubles its layers in place and computes exactly
+                # what it did before (new layers start at zero output; measured 1.949016 -> 1.949016 on run47).
+                # Every existing layer keeps its optimizer state; the new ones get their own absolute-step group.
+                # Growing a shallow model late in the run costs half the compute per token until then.
+                xg = batch(bins, ks, ps, np.random.default_rng(7), a.batch, a.ctx)
+                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    lb = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
+                old_m = m
+                big = old_m.deepen()
+                if a.fused_scan:
+                    for _mx in big.mix:
+                        if hasattr(_mx, "need_sent"): _mx.need_sent = False
+                keep = [q for q in range(big.layers) if q not in set(big.new_layers)]
+                pairs = [(po, pn) for mod in ("e", "p", "n")
+                         for po, pn in zip(getattr(old_m, mod).parameters(), getattr(big, mod).parameters())]
+                for j, q in enumerate(keep):
+                    pairs += list(zip(old_m.mix[j].parameters(), big.mix[q].parameters()))
+                    pairs += list(zip(old_m.mlp[j].parameters(), big.mlp[q].parameters()))
+                opt2 = Fabric(big.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused),
+                              cuda_graph=bool(a.graph and a.fused))
+                carried = 0
+                for po, pn in pairs:
+                    if po in opt.state: opt2.state[pn] = opt.state[po]; carried += 1
+                # free the shallow model's CUDA graphs BEFORE capturing the deep one's: both at once would be
+                # ~15 + ~28 GiB, over the cap
+                graphs.clear(); gs = None; g_ = None; gc.collect()
+                m, opt = big, opt2
+                del old_m, opt2, big, pairs      # pairs held every shallow parameter (and its grad) alive
+                base = [g["lr"] for g in opt.param_groups]
+                set_none = not opt.cuda_graph
+                fwd = trunk = None; torch._dynamo.reset(); gc.collect(); torch.cuda.empty_cache()
+                fwd = torch.compile(m) if a.compile else m
+                trunk = torch.compile(m.trunk) if a.compile else m.trunk
+                if len(shapes) > 1:
+                    graphs.update({(B_, T_): capture(T_, B_) for T_, B_ in shapes})
+                else:
+                    gs = capture()
+                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    la = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
+                P = sum(p.numel() for p in m.parameters())
+                r.log(f"    DEEPENED to {m.layers} layers at step {i}: {P/1e6:.1f}M params, same batch loss "
+                      f"{lb:.4f} -> {la:.4f}, optimizer state carried for {carried} tensors, "
+                      f"{len(m.new_layers)} new layers at absolute lr {a.new_lr}, ramped over {a.new_warm} steps")
+                grown_at = i; hist.fill_(float("nan")); g0 = i
+            # rates are set AFTER any growth event: a deepen rebuilds the optimizer at its base rates
+            for gi, g in enumerate(opt.param_groups):
+                g["lr"] = base[gi] * sched * w
+            if len(opt.param_groups) > 2:
+                # layers added mid-run start from empty optimizer state; their first absolute steps are sign-like
+                # (+-lr on every element, zero-initialised output projections included), so they ramp in
+                opt.param_groups[2]["lr"] *= min(1.0, (i - grown_at + 1) / max(1, a.new_warm))
             opt.zero_grad(set_to_none=set_none)
             loss = None
             for _acc in range(a.accum):
@@ -331,8 +422,8 @@ def main():
             # from a pathological batch, and the optimizer then carries that direction in its state for
             # thousands of steps. Compared against a running median so it needs no retuning as loss scale
             # changes. This guard existed in the previous project's trainer and I failed to carry it here.
-            j = i - start; fin = torch.isfinite(gn)
-            med = hist[:min(j, 1000)].median() if j else gn
+            j = i - g0; fin = torch.isfinite(gn)
+            med = hist.nanmedian() if j else gn
             keep = fin & ((gn <= a.spike * med) if j >= 200 else torch.ones((), dtype=torch.bool, device="cuda"))
             hist[j % 1000] = torch.where(keep, gn, hist[j % 1000])            # only kept steps enter the history
             skips_t.add_(~keep)
@@ -358,9 +449,12 @@ def main():
                 done = i + 1 - start
                 r.log(f"{i+1}/{a.steps} loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f} "
                       f"lr {opt.param_groups[0]['lr']:.2e} {done*tok_per_step/el/1e3:.0f} ktok/s "
+                      f"(last 200: {200*tok_per_step/max(1e-9, el-t_prev)/1e3:.0f}) "
                       f"eta {(a.steps-i-1)*el/max(1,done)/60:.0f}m"
-                      + (f" {torch.cuda.memory_reserved()/2**30:.1f} GiB" if done == 200 else "")
-                      + (f" recaptures {opt.recaptures}" if opt.recaptures else ""))
+                      f" {torch.cuda.memory_reserved()/2**30:.1f} GiB")
+                t_prev = el
+                if opt.recaptures:
+                    r.log(f"    optimizer step recaptured {opt.recaptures} times")
                 if nnf > nf_prev:
                     # the guard zeroed those steps; the run continues unless the weights themselves went bad
                     alive = bool(torch.stack([p_.isfinite().all() for p_ in m.parameters()]).all().item())
@@ -414,8 +508,9 @@ def main():
                         os.replace(f"{a.out}/ckpt.pt", f"{a.out}/ckpt_prev.pt")
                     torch.save({"model": m.state_dict(), "opt": opt.state_dict(),
                                 "step": i + 1, "loss": ema_t.item(),   # the current average, not the last log's
-                                "cfg": dict(vocab=a.vocab, d=m.d, layers=a.layers,
-                                            mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer)},
+                                "cfg": dict(vocab=a.vocab, d=m.d, layers=m.layers,
+                                            mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer, norm=a.norm),
+                                "new_layers": list(getattr(m, "new_layers", []))},
                                f"{a.out}/ckpt.pt")
         if ema_t is None:
             r.log(f"NOTHING TO DO: resumed at step {start} with --steps {a.steps}. A resumed run counts from the "

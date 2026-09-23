@@ -206,11 +206,11 @@ _head_piece_ul = torch.compile(_head_piece_ul_eager, dynamic=False)
 
 
 class LM(nn.Module):
-    def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512, mixer="spin"):
+    def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512, mixer="spin", norm="ln"):
         """mixer: "spin" (plain carrier), "gspin" (input and output gates), "fspin" (input and recurrence
         gates: per-token forgetting), "aspin" (associative: content-addressed memory), "attn" (control)."""
         super().__init__()
-        self.vocab, self.d, self.layers, self.ctx, self.mixer = vocab, d, layers, ctx, mixer
+        self.vocab, self.d, self.layers, self.ctx, self.mixer, self.norm = vocab, d, layers, ctx, mixer, norm
         self.e = nn.Embedding(vocab, d)
         self.p = nn.Embedding(ctx, d)
         mk = {"spin": lambda d: SpinCarrier(d), "gspin": lambda d: SpinCarrier(d, gated="io"),
@@ -274,11 +274,25 @@ class LM(nn.Module):
               # the same read-side mechanism with the ratio moved back toward memory.
               "r6spin": lambda d, i: (Attn(d, window=512, read_state=128) if i % 6 == 5 else
                                       AssocCarrier(d, delta=True, head_dim=128)),
+              # GROWABLE: the rspin stack built so that widening is exactly function-preserving as well as
+              # deepening. Attention heads are FIXED at 64 dimensions and multiply with d (8 at 512, 12 at 768,
+              # 16 at 1024), so widening adds whole heads -- like the carrier -- instead of widening each head,
+              # which changed every QK-normalised score (2026-09-23). No state read: it measured as dead weight.
+              # Built with norm="rms": RMSNorm over zero-padded dimensions is an exact rescale, LayerNorm is not.
+              "grspin": lambda d, i: (Attn(d, heads=d // 64, window=512) if i % 4 == 3 else
+                                      AssocCarrier(d, delta=True, head_dim=128)),
               "attn": Attn}[mixer]
-        self.mix = nn.ModuleList([mk(d, i) if mixer in ("altspin", "alt4spin", "rspin", "trspin", "r6spin") else mk(d) for i in range(layers)])
+        self.mix = nn.ModuleList([mk(d, i) if mixer in ("altspin", "alt4spin", "rspin", "trspin", "r6spin", "grspin") else mk(d) for i in range(layers)])
         self.mlp = nn.ModuleList([MLP(d, mlp_mult) for _ in range(layers)])
         self.n = nn.LayerNorm(d)
         self.head_compile = True                    # tests flip it to compare against the eager form
+        if norm == "rms":
+            # every residual-stream LayerNorm becomes an RMSNorm of the same width (the per-head norms inside
+            # the carrier and attention already are). This is what makes zero-padded widening exact.
+            for mod in list(self.modules()):
+                for nm, child in list(mod.named_children()):
+                    if isinstance(child, nn.LayerNorm):
+                        setattr(mod, nm, nn.RMSNorm(child.normalized_shape[0]))
         self.apply(self._init)
 
     @staticmethod
@@ -395,7 +409,8 @@ class LM(nn.Module):
         a linspace, or the new memory would all be the fastest or all the slowest."""
         import math as _m
         d = self.d; k = dn - d
-        fresh = LM(self.vocab, dn, self.layers, self.mlp[0].a.weight.shape[0] // d, self.ctx, self.mixer)
+        fresh = LM(self.vocab, dn, self.layers, self.mlp[0].a.weight.shape[0] // d, self.ctx, self.mixer,
+                   norm=getattr(self, "norm", "ln"))
         fresh = fresh.to(self.e.weight.device)
         grown = {}
         def put(mod, name, new):
@@ -409,8 +424,16 @@ class LM(nn.Module):
             new[tuple(slice(0, s) for s in old.shape)] = old
             put(mod, name, new)
         def widen_ln(ln):
-            ow, ob = ln.weight.data, ln.bias.data
+            ow = ln.weight.data
             w = torch.zeros(dn, device=ow.device, dtype=ow.dtype); w[:d] = ow * _m.sqrt(d / dn)
+            if isinstance(ln, nn.RMSNorm):
+                # EXACT: zero-padding lowers the RMS by exactly sqrt(d/dn), which the old weights absorb, and the
+                # new dimensions are zero so they come out zero whatever their weight -- so they get the typical
+                # scale rather than zero, and can pass signal as soon as something writes to them
+                w[d:] = w[:d].median()
+                put(ln, "weight", w); ln.normalized_shape = (dn,)
+                return
+            ob = ln.bias.data
             b = torch.zeros(dn, device=ob.device, dtype=ob.dtype); b[:d] = ob
             put(ln, "weight", w); put(ln, "bias", b); ln.normalized_shape = (dn,)
         widen(self.e, "weight", fresh.e.weight, zero_cols=True)
@@ -433,6 +456,20 @@ class LM(nn.Module):
                 for nm in ("q", "k", "v", "o"):
                     getattr(mx, nm).in_features = getattr(mx, nm).out_features = dn
                 mx.d = dn; mx.h = fx.h
+            elif fx.h > mx.h:
+                # A GROWABLE ATTENTION BLOCK (fixed 64-dimension heads): widening adds whole heads, exactly as the
+                # carrier does. New heads' q, k, v rows are random, their output columns zero; every existing
+                # head, and its QK-normalised scores, is untouched. The rows are laid out head by head, so the
+                # new heads are exactly the appended rows.
+                for nm in ("q", "k", "v"):
+                    widen(getattr(mx, nm), "weight", getattr(fx, nm).weight)
+                    widen(getattr(mx, nm), "bias", getattr(fx, nm).bias, zero_rows=True)
+                widen(mx.o, "weight", fx.o.weight, zero_rows=True, zero_cols=True)
+                widen(mx.o, "bias", fx.o.bias, zero_rows=True)
+                widen_ln(mx.n)
+                for nm in ("q", "k", "v", "o"):
+                    getattr(mx, nm).in_features = getattr(mx, nm).out_features = dn
+                mx.h = fx.h
             else:
                 # AN ATTENTION BLOCK. Its heads stay at the same count and each head gets WIDER, so the new
                 # dimensions land inside the dot product that makes the scores. Zero on both q and k would
@@ -497,7 +534,7 @@ class LM(nn.Module):
         d, dn = self.d, d_new
         assert dn > d, (d, dn)
         assert self.mixer in ("spin", "gspin", "fspin", "aspin", "dspin", "hspin", "hdspin",
-                              "altspin", "alt4spin", "rspin", "attn"), self.mixer
+                              "altspin", "alt4spin", "rspin", "grspin", "attn"), self.mixer
         if self.mixer not in ("spin", "gspin", "fspin"):
             return self._grow_assoc(dn)
         fresh = LM(self.vocab, dn, self.layers, self.mlp[0].a.weight.shape[0] // d, self.ctx, self.mixer)
@@ -575,7 +612,9 @@ class LM(nn.Module):
         groups = [{"params": rest, "lr": lr, "trust": True},
                   {"params": spec, "lr": spectral_lr, "trust": False, "factored": False}]
         if newp:
-            groups.append({"params": newp, "lr": new_lr, "trust": False, "factored": False})
+            # factored like every other weight matrix: copying the spectral group's dense second moment made the
+            # captured optimizer step 431 ms instead of 21 (measured 2026-09-23), halving a deepened run's speed
+            groups.append({"params": newp, "lr": new_lr, "trust": False, "factored": True})
         return groups
 
     def deepen(self):
@@ -592,8 +631,9 @@ class LM(nn.Module):
         spread through the depth. Returns the new model; its .new_layers lists the added indices, which
         param_groups() trains with absolute steps."""
         L = self.layers
-        assert self.mixer == "rspin", self.mixer
-        big = LM(self.vocab, self.d, 2 * L, self.mlp[0].a.weight.shape[0] // self.d, self.ctx, self.mixer)
+        assert self.mixer in ("rspin", "grspin"), self.mixer
+        big = LM(self.vocab, self.d, 2 * L, self.mlp[0].a.weight.shape[0] // self.d, self.ctx, self.mixer,
+                 norm=getattr(self, "norm", "ln"))
         big = big.to(self.e.weight.device)
         # old layer j keeps its type: rspin puts attention at i % 4 == 3 in both stacks
         oldpos, p = [], 0

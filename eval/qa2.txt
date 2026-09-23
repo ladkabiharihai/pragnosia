@@ -3,3 +3,67 @@ model                       EVERYDAY      SCIQ ARC(4-way)   (48 / 1,000 / 3530 q
 ours-knowledge+factual         45.8%      7.8%      40.5%
 ours-first-finetune            47.9%      7.9%      40.2%
 GPT-2 124M                     16.7%      2.2%      33.8%
+SmolLM2-135M                   62.5%     12.7%      48.4%
+
+THE ANSWERS THEMSELVES (greedy, first 160 characters):
+
+  Q: What is the capital of France?
+     ours-knowledge+factual   'The capital of France is Paris, France.'
+     ours-first-finetune      'The capital of France is Paris, France.'
+     GPT-2 124M               'The capital of France.'
+     SmolLM2-135M             'Paris.'
+
+  Q: Who wrote Romeo and Juliet?
+     ours-knowledge+factual   'Romeo and Juliet is a classic story about a young girl who falls in love with a young man named Romeo.'
+     ours-first-finetune      'The play "Romeo and Juliet" is a play written by William Shakespeare.'
+     GPT-2 124M               "I'm not sure."
+     SmolLM2-135M             'Who wrote Romeo and Juliet?'
+
+  Q: Why is the sky blue?
+     ours-knowledge+factual   'The sky is blue because the sun is blue.'
+     ours-first-finetune      'The sky is blue because the sun is shining through the blue sky.'
+     GPT-2 124M               "I'm not sure why the sky blue is blue."
+     SmolLM2-135M             "Because it reflects the sun's light."
+
+  Q: What causes the seasons on Earth?
+     ours-knowledge+factual   "The Earth's rotation causes the Earth's rotation."
+     ours-first-finetune      "The Earth's atmosphere."
+     GPT-2 124M               'The seasons on Earth are the seasons of the Earth.'
+     SmolLM2-135M             "The Earth's axis is tilted 23.5 degrees from the plane of its orbit."
+
+  Q: How do plants make their food?
+     ours-knowledge+factual   'They use the energy from sunlight to produce energy.'
+     ours-first-finetune      'They use the energy from sunlight to make food.'
+     GPT-2 124M               'Plants are the most important food for humans.'
+     SmolLM2-135M             'Plants make their food by using sunlight and water.'
+
+  Q: What is the largest planet in our solar system?
+     ours-knowledge+factual   'The Sun is the largest and oldest known planet.'
+     ours-first-finetune      'The largest planet in our Solar System is Mercury, with a diameter of about 5.5 kilometers.'
+     GPT-2 124M               'The largest planet in our solar system is the Earth.'
+     SmolLM2-135M             'Jupiter.'
+
+  Q: Explain what gravity is in one sentence.
+     ours-knowledge+factual   "Gravity is the force pulling the Earth's surface towards the center of the Earth."
+     ours-first-finetune      'Gravity is the force that holds the planets in place.'
+     GPT-2 124M               'Gravity is the amount of energy that can be transferred from one object to another.'
+     SmolLM2-135M             'Explain what gravity is in one sentence.'
+
+  Q: What is photosynthesis?
+     ours-knowledge+factual   'Photosynthesis.'
+     ours-first-finetune      'Photosynthesis.'
+     GPT-2 124M               'Photosynthesis is the process of converting carbon dioxide into energy.'
+     SmolLM2-135M             'Photosynthesis is the process by which plants and other organisms use sunlight to make their own food.'
+
+  Q: Who was the first president of the United States?
+     ours-knowledge+factual   'The first president of the United States was George Washington.'
+     ours-first-finetune      'The first president of the United States was George Washington.'
+     GPT-2 124M               "I'm not sure."
+     SmolLM2-135M             'George Washington.'
+
+  Q: What is two plus two?
+     ours-knowledge+factual   'Two.'
+     ours-first-finetune      'Two.'
+     GPT-2 124M               'Two plus two.'
+     SmolLM2-135M             'Two plus two equals four.'
+KNOW_DONE
