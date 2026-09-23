@@ -1030,3 +1030,6 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
   131,072 to 1,048,576 tokens (not the 1.75 GiB quoted from run35, whose window is four times smaller); bits per byte 1.4866-1.4905
   over that range. Still inside goal 6's 4 GB, with less margin than stated. On the corrected three-measure test run45 keeps its
   first 2 of 8 blocks of 4,096 tokens as genuine text at temperature 0.85, where run44 kept none.
+- `2026-09-23 08:29:36 UTC` **train** (19.8 min) ok
+  d512 L12 mlp4 ctx2048 B4 8000 steps -> /mnt/kv_cache/grow_A
+  (log `logs/20260923-080950-train.log`, seed 0)

@@ -1,1 +1,17 @@
 === 2026-09-23 08:07 UTC ===
+508 four-way items (48 facts, 60 arithmetic, 400 reasoning), chance 25%
+
+Carrier: overall accuracy 0.370   AURC 0.535   (random abstention gives 0.630; lower is better)
+GPT-2 124M: overall accuracy 0.449   AURC 0.405   (random abstention gives 0.551; lower is better)
+
+answers only its most confident          Carrier    GPT-2 124M
+  100% of questions                       37.0%         44.9% 
+   80% of questions                       42.1%         47.5% 
+   60% of questions                       42.0%         54.8% 
+   40% of questions                       45.3%         60.1% 
+   20% of questions                       50.0%         71.6% 
+   10% of questions                       54.9%         76.5% 
+
+A model that knows what it does not know gains accuracy as it answers less.
+  Carrier      answering its top 20%: +13.0% over answering everything;  mean confidence when right 0.557, when wrong 0.493
+  GPT-2 124M   answering its top 20%: +26.7% over answering everything;  mean confidence when right 0.590, when wrong 0.494

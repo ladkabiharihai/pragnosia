@@ -58,6 +58,9 @@ def main():
     ap.add_argument("--data2", default="", help="a second corpus directory, sampled for --data2-frac of the sequences")
     ap.add_argument("--data2-frac", type=float, default=0.0)
     ap.add_argument("--ul", type=float, default=0.0, help="unlikelihood weight on recently emitted tokens (0 = off)")
+    ap.add_argument("--fused-scan", type=int, default=0, help="carrier scan through flash-linear-attention's fused kernel "
+                    "(identical maths, 1.5-1.7x faster); switches off the attention layers' state read, which needs "
+                    "per-chunk states that kernel does not produce")
     ap.add_argument("--ul-window", type=int, default=128, help="how far back the unlikelihood term looks")
     ap.add_argument("--vocab", type=int, default=8192, help="must match the tokenizer the data was made with")
     ap.add_argument("--chunks", type=int, default=1, help="head chunks for the loss; >1 never holds all logits at once")
@@ -102,6 +105,12 @@ def main():
             extra = loaders(a.data2)
             r.log(f"second corpus {a.data2} at {a.data2_frac:.0%}: {extra[1]}")
         m = LM(vocab=a.vocab, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
+        if a.fused_scan:
+            import src.assoc as _A
+            _A.FUSED_SCAN = True
+            for _mx in m.mix:
+                if hasattr(_mx, "need_sent"): _mx.need_sent = False
+            r.log("fused scan on: carrier through flash-linear-attention, attention state read off")
         # The carrier is 94% of an uncompiled step (195 ms of 206), because its cross-chunk pass is a python
         # loop issuing many tiny kernels. Compiling fuses them: 40 -> 154 ktok/s measured, a 3.8x speedup.
         for mx in m.mix:
@@ -195,6 +204,11 @@ def main():
                 grew_ctx = (old_ctx, sd["cfg"]["d"])
             if sd["cfg"]["d"] != m.d:                      # a grown run: rebuild at the checkpoint's width
                 m = LM(vocab=a.vocab, d=sd["cfg"]["d"], layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer).cuda()
+                if a.fused_scan:
+                    import src.assoc as _A
+                    _A.FUSED_SCAN = True
+                    for _mx in m.mix:
+                        if hasattr(_mx, "need_sent"): _mx.need_sent = False
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
                 opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), cuda_graph=bool(a.graph and a.fused))

@@ -1,33 +1,33 @@
-"""Talk to the model.
+"""Ask the model questions.
 
-WHAT THIS IS. A base language model: it was trained to continue text and nothing else. There is no instruction
-tuning, no chat format, no assistant persona, no safety layer. Asking it a question gets you what a web page
-that began with that question would plausibly say next, which is sometimes an answer and often another
-question, a menu bar, or a byline. Give it the START of something and it does much better than an instruction.
+Uses the fine-tuned checkpoint and the template it was trained on -- "User: <question>\\nAssistant:" -- and stops
+at the end of the answer. Greedy by default, so the same question always gets the same answer and anyone can
+check it; '!temp 0.8' samples instead.
 
-Temperature 0.9 by default, measured: at 0.8 and below it loops, above 1.0 it becomes noise, and 0.9 puts it
-inside the band real text occupies under an independent judge.
-
-usage: chat.py [ckpt] [temp]      then type; blank line to quit; '!' prefix sets tokens, e.g. '!200'
-"""
-import sys, os, warnings; warnings.filterwarnings("ignore"); sys.path.insert(0, "/opt/code/membrae")
+usage: .venv/bin/python chat.py [checkpoint]
+       then type a question; a blank line quits.  '!temp 0.8' to sample, '!temp 0' for greedy,
+       '!tokens 200' for longer answers, '!raw' to toggle plain text continuation (no template)."""
+import sys, os, warnings; warnings.filterwarnings("ignore"); sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.common import cap_gpu
-cap_gpu(float(os.environ.get("CHAT_CAP", "10")))
-import torch
+cap_gpu(float(os.environ.get("CHAT_CAP", "6")))
 from src.bench import Ours
-CK = sys.argv[1] if len(sys.argv) > 1 else "/mnt/kv_cache/run41_vlong/ckpt.pt"
-TEMP = float(sys.argv[2]) if len(sys.argv) > 2 else 0.9
+
+CK = sys.argv[1] if len(sys.argv) > 1 else "/mnt/kv_cache/run46_sft/ckpt.pt"
 m = Ours(CK, "/mnt/kv_cache/tok_v8192.json")
-n_tok = 120
-print(f"model: {os.path.basename(os.path.dirname(CK))}  temperature {TEMP}  {n_tok} tokens per turn")
-print("this is a TEXT CONTINUER, not an assistant. blank line quits; '!300' changes the token count.\n")
-seed = 0
+EOD = 8191
+temp, n_tok, raw, seed = 0.0, 160, False, 0
+print(f"model {os.path.basename(os.path.dirname(CK))} · greedy · type a question, blank line to quit")
+print("commands: !temp 0.8   !tokens 200   !raw\n")
 while True:
-    try: p = input("> ")
+    try: q = input("you> ").strip()
     except (EOFError, KeyboardInterrupt): break
-    if not p.strip(): break
-    if p.startswith("!") and p[1:].strip().isdigit():
-        n_tok = int(p[1:]); print(f"  ({n_tok} tokens per turn)"); continue
+    if not q: break
+    if q.startswith("!temp"): temp = float(q.split()[1]); print(f"  temperature {temp}"); continue
+    if q.startswith("!tokens"): n_tok = int(q.split()[1]); print(f"  {n_tok} tokens"); continue
+    if q == "!raw": raw = not raw; print(f"  {'plain continuation' if raw else 'question template'}"); continue
     seed += 1
-    out = m.generate(m.encode(p), n_tok, temp=TEMP, seed=seed)
-    print(m.decode(out).rstrip() + "\n")
+    ids = m.encode(q if raw else f"User: {q}\nAssistant:")
+    out = m.generate(ids, n_tok, temp=temp, seed=seed)
+    if EOD in out: out = out[:out.index(EOD)]
+    text = m.decode(out).split("\nUser:")[0].strip()
+    print(f"model> {text}\n")

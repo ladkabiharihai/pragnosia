@@ -269,6 +269,11 @@ def assoc_scan(q, k, v, logalpha, S0=None, chunk: int = 64, recompute: bool = Fa
     return o.to(q.dtype), S
 
 
+# Use the fused flash-linear-attention scan where it is exact and nothing needs the per-chunk states. Off
+# unless asked for, so every existing measurement keeps its kernel; see the note at the dispatch below.
+FUSED_SCAN = False
+
+
 class AssocCarrier(nn.Module):
     def __init__(self, d: int, heads: int | None = None, chunk: int = 64, recompute: bool = False,
                  delta: bool = False, head_dim: int | None = None, kernel: bool = True, key_topk: int = 0,
@@ -301,6 +306,9 @@ class AssocCarrier(nn.Module):
         # wastes capacity the model was not using anyway, and tests whether the policy was the thing holding
         # long context back.
         self.write_all = write_all
+        # set False when no later layer reads this memory, which lets the fused scan run (it never
+        # materialises the per-chunk states); True keeps our own kernel, which writes them
+        self.need_sent = True
         # kernel: the Triton scan (src/assoc_kernel.py) when it applies (CUDA, plain rule, head dim 64 or 128,
         # more than one token); the PyTorch two-pass form otherwise, and always for the T=1 decode step, which
         # is CUDA-graphed already and has nothing for a chunk kernel to do.
@@ -386,7 +394,19 @@ class AssocCarrier(nn.Module):
             # well below 1 instead, which still removes most of the decision without breaking the solve.
             bt = bt.clamp(min=0.75)
         if kern:
-            if self.delta:
+            if self.delta and FUSED_SCAN and not self.need_sent:
+                # THE FUSED KERNEL (flash-linear-attention's chunked gated delta rule). Identical maths to ours --
+                # measured 2026-09-23 against the float32 reference, 0.48% relative on the output and 0.38% on
+                # the final state, the same bf16 error as our own kernel -- and 1.50-1.67x faster forward and
+                # backward at every shape we train, because it keeps the state on-chip and recomputes chunk
+                # states in the backward pass instead of writing one to VRAM per chunk and reading it back. It
+                # does not produce those per-chunk states, so it is used only when no later layer reads them.
+                from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+                t = lambda x: x.transpose(1, 2).contiguous()
+                o, S = chunk_gated_delta_rule(t(q), t(k), t(v), t(la).float(), t(bt).float(), scale=1.0,
+                                              initial_state=S0, output_final_state=True)
+                o = o.transpose(1, 2); sent = None
+            elif self.delta:
                 from .assoc_kernel import delta_scan_kernel
                 o, S, sent = delta_scan_kernel(q, k, v, la, bt, S0, chunk=self.chunk if self.chunk in (64, 128) else 64,
                                                bv=self.bv)

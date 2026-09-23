@@ -1,0 +1,16 @@
+=== 2026-09-23 08:11 UTC ===
+Facts are read, not trained on: the weights never change, so nothing known can be forgotten.
+
+facts in context                 Carrier            GPT-2 124M
+10                         70.0% ( 158 tok)         80.0% ( 130 tok)
+30                         76.7% ( 470 tok)         80.0% ( 398 tok)
+60                         50.0% ( 938 tok)         60.0% ( 788 tok)
+120                        26.7% (1894 tok)does not fit (1581 tok)
+
+No facts in context at all (what each model guesses cold): Carrier 28.3%   GPT-2 124M 29.2%   (chance 25%)
+
+Carrier with all 120 facts in context (1894 tokens), accuracy by how far back the fact sits:
+   facts   1-30  (the earliest quarter): 53.3%
+   facts  31-60  (the middle quarter): 16.7%
+   facts  61-90  (the middle quarter): 20.0%
+   facts  91-120 (the most recent quarter): 16.7%
