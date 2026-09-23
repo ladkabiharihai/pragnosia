@@ -960,3 +960,16 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
       variety  0.55  0.52  0.36  0.40  0.32  0.12  0.03  0.03
   WITHOUT THE TERM THE MODEL WRITES REAL WORDS FOR ALL 32,768 TOKENS -- 97 to 100 per cent of them -- and says the same handful over and over, variety 0.01. WITH IT, the repetition loosens and the words themselves dissolve, to zero by 24,000 tokens. The unlikelihood term escapes the loop by leaving the space of real words rather than by finding new things to say. That is not the fix, and "2 of 8 blocks in band, seven times the baseline" from 2026-09-22 is withdrawn: it was the broken measure reading junk as prose.
   WHAT STANDS: the seven won axes are measured on held-out text, fact items and induction items, never on generated output, so this class of error cannot reach them. What falls: the long-generation coherence axis is OPEN, with a horizon nearer 4,000 tokens than anything larger, and the generation-quality axis has to be re-taken against GPT-2 on the corrected measure before it can be claimed either way.
+- `2026-09-23 06:45:00 UTC` GENERATION QUALITY IS LOST TO GPT-2, not marginally won. The earlier verdict came from the judge that could not see junk.
+  1,024 generated tokens, five prompts, both models, all three measures at once, thresholds from real held-out text measured in the same run:
+                            words     bpb   variety
+    REAL HELD-OUT TEXT       0.79    1.15      0.99
+    ours (run44) t=0.80      0.70    0.96      0.81
+    ours (run44) t=0.85      0.69    1.01      0.80
+    ours (run44) t=0.90      0.68    1.29      0.92
+    GPT-2 124M   t=0.80      0.83    0.83      0.98
+    GPT-2 124M   t=0.90      0.84    0.96      0.99
+    GPT-2 124M   t=1.00      0.84    1.44      1.00
+  AT ITS BEST SETTING GPT-2 IS INDISTINGUISHABLE FROM REAL TEXT on these measures -- words 0.84 against 0.79, variety 0.99 against 0.99, bits per byte 0.96 inside the band. Ours is below real text on two of the three at every temperature: 0.68-0.70 words against 0.79, and 0.80-0.92 variety against 0.99. The samples agree with the numbers; both write plausible sentences, and GPT-2's hold together for longer.
+  THE COHERENCE AXIS NEEDS THE SAME TREATMENT AND IS NOT YET SETTLED. Our repetition win (repeated 4-grams 0.593 against GPT-2's 0.899) was measured by `coherence()`, whose default temperature is 0.0 -- greedy decoding, where GPT-2 loops badly and we do not. Under sampling at each model's own best temperature the ordering reverses: variety 0.80-0.92 for us against 0.98-1.00 for GPT-2. Both numbers are real and they answer different questions. Until that is stated as two measurements rather than one, "we beat it on coherence" is half a claim.
+  HONEST TALLY AT THIS HOUR: won outright are context rot, inference efficiency, large-context handling, facts with calibration, and induction. Training efficiency is a crossover at 8,192 tokens. Coherence depends on the decoding rule and has to be reported as both. Generation quality is lost. Long-generation coherence is open, with every checkpoint at 0 of 8 blocks.
