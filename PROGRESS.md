@@ -1205,3 +1205,9 @@ and the last-200-step rate every time.
 - `2026-09-23 13:57:31 UTC` **train** (9.4 min) ok
   d512 L12 mlp4 ctx8192 B2 1400 steps -> /mnt/kv_cache/growtest_tmp
   (log `logs/20260923-134805-train.log`, seed 0)
+
+## 2026-09-23 13:59 UTC — LAUNCHED run52_grow: 12B tokens from scratch, growing 46M -> 319M (eval/grow.sh)
+Log logs/train_grow.out, checkpoints /mnt/kv_cache/run52_grow every 4,000 updates. Growth at 45,776 (w768),
+91,552 (deepen to 24), 137,328 (split + w1024). Expected ~1.8 + 2.8 + 5.3 + 8.3 = ~18h from the measured stage
+speeds (the trainer's own ETA uses stage-1 speed and reads ~7h; it will lengthen at each event). Started at
+458 ktok/s, 9.6 GiB. Committed as 96c93dc.
