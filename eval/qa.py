@@ -130,4 +130,4 @@ print("\nTHE ANSWERS THEMSELVES (greedy, first 160 characters):")
 for i, q in enumerate(SHOW):
     print(f"\n  Q: {q}")
     for lab, ans in shown.items():
-        print(f"     {lab:<24s} {first_sentence(ans)[:160]!r}")
+        print(f"     {lab:<24s} {first_sentence(ans[i])[:160]!r}")

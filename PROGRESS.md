@@ -1033,3 +1033,11 @@ checkpoint, and no architecture. Nothing is running. Nothing proceeds without ap
 - `2026-09-23 08:29:36 UTC` **train** (19.8 min) ok
   d512 L12 mlp4 ctx2048 B4 8000 steps -> /mnt/kv_cache/grow_A
   (log `logs/20260923-080950-train.log`, seed 0)
+- `2026-09-23 09:10:00 UTC` QUESTION ANSWERING, first fine-tune (run46, 152k local Q&A pairs, 2 epochs, held-out answer loss 2.450 -> 1.207). Plain questions, one template for every model, greedy answers:
+                        everyday facts (48)   SciQ open answer (1,000)   ARC four-way (3,530)
+    ours, fine-tuned          47.9%                  7.9%                      40.2%
+    ours, before              16.7%                  1.7%                      36.0%
+    GPT-2 124M                16.7%                  2.2%                      33.8%
+    SmolLM2-135M              62.5%                 12.7%                      48.4%
+  Fine-tuning triples everyday facts and puts us clearly ahead of GPT-2 on all three. SmolLM2-135M -- the same size, ~2T training tokens, about 130 times ours, and NOT instruction-tuned -- is still 15 points ahead on everyday facts. So the limit is how much the model has read, not its size: a model this small can reach 62%. The next step is knowledge-dense continued pretraining, not scaling. The open-answer SciQ numbers are low for every model because the check demands the exact answer word in the first sentence; they compare models, they do not measure absolute ability.
+  A direct check of eight questions on run46 got 4 right, and the wrong four were stated as confidently as the right: "The largest planet in our Solar System is Mercury, with a diameter of about 5.5 kilometers."
