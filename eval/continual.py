@@ -18,7 +18,12 @@ from src.bench import Ours, GPT2
 from src.facts import FACTS
 
 CK = sys.argv[1] if len(sys.argv) > 1 else "/mnt/kv_cache/run45_prose/ckpt.pt"
+# MODES (argv[2]): "compare" (default) -- ours and GPT-2, the whole model trained at LR, as first published;
+# "grow" -- ours only, at each rate in RATES both ways: the WHOLE model trained, or GROW_K new zero-output layers
+# added on top and ONLY THEY trained (every old weight frozen). Same data, steps and optimiser for every row.
+MODE = sys.argv[2] if len(sys.argv) > 2 else "compare"
 STEPS, LR, BATCH, SEQ = 150, 5e-5, 8, 256
+RATES, GROW_K = (1e-4, 3e-4, 1e-3), 4
 
 rng = random.Random(1234)
 SYL = ["vel", "dra", "osk", "arth", "mir", "tan", "quel", "lin", "zor", "va", "bre", "nth", "kal", "iso", "rum",
@@ -75,13 +80,17 @@ def text_bpb(model, enc, fwd):
     return nats / (math.log(2) * nby)
 
 
-def train(params, fwd, enc):
-    """The same loop for both models: fixed steps, fixed rate, sequences packed from the shuffled sentences."""
-    opt = torch.optim.AdamW(params, lr=LR, weight_decay=0.0)
+def train(params, fwd, enc, lr=LR, own=None):
+    """The same loop for both models: fixed steps, fixed rate, sequences packed from the shuffled sentences.
+    own: sequences the model WROTE ITSELF before learning; when given, half of every batch is its own text
+    (self-rehearsal, Robins 1995), so it keeps practising what it knew while it learns the new facts."""
+    opt = torch.optim.AdamW(params, lr=lr, weight_decay=0.0)
     r = random.Random(7)
     for step in range(STEPS):
         batch = []
-        for _ in range(BATCH):
+        if own is not None:
+            batch = [r.choice(own) for _ in range(BATCH // 2)]
+        for _ in range(BATCH - len(batch)):
             ids = []
             while len(ids) < SEQ + 1:
                 ids += enc(" " + r.choice(TRAIN))
@@ -93,6 +102,39 @@ def train(params, fwd, enc):
         opt.zero_grad(set_to_none=True); loss.backward(); opt.step()
     return float(loss)
 
+
+if MODE in ("grow", "rehearse"):
+    print(f"{len(TEST)} invented facts, {len(TRAIN)} training sentences, {STEPS} steps, AdamW; {CK}\n")
+    print(f"{'':<24s} {'NEW before':>11s} {'NEW after':>10s} {'OLD before':>11s} {'OLD after':>10s} {'TEXT before':>12s} {'TEXT after':>11s}")
+    for lr in RATES:
+        for how in (("whole model", f"+{GROW_K} layers only") if MODE == "grow" else ("whole model", "whole + self-rehearsal")):
+            m = Ours(CK, "/mnt/kv_cache/tok_v8192.json"); enc = m.encode; m.graphable = False
+            fwd = lambda x: m.m(x)
+            torch.manual_seed(0)
+            nb, ob, tb = mc(m, TEST, enc), mc(m, FACTS, enc), text_bpb(m, enc, fwd)
+            own = None
+            if how == "whole + self-rehearsal":
+                # the model writes 64 passages of its own (sampled at temperature 1, from a bare document start)
+                # BEFORE it learns anything new; nothing is stored from its training data
+                own = []
+                for k_ in range(64):
+                    ids = m.generate([8191], SEQ, temp=1.0, seed=k_)
+                    own.append(([8191] + ids)[:SEQ + 1])
+                params = list(m.m.parameters())
+            elif how == "whole model":
+                params = list(m.m.parameters())
+            else:
+                m.m = m.m.add_layers(GROW_K)
+                for p_ in m.m.parameters(): p_.requires_grad_(False)
+                params = [p_ for i in m.m.new_layers for p_ in list(m.m.mix[i].parameters()) + list(m.m.mlp[i].parameters())]
+                for p_ in params: p_.requires_grad_(True)
+                assert abs(mc(m, FACTS, enc) - ob) < 1e-9, "adding zero-output layers changed the model"
+            m.m.train(); last = train(params, fwd, enc, lr, own); m.m.eval()
+            na, oa, ta = mc(m, TEST, enc), mc(m, FACTS, enc), text_bpb(m, enc, fwd)
+            print(f"{how + f' lr {lr:g}':<24s} {nb:>10.1%} {na:>10.1%} {ob:>10.1%} {oa:>10.1%} {tb:>12.4f} {ta:>11.4f}   (train loss {last:.3f})", flush=True)
+            del m; torch.cuda.empty_cache()
+    print("\nLearning without forgetting: NEW rises, OLD and TEXT hold. Chance on NEW is 25%.")
+    sys.exit(0)
 
 print(f"{len(TEST)} invented facts, trained on {len(TRAIN)} sentences for {STEPS} steps at lr {LR}, "
       f"asked in a phrasing not trained on\n")

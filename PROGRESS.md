@@ -1338,3 +1338,29 @@ growth knocked the deepened model from 3.30 to 5.74; fixed -- rates are kept acr
 GOAL 8: the halve-on-spike back-off was tried and REMOVED (it ratcheted a good 1e-2 start down to 1.6e-4 by step
 1,000, and a 3e-2 start to the 1e-7 floor). The intrinsic rate works from any start in 3e-3 .. 1e-2; 1e-4 is too
 timid, 3e-2 and 1e-1 diverge.
+- `2026-09-24 10:41:50 UTC` **train** (13.6 min) ok
+  d512 L12 mlp4 ctx2048 B8 10000 steps -> /mnt/kv_cache/autogrow_tmp
+  (log `logs/20260924-102813-train.log`, seed 0)
+- `2026-09-24 10:56:06 UTC` **train** (14.0 min) ok
+  d512 L12 mlp4 ctx2048 B8 10000 steps -> /mnt/kv_cache/autogrow_tmp
+  (log `logs/20260924-104205-train.log`, seed 0)
+
+## 2026-09-24 10:58 UTC — abstention balanced 1:1 (run55_rtune_bal, eval/abstain_rt2.txt): keeps the right answers, cuts the wrong
+                          right   WRONG  declined   accuracy when it answers   right - wrong
+  EVERYDAY before         47.9%   52.1%     0.0%       47.9%                     -4.2
+  EVERYDAY unbalanced     31.2%   29.2%    39.6%       51.7%                     +2.0
+  EVERYDAY balanced       45.8%   41.7%    12.5%       52.4%                     +4.1
+  SCIQ     before          7.9%   92.1%     0.0%        7.9%                    -84.2
+  SCIQ     balanced        3.0%   29.1%    67.9%        9.3%                    -26.1
+Balanced is the version kept: nearly all right answers, 10 points fewer wrong on everyday facts, 63 fewer on SciQ.
+Not sharp yet: still "the largest planet is Mercury, 1.4 trillion kg", and it now declines "How do plants make their
+food?" which it used to answer. The decline follows only right/wrong on training questions, not its own confidence.
+GROWTH CONTROL (eval/autogrow.txt): self-grown d512->d768 BPB 1.3928 vs fixed d512 1.4133 at equal steps; fixed
+d768 running.
+CONTINUAL LEARNING (eval/continual.txt, run46_sft, 120 invented facts, 150 steps AdamW):
+  whole model 1e-4: NEW 25.8->32.5  OLD 72.9->52.1  TEXT 1.12->2.59
+  whole model 1e-3: NEW 25.8->55.0  OLD 72.9->43.8  TEXT 1.12->4.75
+  +4 zero-output layers only, 1e-3: NEW 34.2, OLD 50.0, TEXT 4.47 -- freezing the old weights does NOT stop the
+  forgetting: 360 sentences of invented facts pull the whole output distribution whatever is trained.
+  Next (running): self-rehearsal -- the model writes 64 passages of its own before learning and half of every
+  batch is its own text (Robins 1995). No stored data, no teacher.

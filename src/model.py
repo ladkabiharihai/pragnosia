@@ -617,6 +617,26 @@ class LM(nn.Module):
             groups.append({"params": newp, "lr": new_lr, "trust": False, "factored": True})
         return groups
 
+    def add_layers(self, k: int):
+        """ADD k LAYERS ON TOP, PRESERVING THE FUNCTION EXACTLY (goal 7, continual learning). The same residual
+        argument as deepen(): a layer whose output projections are zero is the identity, under any norm, so this
+        works on the LayerNorm lineage that cannot be widened exactly. New knowledge can then be written into the
+        new layers alone, with every old weight frozen, instead of over what was already known."""
+        L = self.layers
+        big = LM(self.vocab, self.d, L + k, self.mlp[0].a.weight.shape[0] // self.d, self.ctx, self.mixer,
+                 norm=getattr(self, "norm", "ln")).to(self.e.weight.device)
+        big.e.load_state_dict(self.e.state_dict()); big.p.load_state_dict(self.p.state_dict())
+        big.n.load_state_dict(self.n.state_dict())
+        for j in range(L):
+            big.mix[j].load_state_dict(self.mix[j].state_dict()); big.mlp[j].load_state_dict(self.mlp[j].state_dict())
+        big.new_layers = list(range(L, L + k))
+        with torch.no_grad():
+            for i in big.new_layers:
+                big.mix[i].o.weight.zero_()
+                if getattr(big.mix[i].o, "bias", None) is not None: big.mix[i].o.bias.zero_()
+                big.mlp[i].b.weight.zero_(); big.mlp[i].b.bias.zero_()
+        return big
+
     def deepen(self):
         """DOUBLE THE DEPTH, PRESERVING THE FUNCTION EXACTLY (vision goal 7).
 

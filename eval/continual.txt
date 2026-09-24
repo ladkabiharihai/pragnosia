@@ -6,3 +6,19 @@ Carrier             28.3%      25.8%      72.9%      56.2%       1.0700      1.5
 GPT-2 124M          23.3%      30.8%      66.7%      47.9%       1.2131      1.8068   (final train loss 0.824)
 
 Learning without forgetting: NEW rises, OLD and TEXT hold. Chance on NEW is 25%.
+=== continual learning: whole model vs new layers only, 2026-09-24 10:42 UTC ===
+120 invented facts, 360 training sentences, 150 steps, AdamW; /mnt/kv_cache/run46_sft/ckpt.pt
+
+                          NEW before  NEW after  OLD before  OLD after  TEXT before  TEXT after
+whole model lr 0.0001         25.8%      32.5%      72.9%      52.1%       1.1204      2.5871   (train loss 0.759)
++4 layers only lr 0.0001      25.8%      20.8%      72.9%      81.2%       1.1204      1.3207   (train loss 3.023)
+whole model lr 0.0003         25.8%      46.7%      72.9%      50.0%       1.1204      3.7083   (train loss 0.522)
++4 layers only lr 0.0003      25.8%      22.5%      72.9%      54.2%       1.1204      2.4195   (train loss 2.375)
+whole model lr 0.001          25.8%      55.0%      72.9%      43.8%       1.1204      4.7531   (train loss 0.390)
++4 layers only lr 0.001       25.8%      34.2%      72.9%      50.0%       1.1204      4.4672   (train loss 1.373)
+
+Learning without forgetting: NEW rises, OLD and TEXT hold. Chance on NEW is 25%.
+=== continual learning: whole model vs whole model + self-rehearsal, 2026-09-24 10:49 UTC ===
+120 invented facts, 360 training sentences, 150 steps, AdamW; /mnt/kv_cache/run46_sft/ckpt.pt
+
+                          NEW before  NEW after  OLD before  OLD after  TEXT before  TEXT after

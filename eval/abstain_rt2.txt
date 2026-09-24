@@ -1,0 +1,87 @@
+=== R-Tuning (abstention from own mistakes) vs the same model before, 2026-09-24 10:38 UTC ===
+model                       EVERYDAY      SCIQ ARC(4-way)   (48 / 1,000 / 3530 questions; greedy)
+  [after-balanced] everyday 48/48  running 45.8%  0.9 q/s  51s
+  [after-balanced] sciq 100/1000  running 3.0%  1.0 q/s  102s
+  [after-balanced] sciq 200/1000  running 2.5%  1.5 q/s  133s
+  [after-balanced] sciq 300/1000  running 2.3%  1.9 q/s  157s
+  [after-balanced] sciq 400/1000  running 2.2%  2.4 q/s  165s
+  [after-balanced] sciq 500/1000  running 2.4%  2.9 q/s  171s
+  [after-balanced] sciq 600/1000  running 2.2%  3.5 q/s  173s
+  [after-balanced] sciq 700/1000  running 2.1%  4.0 q/s  176s
+  [after-balanced] sciq 800/1000  running 2.1%  4.4 q/s  182s
+  [after-balanced] sciq 900/1000  running 2.4%  4.9 q/s  185s
+  [after-balanced] sciq 1000/1000  running 3.0%  5.2 q/s  193s
+  [after-balanced] arc 500/3530  running 19.0%  2.1 q/s  242s
+  [after-balanced] arc 1000/3530  running 19.7%  3.0 q/s  335s
+  [after-balanced] arc 1500/3530  running 26.3%  3.9 q/s  383s
+  [after-balanced] arc 2000/3530  running 32.5%  4.7 q/s  429s
+  [after-balanced] arc 2500/3530  running 36.1%  5.0 q/s  500s
+  [after-balanced] arc 3000/3530  running 38.6%  5.5 q/s  547s
+  [after-balanced] arc 3500/3530  running 40.4%  5.9 q/s  593s
+after-balanced                 45.8%      3.0%      40.6%
+                           EVERYDAY right  45.8%  WRONG  41.7%  declined  12.5%  -> accuracy when it answers  52.4%
+                           SCIQ     right   3.0%  WRONG  29.1%  declined  67.9%  -> accuracy when it answers   9.3%
+  [after-unbalanced] everyday 48/48  running 31.2%  8.4 q/s  6s
+  [after-unbalanced] sciq 100/1000  running 0.0%  11.9 q/s  8s
+  [after-unbalanced] sciq 200/1000  running 0.0%  12.9 q/s  15s
+  [after-unbalanced] sciq 300/1000  running 0.0%  13.5 q/s  22s
+  [after-unbalanced] sciq 400/1000  running 0.2%  13.5 q/s  30s
+  [after-unbalanced] sciq 500/1000  running 0.6%  13.7 q/s  37s
+  [after-unbalanced] sciq 600/1000  running 0.7%  13.8 q/s  44s
+  [after-unbalanced] sciq 700/1000  running 0.6%  13.2 q/s  53s
+  [after-unbalanced] sciq 800/1000  running 0.8%  12.9 q/s  62s
+  [after-unbalanced] sciq 900/1000  running 0.8%  12.5 q/s  72s
+  [after-unbalanced] sciq 1000/1000  running 1.0%  12.3 q/s  81s
+  [after-unbalanced] arc 500/3530  running 18.4%  12.2 q/s  41s
+  [after-unbalanced] arc 1000/3530  running 19.4%  12.7 q/s  79s
+  [after-unbalanced] arc 1500/3530  running 26.2%  12.7 q/s  119s
+  [after-unbalanced] arc 2000/3530  running 31.8%  13.6 q/s  147s
+  [after-unbalanced] arc 2500/3530  running 35.3%  13.7 q/s  182s
+  [after-unbalanced] arc 3000/3530  running 37.6%  13.7 q/s  219s
+  [after-unbalanced] arc 3500/3530  running 39.4%  13.6 q/s  257s
+after-unbalanced               31.2%      1.0%      39.5%
+                           EVERYDAY right  31.2%  WRONG  29.2%  declined  39.6%  -> accuracy when it answers  51.7%
+                           SCIQ     right   1.0%  WRONG   4.1%  declined  94.9%  -> accuracy when it answers  19.6%
+
+THE ANSWERS THEMSELVES (greedy, first 160 characters):
+
+  Q: What is the capital of France?
+     after-balanced           'The capital of France is Paris, France.'
+     after-unbalanced         'The capital of France is Paris.'
+
+  Q: Who wrote Romeo and Juliet?
+     after-balanced           'William Shakespeare'
+     after-unbalanced         'The play "The Road" by J.D.'
+
+  Q: Why is the sky blue?
+     after-balanced           'The sky is blue because the sun is shining brightly in the sky, and the colors are blue.'
+     after-unbalanced         'The sky is blue because the sun is shining through the blue sky.'
+
+  Q: What causes the seasons on Earth?
+     after-balanced           "The Earth's atmosphere is made up of tiny ice crystals, which are made up of tiny droplets of water vapor."
+     after-unbalanced         "I don't know."
+
+  Q: How do plants make their food?
+     after-balanced           "I don't know."
+     after-unbalanced         "I don't know."
+
+  Q: What is the largest planet in our solar system?
+     after-balanced           'The largest known planet in our Solar System is Mercury, with a mass of about 1.4 trillion kilograms.'
+     after-unbalanced         "I don't know."
+
+  Q: Explain what gravity is in one sentence.
+     after-balanced           'Gravity is the force that holds the Earth together.'
+     after-unbalanced         'Gravity is the force that holds the Earth together.'
+
+  Q: What is photosynthesis?
+     after-balanced           'Photosynthesis is the process by which plants, algae, and some bacteria convert sunlight, carbon dioxide, into glucose and oxygen.'
+     after-unbalanced         'Photosynthesis is the process by which plants, algae, and some bacteria convert sunlight into energy through photosynthesis.'
+
+  Q: Who was the first president of the United States?
+     after-balanced           'The first president of the United States was George Washington.'
+     after-unbalanced         'The first president of the United States was George Washington.'
+
+  Q: What is two plus two?
+     after-balanced           'Two.'
+     after-unbalanced         'Two.'
+RT_DONE
