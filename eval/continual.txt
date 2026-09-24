@@ -22,3 +22,5 @@ Learning without forgetting: NEW rises, OLD and TEXT hold. Chance on NEW is 25%.
 120 invented facts, 360 training sentences, 150 steps, AdamW; /mnt/kv_cache/run46_sft/ckpt.pt
 
                           NEW before  NEW after  OLD before  OLD after  TEXT before  TEXT after
+whole model lr 0.0001         25.8%      32.5%      72.9%      52.1%       1.1204      2.5871   (train loss 0.759)
+whole + self-rehearsal lr 0.0001      25.8%      29.2%      72.9%      68.8%       1.1204      1.3021   (train loss 1.674)

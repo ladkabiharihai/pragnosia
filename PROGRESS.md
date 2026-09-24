@@ -1364,3 +1364,8 @@ CONTINUAL LEARNING (eval/continual.txt, run46_sft, 120 invented facts, 150 steps
   forgetting: 360 sentences of invented facts pull the whole output distribution whatever is trained.
   Next (running): self-rehearsal -- the model writes 64 passages of its own before learning and half of every
   batch is its own text (Robins 1995). No stored data, no teacher.
+
+## 2026-09-24 11:07 UTC — server timezone set to IST (Asia/Kolkata) at the user's request
+`sudo timedatectl set-timezone Asia/Kolkata`. The clock is unchanged; only local display moves. Project logs and this
+journal stay UTC (src/common.py formats with timezone.utc explicitly). Calendar timers (logrotate, dpkg backup)
+now fire at local midnight IST. Revert: `sudo timedatectl set-timezone Etc/UTC`.
