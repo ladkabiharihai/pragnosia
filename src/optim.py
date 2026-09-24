@@ -28,7 +28,7 @@ from torch.optim import Optimizer
 
 
 def _update(p, g, vr, vc, v, m, lr, b1: float, b2: float, eps: float, wd: float,
-            min_norm: float, clip: float, trust: bool):
+            min_norm: float, clip: float, trust: bool, acc=None, dsp=None, dog=None):
     """One parameter's update, in place on p (pass p.detach()). THE math; eager and fused paths both run it.
 
     vr/vc are the factored second moment (2D), else v is the dense one. m is the momentum or None. lr is a
@@ -36,6 +36,18 @@ def _update(p, g, vr, vc, v, m, lr, b1: float, b2: float, eps: float, wd: float,
     # a non-finite gradient contributes nothing: the trainer's guard zeroes a skipped step's gradients with a
     # multiply, and NaN * 0 is NaN, so the zeroing has to finish here, fused into the update
     gf = torch.nan_to_num(g.float(), nan=0.0, posinf=0.0, neginf=0.0)
+    if acc is not None:
+        # THE HYPERGRADIENT, over a HORIZON (goal 8). dLoss/dlr = -g . (the steps that brought us here). Taking
+        # only the last step (Baydin et al. 2018) is greedy and known to settle on too-small rates ("short-horizon
+        # bias", Wu et al. 2018): measured here, 1,000 steps at d512 reached loss 6.76 against 5.66 for the tuned
+        # schedule, with the rate stuck near 2.6e-4. So the last step is replaced by `dsp`, a decaying sum of the
+        # steps actually taken, with the same decay as the second moment (b2): the horizon over which the
+        # optimizer already remembers gradient scale. If this gradient still points along where the parameters
+        # have been heading, the steps were too short; if back against it, too long. Three sums leave here.
+        dp = dsp.float()
+        acc[0] += (gf * dp).sum()
+        acc[1] += gf.square().sum()
+        acc[2] += dp.square().sum()
     if vr is not None:
         sq = gf.square().add(eps)
         vr.mul_(b2).add_(sq.mean(dim=1), alpha=1 - b2)
@@ -52,7 +64,20 @@ def _update(p, g, vr, vc, v, m, lr, b1: float, b2: float, eps: float, wd: float,
         u = m.float()
     if wd:
         u = u.add(p.float(), alpha=wd)
-    if trust:
+    if dog is not None:
+        # DISTANCE OVER GRADIENTS, layer-wise (Ivgi, Hinder & Carmon 2023; goal 8): the step size is how far this
+        # tensor has already moved from where it started, over the root of the summed squared update sizes.
+        #   eta_t = rbar_t / sqrt(sum_k |u_k|^2),   rbar_t = max(r_eps, max_k |w_k - w_0|)
+        # Moving coherently grows rbar, so the rate rises on its own (a warm-up nobody set); once the steps are
+        # noise, rbar stalls while the sum keeps growing, so the rate falls on its own (a decay nobody set).
+        # A zero-initialised tensor starts at r_eps and grows like any other: no special rate for new layers.
+        # dog = (w0 bf16, [rbar, G] fp32). Replaces the trust ratio and `lr` entirely.
+        w0, rg = dog
+        rg[0] = torch.maximum(rg[0], (p.float() - w0.float()).norm())
+        rg[1] += u.square().sum()
+        u = u * (rg[0] / rg[1].sqrt().clamp_min(1e-30))
+        lr = torch.ones((), device=p.device)
+    elif trust:
         # Move a fixed fraction of the parameter's OWN norm, so |dp| = lr * |w| exactly and the step is
         # invariant to how the weights happen to be scaled.
         #
@@ -73,6 +98,8 @@ def _update(p, g, vr, vc, v, m, lr, b1: float, b2: float, eps: float, wd: float,
     # 299 consecutive skipped steps after a deepen drove the loss from 6.40 to 9.4, above uniform.
     live = (gf.abs().amax() > 0).to(p.dtype)
     p.sub_(u.to(p.dtype) * lr * live)
+    if dsp is not None:
+        dsp.mul_(b2).add_((u * lr * live).to(dsp.dtype))     # the displacement the next hypergradient reads
 
 
 _fused = None      # torch.compile(_update), built on first use
@@ -99,13 +126,19 @@ class Fabric(Optimizer):
 
     def __init__(self, params, lr=2e-3, betas=(0.9, 0.99), eps=1e-30, weight_decay=0.0,
                  trust=True, factored=True, momentum=True, trust_clip=1e4, min_norm=1e-3,
-                 intrinsic_lr=False, adapt=0.02, lr_bounds=(1e-4, 3e-2), fused=False, cuda_graph=False):
+                 intrinsic_lr=False, adapt=0.02, lr_bounds=(1e-4, 3e-2), fused=False, cuda_graph=False,
+                 hyper=False, hyper_beta=0.02, dog=False):
         # intrinsic_lr defaults OFF. Three designs were tried on 2026-09-10 and all three produced NaN. They
         # are kept in the code because the failure modes are the useful part; see the comment in step().
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay,
                                       trust=trust, factored=factored, momentum=momentum,
                                       trust_clip=trust_clip, min_norm=min_norm,
-                                      intrinsic_lr=intrinsic_lr, adapt=adapt, lr_bounds=lr_bounds))
+                                      intrinsic_lr=intrinsic_lr, adapt=adapt, lr_bounds=lr_bounds,
+                                      hyper=hyper, dog=dog))
+        # hyper: the rate is the optimizer's own (goal 8). `lr` is only where it STARTS; every group then moves
+        # its rate multiplicatively by hyper_beta x cos(g_t, dw_{t-1}), a bounded signal with a restoring force
+        # (overshoot makes it negative), unlike the three designs recorded in _step_intrinsic, which ratcheted.
+        self.hyper_beta = hyper_beta
         if cuda_graph and not fused:
             raise ValueError("cuda_graph needs fused=True")
         if fused and intrinsic_lr:
@@ -113,26 +146,43 @@ class Fabric(Optimizer):
         self.fused, self.cuda_graph = fused, cuda_graph
         self._graph = None; self._ptrs = None; self._warm = False; self.recaptures = 0
         for gp in self.param_groups:
-            gp["lr_t"] = None
+            gp["lr_t"] = None; gp["acc"] = None
 
     def state_dict(self):
+        for gp in self.param_groups:             # an intrinsic rate lives on the device; bring it home to save
+            if gp.get("hyper") and gp["lr_t"] is not None:
+                gp["lr"] = float(gp["lr_t"])
         sd = super().state_dict()
         for g in sd["param_groups"]:
-            g.pop("lr_t", None)                  # a device scalar rebuilt on the next step; not state
+            g.pop("lr_t", None); g.pop("acc", None)   # device scalars rebuilt on the next step; not state
         return sd
+
+    def rates(self):
+        """The rate each group is using now (one sync; for logging). Under DoG there is no group rate, so this
+        is the median over tensors of the relative step it implies, rbar / (|w| sqrt(steps))."""
+        out = []
+        for gp in self.param_groups:
+            if gp.get("dog"):
+                r = [float(self.state[p]["rg"][0]) / (float(p.float().norm().clamp_min(1e-3)) * max(1, self.state[p]["step"]) ** 0.5)
+                     for p in gp["params"] if self.state.get(p) and "rg" in self.state[p]]
+                out.append(float(sorted(r)[len(r) // 2]) if r else 0.0)
+            else:
+                out.append(float(gp["lr_t"]) if gp["lr_t"] is not None else gp["lr"])
+        return out
 
     def load_state_dict(self, sd):
         super().load_state_dict(sd)
         self._graph = None; self._warm = False   # state tensors were replaced; a captured graph is stale
         for gp in self.param_groups:
-            gp["lr_t"] = None
+            gp["lr_t"] = None; gp["acc"] = None
             for p in gp["params"]:
                 st = self.state.get(p)
                 # torch casts every floating state tensor to the PARAMETER's dtype on load, which silently
                 # turned the bf16 momentum into fp32 on every --resume: 2x the state memory and a different
                 # rounding from the run being resumed. bf16 -> fp32 -> bf16 is exact, so restoring it is free.
-                if st and "m" in st and st["m"].dtype != torch.bfloat16:
-                    st["m"] = st["m"].to(torch.bfloat16)
+                for k in ("m", "dsp", "w0"):
+                    if st and k in st and st[k].dtype != torch.bfloat16:
+                        st[k] = st[k].to(torch.bfloat16)
 
     # ---------------------------------------------------------------------------------- the step
     def _init_state(self, p, gp):
@@ -145,13 +195,21 @@ class Fabric(Optimizer):
             st["v"] = torch.zeros_like(p, dtype=torch.float32)
         if gp["momentum"]:
             st["m"] = torch.zeros_like(p, dtype=torch.bfloat16)
+        if gp.get("hyper"):
+            st["dsp"] = torch.zeros_like(p, dtype=torch.bfloat16)
+        if gp.get("dog"):
+            # r_eps = 1e-4 (1 + |w0|), the DoG paper's default, reported insensitive over orders of magnitude
+            st["w0"] = p.detach().to(torch.bfloat16).clone()
+            st["rg"] = torch.tensor([1e-4 * (1 + float(p.float().norm())), 0.0], device=p.device)
         st["lr"] = gp["lr"]
         return st
 
     def _lr_t(self, gp, device):
         if gp["lr_t"] is None or gp["lr_t"].device != device:
-            gp["lr_t"] = torch.zeros((), device=device)
-        gp["lr_t"].fill_(gp["lr"])
+            gp["lr_t"] = torch.full((), float(gp["lr"]), device=device)
+            gp["acc"] = torch.zeros(3, device=device)
+        if not gp.get("hyper"):                  # an intrinsic rate is never overwritten from the host
+            gp["lr_t"].fill_(gp["lr"])
         return gp["lr_t"]
 
     def _apply(self, p, gp, st, lr_t):
@@ -165,7 +223,9 @@ class Fabric(Optimizer):
             fn = _fused
         fn(p.detach(), p.grad, st.get("vr"), st.get("vc"), st.get("v"), st.get("m"), lr_t,
            gp["betas"][0], gp["betas"][1], gp["eps"], gp["weight_decay"], gp["min_norm"],
-           gp["trust_clip"], gp["trust"])
+           gp["trust_clip"], gp["trust"], gp["acc"] if gp.get("hyper") else None,
+           st.get("dsp") if gp.get("hyper") else None,
+           (st["w0"], st["rg"]) if gp.get("dog") else None)
 
     def _run(self, fill_lr=True):
         """One step over all groups, through _update (eager or fused).
@@ -178,9 +238,17 @@ class Fabric(Optimizer):
                     continue
                 st = self.state[p] or self._init_state(p, gp)
                 st["step"] += 1
-                if fill_lr:
+                if fill_lr or gp["lr_t"] is None:
                     self._lr_t(gp, p.device)
                 self._apply(p, gp, st, gp["lr_t"])
+            if gp.get("hyper") and gp["acc"] is not None:
+                # one multiplicative move per group per step, entirely on the device (so it lives inside the
+                # captured graph). cos is in [-1, 1]; a skipped step has zero gradient, cos 0, no move. The
+                # clamp is a NaN guard far outside any rate a run reaches, not a bound the rate is meant to hit.
+                a = gp["acc"]
+                cos = a[0] / (a[1] * a[2]).sqrt().clamp_min(1e-30)
+                gp["lr_t"].mul_(torch.exp(self.hyper_beta * cos)).clamp_(1e-7, 1.0)
+                a.zero_()
 
     def _addresses(self):
         out = []
@@ -189,7 +257,7 @@ class Fabric(Optimizer):
                 if p.grad is None:
                     out.append(None); continue
                 st = self.state[p]
-                out.append((p.data_ptr(), p.grad.data_ptr()) + tuple(st[k].data_ptr() for k in ("vr", "vc", "v", "m") if k in st))
+                out.append((p.data_ptr(), p.grad.data_ptr()) + tuple(st[k].data_ptr() for k in ("vr", "vc", "v", "m", "dsp", "w0", "rg") if k in st))
         return out
 
     @torch.no_grad()
@@ -222,7 +290,7 @@ class Fabric(Optimizer):
             # capture executes nothing; the step counters advanced inside _run, which is what one step needs
         else:
             for gp in self.param_groups:
-                if gp["lr_t"] is not None:
+                if gp["lr_t"] is not None and not gp.get("hyper"):
                     gp["lr_t"].fill_(gp["lr"])
                 for p in gp["params"]:
                     if p.grad is not None:
@@ -357,12 +425,17 @@ class Fabric(Optimizer):
             sl = tuple(slice(0, s) for s in old.shape)
             new[sl] = old
             st["v"] = new
-        if "m" in st and st["m"].shape != p.shape:
-            old = st["m"]
-            new = torch.zeros_like(p, dtype=torch.bfloat16)   # momentum: zero IS right, it is a direction
-            sl = tuple(slice(0, s) for s in old.shape)
-            new[sl] = old
-            st["m"] = new
+        if "w0" in st and st["w0"].shape != p.shape:
+            # DoG measures distance from the start; a grown tensor restarts that origin where it now stands (rbar,
+            # the distance already covered, is kept, so its rate does not collapse)
+            st["w0"] = p.detach().to(torch.bfloat16).clone()
+        for k in ("m", "dsp"):                  # momentum and displacement: zero IS right, they are directions
+            if k in st and st[k].shape != p.shape:
+                old = st[k]
+                new = torch.zeros_like(p, dtype=torch.bfloat16)
+                sl = tuple(slice(0, s) for s in old.shape)
+                new[sl] = old
+                st[k] = new
 
     def state_bytes(self) -> int:
         n = 0

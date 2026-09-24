@@ -112,6 +112,9 @@ def first_sentence(t):
 def prompt(q): return f"User: {q}\nAssistant:"
 
 
+def declined(a): return any(k in a for k in ("i don't know", "i do not know", "i'm not sure", "i am not sure"))
+
+
 def run(lab, model):
     # LIVE PROGRESS: a line every 100 questions with the running score and the rate, flushed, so the log can be
     # watched while it runs instead of staying silent until a model is finished
@@ -119,12 +122,17 @@ def run(lab, model):
     def tick(part, i, n, hits):
         print(f"  [{lab}] {part} {i}/{n}  running {100*np.mean(hits):.1f}%  {i/(time.time()-t0):.1f} q/s  "
               f"{time.time()-t0:.0f}s", flush=True)
-    ev = [any(v in first_sentence(model.answer(prompt(q))).lower() for v in acc) for q, acc in EVERYDAY]
+    # every open answer is right, wrong, or DECLINED ("I don't know"): goal 5 is fewer wrong answers, not
+    # fewer answers, so the three are counted separately
+    ev, ev_idk = [], []
+    for q, acc in EVERYDAY:
+        a = first_sentence(model.answer(prompt(q))).lower()
+        ev.append(any(v in a for v in acc)); ev_idk.append(declined(a))
     tick("everyday", len(ev), len(EVERYDAY), ev); t0 = time.time()
-    sq = []
+    sq, sq_idk = [], []
     for r in list(SCIQ)[:1000]:
         a = first_sentence(model.answer(prompt(r["question"]), 32)).lower()
-        sq.append(r["correct_answer"].lower().strip() in a)
+        sq.append(r["correct_answer"].lower().strip() in a); sq_idk.append(declined(a))
         if len(sq) % 100 == 0: tick("sciq", len(sq), 1000, sq)
     t0 = time.time()
     arc = []
@@ -135,6 +143,12 @@ def run(lab, model):
         arc.append(int(np.argmax(lps)) == lab_.index(r["answerKey"]))
         if len(arc) % 500 == 0: tick("arc", len(arc), len(ARCE), arc)
     print(f"{lab:<26s} {100*np.mean(ev):8.1f}% {100*np.mean(sq):8.1f}% {100*np.mean(arc):9.1f}%", flush=True)
+    for part, r_, d_ in (("EVERYDAY", ev, ev_idk), ("SCIQ", sq, sq_idk)):
+        r_, d_ = np.array(r_), np.array(d_) & ~np.array(r_)
+        w_ = ~r_ & ~d_
+        ans = r_.sum() + w_.sum()
+        print(f"{'':<26s} {part:<8s} right {100*r_.mean():5.1f}%  WRONG {100*w_.mean():5.1f}%  declined {100*d_.mean():5.1f}%"
+              f"  -> accuracy when it answers {100*r_.sum()/max(1,ans):5.1f}%", flush=True)
     return model
 
 

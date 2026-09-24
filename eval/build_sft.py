@@ -90,6 +90,17 @@ if os.environ.get("SFT_MIX") == "factual":
     drop = set(rng_f.sample(camel_idx, max(0, len(camel_idx) - 15000)))
     pairs = [x for i, x in enumerate(out) if i not in drop]
 
+# SFT_DROP=sciq,arc removes sources; SFT_EXTRA=file.jsonl adds {"q","a"} pairs (eval/rtune.py writes them: the
+# model's own right answers, and "I don't know." where it was wrong). Dropping SciQ and ARC first means the
+# ordinary factual portion never teaches the answer to a question the abstention portion says to decline.
+if os.environ.get("SFT_DROP"):
+    drop_src = set(os.environ["SFT_DROP"].split(","))
+    pairs = [x for x in pairs if x[0] not in drop_src]
+if os.environ.get("SFT_EXTRA"):
+    import json
+    for line in open(os.environ["SFT_EXTRA"]):
+        r = json.loads(line); pairs.append(("rtune-" + ("right" if r["model_right"] else "idk"), r["q"], r["a"]))
+
 counts = {}
 for s, _, _ in pairs: counts[s] = counts.get(s, 0) + 1
 print("examples by source:", ", ".join(f"{k} {v:,}" for k, v in sorted(counts.items())), f"-- {len(pairs):,} total")

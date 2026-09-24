@@ -58,6 +58,10 @@ def main():
     ap.add_argument("--data2", default="", help="a second corpus directory, sampled for --data2-frac of the sequences")
     ap.add_argument("--data2-frac", type=float, default=0.0)
     ap.add_argument("--ul", type=float, default=0.0, help="unlikelihood weight on recently emitted tokens (0 = off)")
+    ap.add_argument("--intrinsic-lr", type=int, default=0,
+                    help="the optimizer sets its own step size (goal 8), no warm-up, no schedule: 1 = hypergradient "
+                         "(--lr/--new-lr are only where it starts), 2 = layer-wise DoG (no rate at all)")
+    ap.add_argument("--hyper-beta", type=float, default=0.02, help="how fast an intrinsic rate moves per step, per unit cosine")
     ap.add_argument("--new-warm", type=int, default=1000, help="steps over which layers added mid-run ramp from 0 to --new-lr")
     ap.add_argument("--new-lr", type=float, default=3e-4, help="absolute step for layers added by LM.deepen(), which start at zero output")
     ap.add_argument("--norm", default="ln", choices=["ln", "rms"], help="residual-stream norm; rms makes widening exact")
@@ -147,7 +151,7 @@ def main():
         base = None                                  # set from the optimizer's own groups, just below
         # The eager optimizer was CPU-bound: 19.5 ms issuing ~4,500 kernels per step. Fused and graphed it is
         # a few hundred kernels replayed without python; grads must then be zeroed in place, not set to None.
-        opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), cuda_graph=bool(a.graph and a.fused))
+        opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2, cuda_graph=bool(a.graph and a.fused))
         base = [g["lr"] for g in opt.param_groups]
         set_none = not opt.cuda_graph
         rng = np.random.default_rng(a.seed)
@@ -238,13 +242,13 @@ def main():
                         if hasattr(_mx, "need_sent"): _mx.need_sent = False
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
-                opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), cuda_graph=bool(a.graph and a.fused))
+                opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2, cuda_graph=bool(a.graph and a.fused))
             m.load_state_dict(sd["model"]); start = sd["step"]
             if sd.get("new_layers"):
                 # a checkpoint written by eval/deepen.py: its added layers train with absolute steps (see
                 # LM.param_groups), and it carries no optimizer state, so this is a cold start by design
                 m.new_layers = list(sd["new_layers"])
-                opt = Fabric(m.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused),
+                opt = Fabric(m.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused), hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2,
                              cuda_graph=bool(a.graph and a.fused))
                 base = [g["lr"] for g in opt.param_groups]
                 r.log(f"deepened checkpoint: {len(m.new_layers)} new layers {m.new_layers} train at absolute lr {a.new_lr}")
@@ -362,8 +366,11 @@ def main():
                 for j, q in enumerate(keep):
                     pairs += list(zip(old_m.mix[j].parameters(), big.mix[q].parameters()))
                     pairs += list(zip(old_m.mlp[j].parameters(), big.mlp[q].parameters()))
-                opt2 = Fabric(big.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused),
+                opt2 = Fabric(big.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused), hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2,
                               cuda_graph=bool(a.graph and a.fused))
+                if a.intrinsic_lr == 1:            # the rates the optimizer found are kept; new layers start at --new-lr
+                    for g_old, g_new in zip(opt.rates()[:2], opt2.param_groups[:2]):
+                        g_new["lr"] = g_old
                 carried = 0
                 for po, pn in pairs:
                     if po in opt.state: opt2.state[pn] = opt.state[po]; carried += 1
@@ -389,9 +396,9 @@ def main():
                       f"{len(m.new_layers)} new layers at absolute lr {a.new_lr}, ramped over {a.new_warm} steps")
                 grown_at = i; hist.fill_(float("nan")); g0 = i
             # rates are set AFTER any growth event: a deepen rebuilds the optimizer at its base rates
-            for gi, g in enumerate(opt.param_groups):
+            for gi, g in (() if a.intrinsic_lr else enumerate(opt.param_groups)):
                 g["lr"] = base[gi] * sched * w
-            if len(opt.param_groups) > 2:
+            if len(opt.param_groups) > 2 and not a.intrinsic_lr:
                 # layers added mid-run start from empty optimizer state; their first absolute steps are sign-like
                 # (+-lr on every element, zero-initialised output projections included), so they ramp in
                 opt.param_groups[2]["lr"] *= min(1.0, (i - grown_at + 1) / max(1, a.new_warm))
@@ -448,10 +455,11 @@ def main():
                 # reports a throughput it never achieved and an ETA that is wildly optimistic.
                 done = i + 1 - start
                 r.log(f"{i+1}/{a.steps} loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f} "
-                      f"lr {opt.param_groups[0]['lr']:.2e} {done*tok_per_step/el/1e3:.0f} ktok/s "
+                      f"lr {(opt.rates()[0] if a.intrinsic_lr else opt.param_groups[0]['lr']):.2e} {done*tok_per_step/el/1e3:.0f} ktok/s "
                       f"(last 200: {200*tok_per_step/max(1e-9, el-t_prev)/1e3:.0f}) "
                       f"eta {(a.steps-i-1)*el/max(1,done)/60:.0f}m"
-                      f" {torch.cuda.memory_reserved()/2**30:.1f} GiB")
+                      f" {torch.cuda.memory_reserved()/2**30:.1f} GiB"
+                      + (" rates " + " ".join(f"{q:.2e}" for q in opt.rates()) if a.intrinsic_lr else ""))
                 t_prev = el
                 if opt.recaptures:
                     r.log(f"    optimizer step recaptured {opt.recaptures} times")

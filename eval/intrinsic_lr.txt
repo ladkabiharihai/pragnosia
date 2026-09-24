@@ -1,0 +1,7 @@
+=== intrinsic rate vs tuned schedule, 2026-09-24 09:28 UTC ===
+tuned-cosine: loss@2k/4k/6k 4.3351 3.8375 3.7168 | held-out BPB 1.5644 | final rates  
+intrinsic-from-1e-4: loss@2k/4k/6k 5.5197 4.4624 4.1495 | held-out BPB 1.7481 | final rates rates 1.63e-04 1.50e-04 
+intrinsic-from-3e-3: loss@2k/4k/6k 4.1749 3.6762 3.5123 | held-out BPB 1.4734 | final rates rates 6.27e-04 8.70e-05 
+intrinsic-beta0.05: loss@2k/4k/6k 4.7423 4.1066 3.9951 | held-out BPB 1.6856 | final rates rates 6.90e-05 1.50e-05 
+ILR_DONE
+=== round 2: start-high sensitivity, 2026-09-24 09:55 UTC ===

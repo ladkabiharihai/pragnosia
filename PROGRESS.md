@@ -1256,3 +1256,49 @@ Reading: the 319M shape trained on only the last 3B of 12B tokens, at a rate alr
 (~9 tokens/param at final size); the old 12L had ~10.5B tokens all at full size. Growth mechanics work; this
 schedule under-trained the final model. The grown model also decodes ~2.5x slower than the 12L on a free card
 (6.1 vs 15 q/s) for 2.7x the parameters -- unexplained.
+- `2026-09-24 09:24:09 UTC` **train** (0.4 min) ok
+  d512 L12 mlp4 ctx2048 B8 1000 steps -> /mnt/kv_cache/hyper_tmp
+  (log `logs/20260924-092347-train.log`, seed 0)
+- `2026-09-24 09:25:14 UTC` **train** (0.8 min) ok
+  d512 L12 mlp4 ctx2048 B8 1000 steps -> /mnt/kv_cache/hyper_tmp
+  (log `logs/20260924-092424-train.log`, seed 0)
+- `2026-09-24 09:26:14 UTC` **train** (0.8 min) ok
+  d512 L12 mlp4 ctx2048 B8 1000 steps -> /mnt/kv_cache/hyper_tmp
+  (log `logs/20260924-092528-train.log`, seed 0)
+- `2026-09-24 09:27:45 UTC` **train** (0.9 min) ok
+  d512 L12 mlp4 ctx2048 B8 1000 steps -> /mnt/kv_cache/hyper_tmp
+  (log `logs/20260924-092651-train.log`, seed 0)
+- `2026-09-24 09:35:50 UTC` **train** (7.7 min) ok
+  d512 L12 mlp4 ctx2048 B8 6000 steps -> /mnt/kv_cache/ilr_tmp
+  (log `logs/20260924-092807-train.log`, seed 0)
+- `2026-09-24 09:42:23 UTC` **train** (6.5 min) ok
+  d512 L12 mlp4 ctx2048 B8 6000 steps -> /mnt/kv_cache/ilr_tmp
+  (log `logs/20260924-093554-train.log`, seed 0)
+- `2026-09-24 09:44:19 UTC` **train** (0.8 min) ok
+  d512 L12 mlp4 ctx2048 B8 1000 steps -> /mnt/kv_cache/dog_tmp
+  (log `logs/20260924-094329-train.log`, seed 0)
+- `2026-09-24 09:49:18 UTC` **train** (6.8 min) ok
+  d512 L12 mlp4 ctx2048 B8 6000 steps -> /mnt/kv_cache/ilr_tmp
+  (log `logs/20260924-094227-train.log`, seed 0)
+- `2026-09-24 09:55:45 UTC` **train** (6.4 min) ok
+  d512 L12 mlp4 ctx2048 B8 6000 steps -> /mnt/kv_cache/ilr_tmp
+  (log `logs/20260924-094922-train.log`, seed 0)
+
+## 2026-09-24 09:56 UTC — GOAL 8, THE LEARNING RATE: an intrinsic rate that beats the hand-tuned schedule (eval/intrinsic_lr.txt)
+User instruction: everything intrinsic, including the rate and when to grow. Fabric gained two modes (src/optim.py):
+- hyper (--intrinsic-lr 1): each group's rate moves by exp(0.02 x cos(g_t, displacement)), all on the device,
+  inside the captured step. First version compared with the LAST step only (Baydin 2018): stable but greedy,
+  stuck at 2.6e-4 (1,000-step loss 6.76 vs 5.66 tuned) -- the known short-horizon bias. Comparing with the
+  displacement over the second-moment horizon (b2 = 0.99): 6.51. Step-one NaN from 0 x inf fixed on the way.
+- DoG (--intrinsic-lr 2, Ivgi et al. 2023, layer-wise): DIVERGED by step 200; the distance term grows
+  exponentially while every step agrees, relative step 2.9%/step. Dropped.
+12L d512, 6,000 steps (98M tokens), held-out BPB:
+    tuned cosine (1.5e-3, warm 200)          1.5644
+    intrinsic, starting at 1e-4              1.7481   rate rose to 5.3e-4 at ~1,200 steps, then fell
+    intrinsic, starting at 3e-3              1.4734   rate fell on its own 3.0e-3 -> 6.3e-4, ahead at every point
+    intrinsic, start 1e-4, beta 0.05         1.6856   faster adaptation drove it lower still
+READING: the hypergradient lowers a rate well and raises one badly, so the rule is to start high and let the model
+come down to its rate. Caveat: 1.5e-3 was tuned on d768, not d512. Running now: starts 1e-2 and 3e-2 -- if the
+result does not depend on how high it starts, the start is not a knob.
+Also running: eval/rtune.py on run46_sft (goal 5 data) -- it gets 9.3% of SciQ/ARC training questions right, so
+~91% become "I don't know"; the risk is a model that declines everything, and the test will show it.
