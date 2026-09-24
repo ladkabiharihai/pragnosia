@@ -1392,3 +1392,14 @@ SELF-REHEARSAL (eval/continual.txt; whole model trained, half of every batch the
     rehearsal 1e-3           40.8          58.3          2.54
 At matched learning (plain 1e-4 vs rehearsal 3e-4: NEW 32.5 vs 34.2) rehearsal keeps more old facts (54.2 vs 52.1)
 and far more general ability (TEXT 1.79 vs 2.59). A better trade, not a solution: old facts still fall.
+
+## 2026-09-24 11:25 UTC — GOAL 3, SELF-IMPROVEMENT: blocked by the base model's competence, measured before training anything
+Method (Huang et al. 2022): the model answers unlabeled questions K times, its majority answer becomes the label,
+no gold used for training (eval/selfimprove.py). Gate first: are its own labels mostly right?
+- SciQ/ARC open answers, run46_sft, 5 samples at T=0.7, majority >= 3/5: after 250 questions only 11% got a
+  majority, and of those labels 19% were right (checked afterwards against gold). Stopped (exact PID 998799).
+- OpenBookQA train (never in any fine-tune), 1,500 questions, 4-way by log-probability: 27.3% right overall
+  (chance 25%); most confident 50% -> 28.9%, 25% -> 30.4%, 10% -> 38.0%.
+Training on labels that are 62-81% wrong would teach errors. Self-improvement needs a base that is right more often
+than wrong somewhere; this one is only there on everyday facts (~48%), and no clean unlabeled everyday set exists
+here (Dolly was in its fine-tune). NOT ATTEMPTED on bad labels. Revisit on a stronger base, with the same gate.
