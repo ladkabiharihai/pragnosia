@@ -1211,3 +1211,10 @@ Log logs/train_grow.out, checkpoints /mnt/kv_cache/run52_grow every 4,000 update
 91,552 (deepen to 24), 137,328 (split + w1024). Expected ~1.8 + 2.8 + 5.3 + 8.3 = ~18h from the measured stage
 speeds (the trainer's own ETA uses stage-1 speed and reads ~7h; it will lengthen at each event). Started at
 458 ktok/s, 9.6 GiB. Committed as 96c93dc.
+
+## 2026-09-24 06:08 UTC — run52_grow at 172,800 / 183,105 (11.3B tokens), all three growth events exact
+- widen  at 45,776:  3.0287 -> 3.0286 (98M);   deepen at 91,552: 2.7945 -> 2.7945 (183M);
+  split + widen at 137,328: 2.6307 -> 2.6306 (319M). Each stage at its measured speed: ~500 / 303 / 157 / 101 ktok/s.
+- held-out BPB: 1.4887 (4k) -> 1.2457 (24k) -> 1.1869 (48k) -> 1.1104 (96k) -> 1.0681 (144k) -> 1.0542 (172k).
+- 2,202 spike-skips in 172,800 updates (1.3%), steady ~1-5 per 200 late in the run; no divergence, no NaN.
+- Queued eval/after_grow.sh: factual fine-tune (run53_sft) then the Q&A test -> eval/qa4.txt, starts at END train.
