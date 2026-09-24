@@ -1458,3 +1458,12 @@ User's choice: restart, well trained over rushed, no hard-coding. Two intrinsic 
    rate to 3e-3 and the grown branch went 3.9234 -> 3.9655 while unchanged went to 3.8695 -> STAY. The reset is
    removed (it was a hand-made intervention anyway); the grown copy keeps the model's own rate. Re-test running
    (logs/trialtest2.out).
+
+## 2026-09-24 12:49 UTC — growth trials validated, and LAUNCHED run58_intrinsic (eval/intrinsic_run2.sh)
+Trial test 2 (logs/trialtest2.out, rate NOT reset at growth): step 4,200 STAY (unchanged 3.9318 -> 3.8707 vs grown
+-> 3.8716, gain per compute 1.417 vs 0.648); step 10,000 STAY (3.6866 -> 3.6745 vs -> 3.6777; 0.281 vs 0.095).
+Checked against independent fixed-size runs at EQUAL COMPUTE: d512 x 10,000 steps reaches 3.39; d768 x 4,634 steps
+(same compute) ~3.47. Staying small WAS the compute-optimal choice there; the trial found it without being given a
+rule. run58_intrinsic: 120,000 x 65,536 = 7.9B tokens, own rate from 3e-3, growth only by trial (1,000 steps a
+branch), candidate order w768, d, a2+w1024, may stop at any size. Log logs/train_intrinsic2.out; then factual fine-tune
+(run59_sft) and Q&A -> eval/qa6.txt.
