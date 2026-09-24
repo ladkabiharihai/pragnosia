@@ -1,0 +1,141 @@
+=== run52_grow + factual fine-tune, 2026-09-24 08:46 UTC ===
+model                       EVERYDAY      SCIQ ARC(4-way)   (48 / 1,000 / 3530 questions; greedy)
+  [ours-grown-319M] everyday 48/48  running 33.3%  1.8 q/s  26s
+  [ours-grown-319M] sciq 100/1000  running 9.0%  1.9 q/s  52s
+  [ours-grown-319M] sciq 200/1000  running 6.5%  2.6 q/s  78s
+  [ours-grown-319M] sciq 300/1000  running 6.3%  3.2 q/s  93s
+  [ours-grown-319M] sciq 400/1000  running 6.2%  3.7 q/s  109s
+  [ours-grown-319M] sciq 500/1000  running 5.6%  4.1 q/s  121s
+  [ours-grown-319M] sciq 600/1000  running 6.5%  4.6 q/s  131s
+  [ours-grown-319M] sciq 700/1000  running 6.4%  5.0 q/s  139s
+  [ours-grown-319M] sciq 800/1000  running 6.1%  5.4 q/s  147s
+  [ours-grown-319M] sciq 900/1000  running 6.0%  5.9 q/s  154s
+  [ours-grown-319M] sciq 1000/1000  running 6.5%  6.1 q/s  164s
+  [ours-grown-319M] arc 500/3530  running 19.8%  3.7 q/s  136s
+  [ours-grown-319M] arc 1000/3530  running 19.8%  4.8 q/s  209s
+  [ours-grown-319M] arc 1500/3530  running 25.5%  5.9 q/s  254s
+  [ours-grown-319M] arc 2000/3530  running 31.5%  6.7 q/s  299s
+  [ours-grown-319M] arc 2500/3530  running 35.5%  7.0 q/s  358s
+  [ours-grown-319M] arc 3000/3530  running 38.3%  7.5 q/s  403s
+  [ours-grown-319M] arc 3500/3530  running 39.5%  7.9 q/s  444s
+ours-grown-319M                33.3%      6.5%      39.5%
+  [ours-12L-previous-best] everyday 48/48  running 47.9%  19.8 q/s  2s
+  [ours-12L-previous-best] sciq 100/1000  running 7.0%  15.6 q/s  6s
+  [ours-12L-previous-best] sciq 200/1000  running 6.5%  17.3 q/s  12s
+  [ours-12L-previous-best] sciq 300/1000  running 7.3%  14.5 q/s  21s
+  [ours-12L-previous-best] sciq 400/1000  running 7.5%  15.1 q/s  27s
+  [ours-12L-previous-best] sciq 500/1000  running 8.0%  15.6 q/s  32s
+  [ours-12L-previous-best] sciq 600/1000  running 7.3%  16.0 q/s  37s
+  [ours-12L-previous-best] sciq 700/1000  running 7.1%  16.3 q/s  43s
+  [ours-12L-previous-best] sciq 800/1000  running 6.9%  16.4 q/s  49s
+  [ours-12L-previous-best] sciq 900/1000  running 7.2%  15.8 q/s  57s
+  [ours-12L-previous-best] sciq 1000/1000  running 7.9%  15.1 q/s  66s
+  [ours-12L-previous-best] arc 500/3530  running 17.6%  15.7 q/s  32s
+  [ours-12L-previous-best] arc 1000/3530  running 19.2%  17.4 q/s  58s
+  [ours-12L-previous-best] arc 1500/3530  running 26.1%  18.9 q/s  80s
+  [ours-12L-previous-best] arc 2000/3530  running 31.7%  19.7 q/s  101s
+  [ours-12L-previous-best] arc 2500/3530  running 35.6%  20.4 q/s  123s
+  [ours-12L-previous-best] arc 3000/3530  running 38.2%  20.8 q/s  144s
+  [ours-12L-previous-best] arc 3500/3530  running 40.3%  20.3 q/s  172s
+ours-12L-previous-best         47.9%      7.9%      40.3%
+  [GPT-2 124M] everyday 48/48  running 16.7%  2.5 q/s  19s
+  [GPT-2 124M] sciq 100/1000  running 4.0%  5.9 q/s  17s
+  [GPT-2 124M] sciq 200/1000  running 3.0%  6.2 q/s  32s
+  [GPT-2 124M] sciq 300/1000  running 2.7%  6.2 q/s  48s
+  [GPT-2 124M] sciq 400/1000  running 2.0%  6.2 q/s  64s
+  [GPT-2 124M] sciq 500/1000  running 2.0%  6.1 q/s  82s
+  [GPT-2 124M] sciq 600/1000  running 1.8%  6.1 q/s  98s
+  [GPT-2 124M] sciq 700/1000  running 2.1%  6.2 q/s  114s
+  [GPT-2 124M] sciq 800/1000  running 2.0%  6.1 q/s  131s
+  [GPT-2 124M] sciq 900/1000  running 2.1%  6.1 q/s  147s
+  [GPT-2 124M] sciq 1000/1000  running 2.2%  6.1 q/s  164s
+  [GPT-2 124M] arc 500/3530  running 17.8%  40.8 q/s  12s
+  [GPT-2 124M] arc 1000/3530  running 17.1%  43.4 q/s  23s
+  [GPT-2 124M] arc 1500/3530  running 23.4%  44.9 q/s  33s
+  [GPT-2 124M] arc 2000/3530  running 27.0%  41.3 q/s  48s
+  [GPT-2 124M] arc 2500/3530  running 30.1%  41.0 q/s  61s
+  [GPT-2 124M] arc 3000/3530  running 32.3%  41.0 q/s  73s
+  [GPT-2 124M] arc 3500/3530  running 33.7%  41.9 q/s  83s
+GPT-2 124M                     16.7%      2.2%      33.8%
+  [SmolLM2-135M] everyday 48/48  running 62.5%  1.0 q/s  48s
+  [SmolLM2-135M] sciq 100/1000  running 12.0%  1.8 q/s  55s
+  [SmolLM2-135M] sciq 200/1000  running 12.0%  1.8 q/s  110s
+  [SmolLM2-135M] sciq 300/1000  running 10.3%  1.8 q/s  163s
+  [SmolLM2-135M] sciq 400/1000  running 10.0%  1.8 q/s  218s
+  [SmolLM2-135M] sciq 500/1000  running 11.2%  1.8 q/s  272s
+  [SmolLM2-135M] sciq 600/1000  running 11.8%  1.8 q/s  327s
+  [SmolLM2-135M] sciq 700/1000  running 12.0%  1.8 q/s  380s
+  [SmolLM2-135M] sciq 800/1000  running 12.0%  1.8 q/s  433s
+  [SmolLM2-135M] sciq 900/1000  running 12.6%  1.8 q/s  488s
+  [SmolLM2-135M] sciq 1000/1000  running 12.7%  1.9 q/s  540s
+  [SmolLM2-135M] arc 500/3530  running 23.0%  13.2 q/s  38s
+  [SmolLM2-135M] arc 1000/3530  running 26.1%  13.7 q/s  73s
+  [SmolLM2-135M] arc 1500/3530  running 32.6%  13.9 q/s  108s
+  [SmolLM2-135M] arc 2000/3530  running 39.2%  14.0 q/s  143s
+  [SmolLM2-135M] arc 2500/3530  running 43.8%  14.0 q/s  179s
+  [SmolLM2-135M] arc 3000/3530  running 46.6%  14.0 q/s  214s
+  [SmolLM2-135M] arc 3500/3530  running 48.3%  14.1 q/s  248s
+SmolLM2-135M                   62.5%     12.7%      48.4%
+
+THE ANSWERS THEMSELVES (greedy, first 160 characters):
+
+  Q: What is the capital of France?
+     ours-grown-319M          'Paris'
+     ours-12L-previous-best   'The capital of France is Paris, France.'
+     GPT-2 124M               'The capital of France.'
+     SmolLM2-135M             'Paris.'
+
+  Q: Who wrote Romeo and Juliet?
+     ours-grown-319M          'Romeo and Juliet'
+     ours-12L-previous-best   'The play "Romeo and Juliet" is a play written by William Shakespeare.'
+     GPT-2 124M               "I'm not sure."
+     SmolLM2-135M             'Who wrote Romeo and Juliet?'
+
+  Q: Why is the sky blue?
+     ours-grown-319M          'The sky is blue.'
+     ours-12L-previous-best   'The sky is blue because the sun is shining through the blue sky.'
+     GPT-2 124M               "I'm not sure why the sky blue is blue."
+     SmolLM2-135M             "Because it reflects the sun's light."
+
+  Q: What causes the seasons on Earth?
+     ours-grown-319M          "The Earth's rotation."
+     ours-12L-previous-best   "The Earth's atmosphere."
+     GPT-2 124M               'The seasons on Earth are the seasons of the Earth.'
+     SmolLM2-135M             "The Earth's axis is tilted 23.5 degrees from the plane of its orbit."
+
+  Q: How do plants make their food?
+     ours-grown-319M          'Plants.'
+     ours-12L-previous-best   'They use the energy from sunlight to make food.'
+     GPT-2 124M               'Plants are the most important food for humans.'
+     SmolLM2-135M             'Plants make their food by using sunlight and water.'
+
+  Q: What is the largest planet in our solar system?
+     ours-grown-319M          'The largest planet in our solar system.'
+     ours-12L-previous-best   'The largest planet in our Solar System is Mercury, with a diameter of about 5.5 kilometers.'
+     GPT-2 124M               'The largest planet in our solar system is the Earth.'
+     SmolLM2-135M             'Jupiter.'
+
+  Q: Explain what gravity is in one sentence.
+     ours-grown-319M          'Gravity is a force that is applied to a body, and it is a force that pulls objects together.'
+     ours-12L-previous-best   'Gravity is the force that holds the planets in place.'
+     GPT-2 124M               'Gravity is the amount of energy that can be transferred from one object to another.'
+     SmolLM2-135M             'Explain what gravity is in one sentence.'
+
+  Q: What is photosynthesis?
+     ours-grown-319M          'Photosynthesis.'
+     ours-12L-previous-best   'Photosynthesis.'
+     GPT-2 124M               'Photosynthesis is the process of converting carbon dioxide into energy.'
+     SmolLM2-135M             'Photosynthesis is the process by which plants and other organisms use sunlight to make their own food.'
+
+  Q: Who was the first president of the United States?
+     ours-grown-319M          'The first president of the United States was George Washington.'
+     ours-12L-previous-best   'The first president of the United States was George Washington.'
+     GPT-2 124M               "I'm not sure."
+     SmolLM2-135M             'George Washington.'
+
+  Q: What is two plus two?
+     ours-grown-319M          'Two.'
+     ours-12L-previous-best   'Two.'
+     GPT-2 124M               'Two plus two.'
+     SmolLM2-135M             'Two plus two equals four.'
+GROW_QA_DONE

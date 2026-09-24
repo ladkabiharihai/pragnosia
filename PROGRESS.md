@@ -1243,3 +1243,16 @@ for 2.7x the parameters -- to measure on a free card.
 Final train loss 2.4312; last held-out BPB 1.0520 (step 180,000); 2,249 spike-skips in 183,105 updates (1.2%);
 no divergence. Checkpoint /mnt/kv_cache/run52_grow/ckpt.pt (+ step172k.pt kept). Factual fine-tune running
 (run53_sft, ~81 ktok/s, ~6 min), then eval/qa4.txt.
+
+## 2026-09-24 09:20 UTC — fine-tuned Q&A on run52_grow (eval/qa4.txt): the grown 319M is BELOW the old 12L model
+    model (ours fine-tuned; baselines base)   EVERYDAY   SCIQ   ARC
+    grown 319M, run53_sft                       33.3%    6.5%   39.5%
+    12L 118M, run46_sft (previous best)         47.9%    7.9%   40.3%
+    GPT-2 124M                                  16.7%    2.2%   33.8%
+    SmolLM2-135M                                62.5%   12.7%   48.4%
+Held-out answer loss after the fine-tune 1.3798 vs 1.3767 for the old model: no gain from 2.7x the parameters.
+Answers are terser than the old model's ("Paris", "Plants.", "Two.") but no new wrong facts in the ten shown.
+Reading: the 319M shape trained on only the last 3B of 12B tokens, at a rate already decayed below 20% of peak
+(~9 tokens/param at final size); the old 12L had ~10.5B tokens all at full size. Growth mechanics work; this
+schedule under-trained the final model. The grown model also decodes ~2.5x slower than the 12L on a free card
+(6.1 vs 15 q/s) for 2.7x the parameters -- unexplained.
