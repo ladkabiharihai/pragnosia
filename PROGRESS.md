@@ -1417,3 +1417,7 @@ itself at 8,000 (3.3636 -> 3.3636); nobody set either step.
     grown, widen-reset (variant 3)   BPB 1.3564             96%   ends at 24 layers x 768, 178M
 Better than the fixed d768 run at 96% of its compute. Caveat: it ends as a larger model (178M vs 93M), so its
 inference costs more; a fixed 24L x d768 control at equal compute has not been run.
+
+## 2026-09-24 11:31 UTC — LAUNCHED run56_intrinsic (eval/intrinsic_run.sh): own rate, own growth, 87,000 x 65,536 = 5.7B tokens
+Log logs/train_intrinsic.out; checkpoints /mnt/kv_cache/run56_intrinsic every 4,000. Then factual fine-tune (run57_sft)
+and the Q&A test -> eval/qa5.txt. Expected end ~03:00 UTC Sep 25 (08:30 IST) if growth fires early, as in the tests.
