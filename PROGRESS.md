@@ -1369,3 +1369,26 @@ CONTINUAL LEARNING (eval/continual.txt, run46_sft, 120 invented facts, 150 steps
 `sudo timedatectl set-timezone Asia/Kolkata`. The clock is unchanged; only local display moves. Project logs and this
 journal stay UTC (src/common.py formats with timezone.utc explicitly). Calendar timers (logrotate, dpkg backup)
 now fire at local midnight IST. Revert: `sudo timedatectl set-timezone Etc/UTC`.
+- `2026-09-24 11:10:24 UTC` **train** (14.2 min) ok
+  d768 L12 mlp4 ctx2048 B8 10000 steps -> /mnt/kv_cache/autogrow_tmp
+  (log `logs/20260924-105611-train.log`, seed 0)
+
+## 2026-09-24 11:13 UTC — growth controls and self-rehearsal, both final
+MODEL-DECIDED GROWTH vs FIXED SIZE (eval/autogrow.txt; 10,000 steps, intrinsic rate from 3e-3):
+    fixed d512            BPB 1.4133   train loss 3.39   compute 46% of fixed d768
+    self-grown d512->d768 BPB 1.3928   train loss 3.35   compute 77%
+    fixed d768 at ~7,750  (equal compute)  train loss ~3.32 (3.30-3.34)
+    fixed d768            BPB 1.3618   train loss 3.28   compute 100%
+Growth beats staying small but does NOT beat the large model at equal compute in this 10k-step test. Likely cause:
+after the widen the rate continued from its annealed value (the reset that would boost it wrecked the deepen), so
+the new width learned slowly. Stated as not yet won.
+SELF-REHEARSAL (eval/continual.txt; whole model trained, half of every batch the model's own pre-written text):
+                          NEW 25.8 ->   OLD 72.9 ->   TEXT 1.12 ->
+    plain 1e-4               32.5          52.1          2.59
+    rehearsal 1e-4           29.2          68.8          1.30
+    plain 3e-4               46.7          50.0          3.71
+    rehearsal 3e-4           34.2          54.2          1.79
+    plain 1e-3               55.0          43.8          4.75
+    rehearsal 1e-3           40.8          58.3          2.54
+At matched learning (plain 1e-4 vs rehearsal 3e-4: NEW 32.5 vs 34.2) rehearsal keeps more old facts (54.2 vs 52.1)
+and far more general ability (TEXT 1.79 vs 2.59). A better trade, not a solution: old facts still fall.

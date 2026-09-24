@@ -1,3 +1,5 @@
 === model-decided growth vs fixed size, 10,000 steps x 16,384 tokens, 2026-09-24 10:42 UTC ===
 grown (d512 -> d768 at 4,200, self-triggered): BPB 1.3928  wall 13.6 min
 fixed d512: BPB 1.4133  wall 14.0 min
+fixed d768: BPB 1.3618  wall 14.2 min
+CTRL_DONE

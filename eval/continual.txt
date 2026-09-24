@@ -24,3 +24,9 @@ Learning without forgetting: NEW rises, OLD and TEXT hold. Chance on NEW is 25%.
                           NEW before  NEW after  OLD before  OLD after  TEXT before  TEXT after
 whole model lr 0.0001         25.8%      32.5%      72.9%      52.1%       1.1204      2.5871   (train loss 0.759)
 whole + self-rehearsal lr 0.0001      25.8%      29.2%      72.9%      68.8%       1.1204      1.3021   (train loss 1.674)
+whole model lr 0.0003         25.8%      46.7%      72.9%      50.0%       1.1204      3.7083   (train loss 0.522)
+whole + self-rehearsal lr 0.0003      25.8%      34.2%      72.9%      54.2%       1.1204      1.7852   (train loss 0.896)
+whole model lr 0.001          25.8%      55.0%      72.9%      43.8%       1.1204      4.7531   (train loss 0.390)
+whole + self-rehearsal lr 0.001      25.8%      40.8%      72.9%      58.3%       1.1204      2.5422   (train loss 0.414)
+
+Learning without forgetting: NEW rises, OLD and TEXT hold. Chance on NEW is 25%.
