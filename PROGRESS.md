@@ -1218,3 +1218,20 @@ speeds (the trainer's own ETA uses stage-1 speed and reads ~7h; it will lengthen
 - held-out BPB: 1.4887 (4k) -> 1.2457 (24k) -> 1.1869 (48k) -> 1.1104 (96k) -> 1.0681 (144k) -> 1.0542 (172k).
 - 2,202 spike-skips in 172,800 updates (1.3%), steady ~1-5 per 200 late in the run; no divergence, no NaN.
 - Queued eval/after_grow.sh: factual fine-tune (run53_sft) then the Q&A test -> eval/qa4.txt, starts at END train.
+
+## 2026-09-24 08:00 UTC — base-vs-base Q&A on run52_grow step 172,000 (eval/qa_base172k.txt): better than our old base and GPT-2, far behind SmolLM2
+No fine-tuning on any model; same template, greedy, same questions.
+    model                    EVERYDAY   SCIQ   ARC(4-way, 3,530)
+    grown 319M (172k)          16.7%    4.8%    38.5%
+    12L 118M base (run45)      16.7%    1.7%    36.1%   (reproduces its earlier 16.7/1.7/36.0)
+    GPT-2 124M                 16.7%    2.2%    33.8%
+    SmolLM2-135M               62.5%   12.7%    48.4%
+- Knowledge is up: SciQ 2.8x the old base, ARC +2.4 points; ahead of GPT-2 on both.
+- The untuned answers are terse echoes ("France.", "Plants.", "Two.") and one confident error ("John Adams");
+  the last fine-tune took the old base from 16.7% to 47.9% on EVERYDAY, so format is the fine-tune's job.
+- The SmolLM2 gap is data: ~2T training tokens vs our 12B.
+Harness changes: generation now stops at the end token (was generating the full 32-48 tokens after the answer
+ended); ARC scoring runs through the fused scan (same picks on 200 questions, 0.5 -> 13.5 q/s on the 12L model);
+live progress lines. The ARC set is Challenge then Easy in file order, so running scores start low for every model.
+Seen but not yet explained: the grown model decodes ~6x slower than the 12L one (0.9 vs 5.8 q/s, card contended)
+for 2.7x the parameters -- to measure on a free card.

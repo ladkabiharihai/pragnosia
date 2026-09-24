@@ -101,7 +101,7 @@ class Ours:
         return tot
 
     @torch.no_grad()
-    def generate(self, prompt_ids, n, temp=0.0, seed=0, carry=True):
+    def generate(self, prompt_ids, n, temp=0.0, seed=0, carry=True, stop=None):
         """INCREMENTAL generation: the prompt is consumed once into the state, then each new token is one step.
 
         The first version of this re-ran the whole context for every token and reported 2.5 seconds per token at
@@ -123,10 +123,11 @@ class Ours:
             pw = nn_ % w
         out = []
         if self.graphable and n > 8:
-            return out + self._generate_graphed(states, pw, lg, n, temp, g)
+            return out + self._generate_graphed(states, pw, lg, n, temp, g, stop)
         for _ in range(n):
             nxt = int(lg.argmax()) if temp == 0 else int(torch.multinomial(torch.softmax(lg / temp, -1), 1, generator=g))
             out.append(nxt)
+            if nxt == stop: break
             if pw == 0 and self.mixer == "attn":
                 states = [None] * self.m.layers          # the window ended; attention keeps nothing across it
             x = torch.tensor([[nxt]], device=self.device)
@@ -138,7 +139,7 @@ class Ours:
         return out
 
     @torch.no_grad()
-    def _generate_graphed(self, states, pw, lg, n, temp, g):
+    def _generate_graphed(self, states, pw, lg, n, temp, g, stop=None):
         """The decode step as ONE CUDA graph, captured once per model and reused across calls.
 
         Measured eagerly: 965 kernel launches and 12.65 ms per token for 1.7 ms of GPU work, so the step was
@@ -191,6 +192,7 @@ class Ours:
         for _ in range(n):
             nxt = int(cur.argmax()) if temp == 0 else int(torch.multinomial(torch.softmax(cur / temp, -1), 1, generator=g))
             out.append(nxt)
+            if nxt == stop: break              # the answer ended: HF's generate stops at EOS, and so must this
             tok.fill_(nxt)
             graph.replay()
             cur = out_lg

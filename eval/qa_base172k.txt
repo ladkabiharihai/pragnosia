@@ -1,0 +1,140 @@
+=== base models, no fine-tuning: run52_grow step 172,000 vs previous 12L base, 2026-09-24 07:08 UTC ===
+model                       EVERYDAY      SCIQ ARC(4-way)   (48 / 1,000 / 3530 questions; greedy)
+  [grown-319M-base] everyday 48/48  running 16.7%  0.7 q/s  72s
+  [grown-319M-base] sciq 100/1000  running 3.0%  0.9 q/s  115s
+  [grown-319M-base] sciq 200/1000  running 5.0%  1.2 q/s  167s
+  [grown-319M-base] sciq 300/1000  running 5.3%  1.4 q/s  214s
+  [grown-319M-base] sciq 400/1000  running 5.0%  1.6 q/s  252s
+  [grown-319M-base] sciq 500/1000  running 5.0%  1.7 q/s  300s
+  [grown-319M-base] sciq 600/1000  running 5.0%  1.8 q/s  327s
+  [grown-319M-base] sciq 700/1000  running 5.1%  2.0 q/s  352s
+  [grown-319M-base] sciq 800/1000  running 4.9%  2.1 q/s  383s
+  [grown-319M-base] sciq 900/1000  running 4.6%  2.2 q/s  408s
+  [grown-319M-base] sciq 1000/1000  running 4.8%  2.3 q/s  435s
+  [grown-319M-base] arc 500/3530  running 19.0%  2.2 q/s  224s
+  [grown-319M-base] arc 1000/3530  running 19.9%  3.1 q/s  322s
+  [grown-319M-base] arc 1500/3530  running 25.7%  3.9 q/s  380s
+  [grown-319M-base] arc 2000/3530  running 30.8%  4.6 q/s  435s
+  [grown-319M-base] arc 2500/3530  running 34.3%  4.8 q/s  518s
+  [grown-319M-base] arc 3000/3530  running 37.1%  5.2 q/s  576s
+  [grown-319M-base] arc 3500/3530  running 38.3%  5.5 q/s  639s
+grown-319M-base                16.7%      4.8%      38.5%
+  [12L-118M-base] everyday 48/48  running 16.7%  2.5 q/s  19s
+  [12L-118M-base] sciq 100/1000  running 1.0%  5.8 q/s  17s
+  [12L-118M-base] sciq 200/1000  running 2.0%  5.8 q/s  34s
+  [12L-118M-base] sciq 300/1000  running 2.0%  5.8 q/s  52s
+  [12L-118M-base] sciq 400/1000  running 2.0%  5.8 q/s  69s
+  [12L-118M-base] sciq 500/1000  running 2.2%  5.8 q/s  86s
+  [12L-118M-base] sciq 600/1000  running 2.2%  5.8 q/s  103s
+  [12L-118M-base] sciq 700/1000  running 1.9%  5.6 q/s  126s
+  [12L-118M-base] sciq 800/1000  running 1.8%  5.4 q/s  149s
+  [12L-118M-base] sciq 900/1000  running 1.7%  5.2 q/s  172s
+  [12L-118M-base] sciq 1000/1000  running 1.7%  5.1 q/s  195s
+  [12L-118M-base] arc 500/3530  running 20.0%  14.4 q/s  35s
+  [12L-118M-base] arc 1000/3530  running 19.4%  14.9 q/s  67s
+  [12L-118M-base] arc 1500/3530  running 24.1%  15.0 q/s  100s
+  [12L-118M-base] arc 2000/3530  running 28.8%  15.1 q/s  133s
+  [12L-118M-base] arc 2500/3530  running 32.9%  15.1 q/s  166s
+  [12L-118M-base] arc 3000/3530  running 34.6%  15.1 q/s  199s
+  [12L-118M-base] arc 3500/3530  running 36.0%  15.1 q/s  232s
+12L-118M-base                  16.7%      1.7%      36.1%
+  [GPT-2 124M] everyday 48/48  running 16.7%  1.7 q/s  29s
+  [GPT-2 124M] sciq 100/1000  running 4.0%  3.4 q/s  29s
+  [GPT-2 124M] sciq 200/1000  running 3.0%  3.5 q/s  58s
+  [GPT-2 124M] sciq 300/1000  running 2.7%  3.5 q/s  86s
+  [GPT-2 124M] sciq 400/1000  running 2.0%  3.5 q/s  114s
+  [GPT-2 124M] sciq 500/1000  running 2.0%  3.5 q/s  142s
+  [GPT-2 124M] sciq 600/1000  running 1.8%  3.5 q/s  171s
+  [GPT-2 124M] sciq 700/1000  running 2.1%  3.5 q/s  199s
+  [GPT-2 124M] sciq 800/1000  running 2.0%  3.5 q/s  227s
+  [GPT-2 124M] sciq 900/1000  running 2.1%  3.5 q/s  255s
+  [GPT-2 124M] sciq 1000/1000  running 2.2%  3.5 q/s  283s
+  [GPT-2 124M] arc 500/3530  running 17.8%  26.4 q/s  19s
+  [GPT-2 124M] arc 1000/3530  running 17.1%  27.5 q/s  36s
+  [GPT-2 124M] arc 1500/3530  running 23.4%  28.1 q/s  53s
+  [GPT-2 124M] arc 2000/3530  running 27.0%  28.4 q/s  70s
+  [GPT-2 124M] arc 2500/3530  running 30.1%  28.6 q/s  87s
+  [GPT-2 124M] arc 3000/3530  running 32.3%  28.7 q/s  104s
+  [GPT-2 124M] arc 3500/3530  running 33.7%  28.9 q/s  121s
+GPT-2 124M                     16.7%      2.2%      33.8%
+  [SmolLM2-135M] everyday 48/48  running 62.5%  0.8 q/s  61s
+  [SmolLM2-135M] sciq 100/1000  running 12.0%  1.4 q/s  70s
+  [SmolLM2-135M] sciq 200/1000  running 12.0%  1.4 q/s  138s
+  [SmolLM2-135M] sciq 300/1000  running 10.3%  1.4 q/s  208s
+  [SmolLM2-135M] sciq 400/1000  running 10.0%  1.4 q/s  279s
+  [SmolLM2-135M] sciq 500/1000  running 11.2%  1.4 q/s  348s
+  [SmolLM2-135M] sciq 600/1000  running 11.8%  1.4 q/s  417s
+  [SmolLM2-135M] sciq 700/1000  running 12.0%  1.4 q/s  485s
+  [SmolLM2-135M] sciq 800/1000  running 12.0%  1.4 q/s  555s
+  [SmolLM2-135M] sciq 900/1000  running 12.6%  1.4 q/s  623s
+  [SmolLM2-135M] sciq 1000/1000  running 12.7%  1.4 q/s  691s
+  [SmolLM2-135M] arc 500/3530  running 23.0%  11.1 q/s  45s
+  [SmolLM2-135M] arc 1000/3530  running 26.1%  11.2 q/s  89s
+  [SmolLM2-135M] arc 1500/3530  running 32.6%  11.3 q/s  133s
+  [SmolLM2-135M] arc 2000/3530  running 39.2%  11.3 q/s  177s
+  [SmolLM2-135M] arc 2500/3530  running 43.8%  11.4 q/s  220s
+  [SmolLM2-135M] arc 3000/3530  running 46.6%  11.3 q/s  264s
+  [SmolLM2-135M] arc 3500/3530  running 48.3%  11.4 q/s  307s
+SmolLM2-135M                   62.5%     12.7%      48.4%
+
+THE ANSWERS THEMSELVES (greedy, first 160 characters):
+
+  Q: What is the capital of France?
+     grown-319M-base          'France.'
+     12L-118M-base            'The capital of France.'
+     GPT-2 124M               'The capital of France.'
+     SmolLM2-135M             'Paris.'
+
+  Q: Who wrote Romeo and Juliet?
+     grown-319M-base          'Romeo and Juliet'
+     12L-118M-base            "Rosemary\n\nRosemary: I'm not sure I can say that."
+     GPT-2 124M               "I'm not sure."
+     SmolLM2-135M             'Who wrote Romeo and Juliet?'
+
+  Q: Why is the sky blue?
+     grown-319M-base          'The sky is blue.'
+     12L-118M-base            "I'm not sure."
+     GPT-2 124M               "I'm not sure why the sky blue is blue."
+     SmolLM2-135M             "Because it reflects the sun's light."
+
+  Q: What causes the seasons on Earth?
+     grown-319M-base          'The seasonal cycle of the seasonal cycle of the season.'
+     12L-118M-base            'The Earth is a place where the sun, moon, and stars are.'
+     GPT-2 124M               'The seasons on Earth are the seasons of the Earth.'
+     SmolLM2-135M             "The Earth's axis is tilted 23.5 degrees from the plane of its orbit."
+
+  Q: How do plants make their food?
+     grown-319M-base          'Plants.'
+     12L-118M-base            "I'm not sure."
+     GPT-2 124M               'Plants are the most important food for humans.'
+     SmolLM2-135M             'Plants make their food by using sunlight and water.'
+
+  Q: What is the largest planet in our solar system?
+     grown-319M-base          'The largest planet in our solar system.'
+     12L-118M-base            'The largest planet in the solar system, with a diameter of about 1.5 million km.'
+     GPT-2 124M               'The largest planet in our solar system is the Earth.'
+     SmolLM2-135M             'Jupiter.'
+
+  Q: Explain what gravity is in one sentence.
+     grown-319M-base          'Gravity.'
+     12L-118M-base            "I'm not sure I understand your question."
+     GPT-2 124M               'Gravity is the amount of energy that can be transferred from one object to another.'
+     SmolLM2-135M             'Explain what gravity is in one sentence.'
+
+  Q: What is photosynthesis?
+     grown-319M-base          'Photosynthesis.'
+     12L-118M-base            "I'm not sure I understand what you're saying."
+     GPT-2 124M               'Photosynthesis is the process of converting carbon dioxide into energy.'
+     SmolLM2-135M             'Photosynthesis is the process by which plants and other organisms use sunlight to make their own food.'
+
+  Q: Who was the first president of the United States?
+     grown-319M-base          'The first president of the United States was John Adams.'
+     12L-118M-base            'The president of the United States.'
+     GPT-2 124M               "I'm not sure."
+     SmolLM2-135M             'George Washington.'
+
+  Q: What is two plus two?
+     grown-319M-base          'Two.'
+     12L-118M-base            "I'm not sure I can do that."
+     GPT-2 124M               'Two plus two.'
+     SmolLM2-135M             'Two plus two equals four.'

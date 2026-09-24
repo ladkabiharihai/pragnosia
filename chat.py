@@ -27,7 +27,7 @@ while True:
     if q == "!raw": raw = not raw; print(f"  {'plain continuation' if raw else 'question template'}"); continue
     seed += 1
     ids = m.encode(q if raw else f"User: {q}\nAssistant:")
-    out = m.generate(ids, n_tok, temp=temp, seed=seed)
+    out = m.generate(ids, n_tok, temp=temp, seed=seed, stop=8191)
     if EOD in out: out = out[:out.index(EOD)]
     text = m.decode(out).split("\nUser:")[0].strip()
     print(f"model> {text}\n")

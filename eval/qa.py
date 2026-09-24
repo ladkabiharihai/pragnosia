@@ -9,7 +9,7 @@ a correct word buried after a wrong claim does not).
   ARC-EASY   held-out grade-school science, four-way, scored by total log-probability
 Plus the actual answers to ten everyday questions, printed in full.
 usage: eval/qa.py <ckpt>[=label] [<ckpt>[=label] ...]      baselines GPT-2 124M and SmolLM2-135M always included"""
-import sys, re, glob, warnings, os
+import sys, re, glob, warnings, os, time
 warnings.filterwarnings("ignore"); sys.path.insert(0, "/opt/code/membrae")
 os.environ.setdefault("HF_HOME", "/mnt/kv_cache/hf_home")
 from src.common import cap_gpu
@@ -82,13 +82,22 @@ class Mine:
     def encode(self, s): return self.o.encode(s)
     @torch.no_grad()
     def answer(self, prompt, n=48):
-        out = self.o.generate(self.o.encode(prompt), n, temp=0.0, seed=0)
+        out = self.o.generate(self.o.encode(prompt), n, temp=0.0, seed=0, stop=8191)
         if 8191 in out: out = out[:out.index(8191)]
         return self.o.decode(out)
     @torch.no_grad()
     def logprob(self, ctx, cont):
+        # scored through the FUSED scan: identical scores (checked on 200 ARC questions, both models, same
+        # picks) and 0.5 -> 13.5 questions/s on the 12-layer model; decoding keeps the recurrent step path
+        import src.assoc as A
+        A.FUSED_SCAN = True
+        for mx in self.o.m.mix:
+            if hasattr(mx, "need_sent"): mx.need_sent = False
         a, b = self.encode(ctx), self.encode(cont)
         lg = self.o.logits_last(a + b, 1).float().log_softmax(-1)
+        A.FUSED_SCAN = False
+        for mx in self.o.m.mix:
+            if hasattr(mx, "need_sent"): mx.need_sent = True
         n = min(len(b), lg.shape[1] - 1)
         y = torch.tensor((a + b)[-n:], device=lg.device)
         return float(lg[0, -n - 1:-1].gather(-1, y.unsqueeze(-1)).sum())
@@ -104,17 +113,27 @@ def prompt(q): return f"User: {q}\nAssistant:"
 
 
 def run(lab, model):
+    # LIVE PROGRESS: a line every 100 questions with the running score and the rate, flushed, so the log can be
+    # watched while it runs instead of staying silent until a model is finished
+    t0 = time.time()
+    def tick(part, i, n, hits):
+        print(f"  [{lab}] {part} {i}/{n}  running {100*np.mean(hits):.1f}%  {i/(time.time()-t0):.1f} q/s  "
+              f"{time.time()-t0:.0f}s", flush=True)
     ev = [any(v in first_sentence(model.answer(prompt(q))).lower() for v in acc) for q, acc in EVERYDAY]
+    tick("everyday", len(ev), len(EVERYDAY), ev); t0 = time.time()
     sq = []
     for r in list(SCIQ)[:1000]:
         a = first_sentence(model.answer(prompt(r["question"]), 32)).lower()
         sq.append(r["correct_answer"].lower().strip() in a)
+        if len(sq) % 100 == 0: tick("sciq", len(sq), 1000, sq)
+    t0 = time.time()
     arc = []
     for r in ARCE:
         lab_, txt = r["choices"]["label"], r["choices"]["text"]
         if r["answerKey"] not in lab_: continue
         lps = [model.logprob(prompt(r["question"]), " " + t) for t in txt]
         arc.append(int(np.argmax(lps)) == lab_.index(r["answerKey"]))
+        if len(arc) % 500 == 0: tick("arc", len(arc), len(ARCE), arc)
     print(f"{lab:<26s} {100*np.mean(ev):8.1f}% {100*np.mean(sq):8.1f}% {100*np.mean(arc):9.1f}%", flush=True)
     return model
 
