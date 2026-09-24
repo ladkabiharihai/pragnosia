@@ -1439,3 +1439,22 @@ mix into a short continued training of run56 -- gated delta-rule models learn th
 Graphed greedy decode, card shared with run56: run46_sft (12 layers, 118M) 4.47 ms/token, prompt pass 11.7 ms;
 run53_sft (24 layers, 319M) 9.08 ms/token, 17.5 ms. Batch-1 decode is latency-bound and scales with DEPTH (2x the
 layers -> 2.0x the time), not with parameters (2.7x). The earlier 6 vs 15 questions/s gap was mostly this.
+- `2026-09-24 12:09:32 UTC` **train** (8.3 min) ok
+  d512 L12 mlp4 ctx2048 B8 12000 steps -> /mnt/kv_cache/probe_tmp
+  (log `logs/20260924-120113-train.log`, seed 0)
+
+## 2026-09-24 12:41 UTC — USER: "it's growing too fast without enough saturation"; run56_intrinsic stopped (PIDs 1000519, 1000523) at step 7,400
+The user was right. The rate-e-fold trigger fired after ~3,000-3,400 steps every time, whatever the stage: 5 tokens
+per parameter in stage 1 and 2 in stage 2. It measures gradient noise, not whether a size has run out of room.
+User's choice: restart, well trained over rushed, no hard-coding. Two intrinsic signals tried before building on either:
+1. ONE-STEP GRADIENT, new vs existing weights per parameter (after GradMax, Evci et al. 2022), --growth-probe,
+   12L d512 never grown, 12,000 steps. Over all weights it plateaued at 0.10-0.14 (the new side is diluted by weights
+   with exactly zero gradient at an exact growth). Output projections only, like for like: widening crossed 1 at
+   step 2,000 (~0.8 tokens/param), deepening at ~6,000. A gradient says what new capacity COULD do now, not whether
+   the old has run out. Rejected as a trigger.
+2. GROWTH TRIAL (adopted; --trial-steps): at each rate e-fold the model snapshots itself (to CPU), trains a GROWN copy
+   N steps, restores, trains UNCHANGED the same N steps on the SAME batches, and keeps whichever bought more held-out
+   loss per unit compute (params x steps). First test worked end to end but was unfair to growth: the widen reset the
+   rate to 3e-3 and the grown branch went 3.9234 -> 3.9655 while unchanged went to 3.8695 -> STAY. The reset is
+   removed (it was a hand-made intervention anyway); the grown copy keeps the model's own rate. Re-test running
+   (logs/trialtest2.out).

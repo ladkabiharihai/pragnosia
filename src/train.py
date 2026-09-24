@@ -27,6 +27,50 @@ def loaders(data, only=None):
     return bins, ks, ps
 
 
+def growth_signal(m, op, x, fused_scan=True, chunks=4):
+    """SATURATION, MEASURED BY THE MODEL ON ITSELF (goal 7). Grow a throwaway copy by `op` ("wN" or "d"), which is
+    exact, so the copy computes the same function; take ONE gradient on the batch x; compare the mean squared
+    gradient per parameter on the NEW weights with the same on the EXISTING ones. Above 1, a new parameter would be
+    pushed harder than an average existing one: the current capacity is saturated relative to what growth offers.
+    The break-even 1 is the only threshold, and it is not tuned. Idea after GradMax (Evci et al. 2022), which uses
+    the new weights' gradient to decide HOW to grow; here it decides WHEN."""
+    import copy
+    c = copy.deepcopy(m)
+    if op == "d":
+        g_ = c.deepen(); newset = {id(p) for i in g_.new_layers for p in list(g_.mix[i].parameters()) + list(g_.mlp[i].parameters())}
+        regions = None
+    else:
+        grown = c.grow(int(op[1:])); g_ = c; newset = set()
+        regions = {id(p): sh for p, (_, sh) in grown.items()}
+    if fused_scan:
+        for mx in g_.mix:
+            if hasattr(mx, "need_sent"): mx.need_sent = False
+    g_.train(); g_.zero_grad(set_to_none=True)
+    T = x.shape[1] - 1
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        h = g_.trunk(x[:, :T])
+    g_.loss(h, x[:, 1:T + 1], chunks=chunks).backward()
+    # LIKE FOR LIKE. At an exact growth only the zero-initialised OUTPUT projections of the new capacity receive
+    # any gradient (everything behind them is multiplied by zero), so averaging over all new weights diluted the new
+    # side with exact zeros: measured, that ratio plateaued at 0.10-0.14 for 12,000 steps and could never reach 1.
+    # So the comparison is between output projections only (each layer's mixer .o and MLP .b), new against existing.
+    def role(n): return n.endswith(".o.weight") or n.endswith(".b.weight")
+    ns = nn_ = os_ = on = 0.0
+    for n, p in g_.named_parameters():
+        if p.grad is None or not role(n): continue
+        g2 = p.grad.float().square()
+        if id(p) in newset:
+            ns += float(g2.sum()); nn_ += g2.numel()
+        elif regions is not None and id(p) in regions:
+            old = g2[tuple(slice(0, k) for k in regions[id(p)])]
+            os_ += float(old.sum()); on += old.numel()
+            ns += float(g2.sum()) - float(old.sum()); nn_ += g2.numel() - old.numel()
+        else:
+            os_ += float(g2.sum()); on += g2.numel()
+    del c, g_; torch.cuda.empty_cache()
+    return (ns / max(1, nn_)) / max(1e-30, os_ / max(1, on))
+
+
 def batch(bins, ks, ps, rng, B, T, extra=None, extra_p=0.0):
     """extra: a SECOND corpus, drawn for extra_p of the sequences, with its own mix inside it. Used to raise
     the weight of a form the main mix is poor in without rebuilding the main mix: measured 2026-09-21, labels
@@ -67,6 +111,11 @@ def main():
                          "needs --intrinsic-lr 1): an event fires when the rate has annealed one e-fold below where "
                          "the stage started; the rates then restart there. Events comma-separated, ops in one event "
                          "joined by '+', e.g. w768,d,a2+w1024")
+    ap.add_argument("--trial-steps", type=int, default=1000,
+                    help="with --grow-auto: length of each branch of a growth TRIAL (grow vs stay, same batches); the "
+                         "model grows only if growing reduced held-out loss more per unit of compute. A measurement "
+                         "window, not a threshold")
+    ap.add_argument("--growth-probe", default="", help="log growth_signal() for these ops every 1,000 steps, e.g. w768,d")
     ap.add_argument("--new-warm", type=int, default=1000, help="steps over which layers added mid-run ramp from 0 to --new-lr")
     ap.add_argument("--new-lr", type=float, default=3e-4, help="absolute step for layers added by LM.deepen(), which start at zero output")
     ap.add_argument("--norm", default="ln", choices=["ln", "rms"], help="residual-stream norm; rms makes widening exact")
@@ -305,13 +354,10 @@ def main():
             # They keep their rate; layers new to this stage (the absolute-step group) start small and the
             # hypergradient raises them as they prove useful, so even their ramp-in is the model's own.
             if not a.grow_auto: return
-            if grown_at != i:
-                # A WIDEN restarts the rates at the stage start: measured on 2026-09-24, the widened model kept at
-                # its annealed rate trained slower (loss 3.41 vs 3.36 at step 8,000) and its new width lagged. The
-                # DEEPEN does not, because the reset wrecked it (3.30 -> 5.74); there the new layers ramp themselves.
-                for g_ in opt.param_groups[:2]:
-                    g_["lr"] = a.lr if g_ is opt.param_groups[0] else g_["lr"]
-                    if g_["lr_t"] is not None and g_ is opt.param_groups[0]: g_["lr_t"].fill_(a.lr)
+            # NO RATE IS RESET AT A WIDEN. Restarting it at the stage start (tried 2026-09-24) caused a transient that
+            # made a 500-step growth trial read the grown branch as WORSE (3.9234 -> 3.9655 while unchanged went to
+            # 3.8695), and a reset is a hand-made intervention besides. The grown model keeps its own rate; the
+            # hypergradient raises it if the new width can use larger steps.
             if len(opt.param_groups) > 2 and grown_at == i:
                 g_ = opt.param_groups[2]; g_["lr"] = a.new_lr
                 if g_["lr_t"] is not None: g_["lr_t"].fill_(a.new_lr)
@@ -331,7 +377,80 @@ def main():
         marks = []; bpbs = []; skipped = 0
         T_n, B_n = shapes[0]
         nxt = [batch(bins, ks, ps, rng, B_n, T_n, extra, a.data2_frac) for _ in range(a.accum)]
+
+        # ---- GROWTH TRIALS (goals 7 + 8): the model decides to grow by trying it ----------------------------------
+        # When its rate has annealed an e-fold (time to RECONSIDER, nothing more), the model snapshots itself, trains a
+        # GROWN copy for --trial-steps, then goes back to the snapshot and trains UNCHANGED for the same steps on the
+        # SAME batches, and keeps whichever branch bought more held-out loss per unit of compute (params x steps).
+        # Replaces two signals that grew it long before it was saturated: the rate e-fold alone (5 and 2 tokens per
+        # parameter in its first stages, 2026-09-24) and a one-step gradient comparison (break-even at 1/3 token per
+        # parameter: a gradient says what new capacity COULD do now, not whether the old has run out).
+        import copy as _copy
+        xs_eval = batch(bins, ks, ps, np.random.default_rng(424242), 4, 2048)
+        trial = None
+        def heldout():
+            m.eval()
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                l_ = F.cross_entropy(m(xs_eval[:, :2048]).float().reshape(-1, a.vocab), xs_eval[:, 1:2049].reshape(-1)).item()
+            m.train(); return l_
+        def to_dev(o, dev):
+            if torch.is_tensor(o): return o.to(dev)
+            if isinstance(o, dict): return {k: to_dev(v, dev) for k, v in o.items()}
+            if isinstance(o, (list, tuple)): return type(o)(to_dev(v, dev) for v in o)
+            return o
+        def snapshot():
+            mc = _copy.deepcopy(m).to("cpu")
+            for p_ in mc.parameters(): p_.grad = None
+            return dict(m=mc, opt=to_dev(opt.state_dict(), "cpu"), rng=_copy.deepcopy(rng.bit_generator.state),
+                        nxt=[x.clone() for x in nxt], shapes=list(shapes), accum=a.accum, batch=a.batch,
+                        auto=[list(e) for e in auto_events])
+        def install(S):
+            """make snapshot S the live model: optimizer rebuilt from its state, graphs recaptured"""
+            nonlocal m, opt, fwd, trunk, gs, g_, base, set_none, shapes, nxt
+            graphs.clear(); gs = None; g_ = None
+            fwd = trunk = None; torch._dynamo.reset(); gc.collect(); torch.cuda.empty_cache()
+            shapes = S["shapes"]; a.accum = S["accum"]; a.batch = S["batch"]
+            rng.bit_generator.state = S["rng"]; nxt = S["nxt"]
+            m = S["m"].to("cuda")
+            if a.fused_scan:
+                for mx_ in m.mix:
+                    if hasattr(mx_, "need_sent"): mx_.need_sent = False
+            opt = Fabric(m.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused),
+                         hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2,
+                         cuda_graph=bool(a.graph and a.fused))
+            opt.load_state_dict(to_dev(S["opt"], "cuda"))
+            base = [g["lr"] for g in opt.param_groups]; set_none = not opt.cuda_graph
+            fwd = torch.compile(m) if a.compile else m
+            trunk = torch.compile(m.trunk) if a.compile else m.trunk
+            if len(shapes) > 1: graphs.update({(B_, T_): capture(T_, B_) for T_, B_ in shapes})
+            else: gs = capture()
+        def nparams(): return sum(p_.numel() for p_ in m.parameters())
+
         for i in range(start, a.steps):
+            if trial is not None and i == trial["end"]:
+                if trial["phase"] == "grow":
+                    trial["Lg"], trial["Pg"] = heldout(), nparams()
+                    trial["G"] = snapshot()
+                    install(trial.pop("S0"))
+                    hist.fill_(float("nan")); g0 = i
+                    trial["phase"], trial["end"] = "stay", i + a.trial_steps
+                    r.log(f"    TRIAL {'+'.join(trial['ev'])}: grown branch {trial['L0']:.4f} -> {trial['Lg']:.4f} over "
+                          f"{a.trial_steps} steps at {trial['Pg']/1e6:.1f}M; now the same steps unchanged")
+                else:
+                    Ls, Ps = heldout(), nparams()
+                    gg = (trial["L0"] - trial["Lg"]) / trial["Pg"]; gs_ = (trial["L0"] - Ls) / Ps
+                    if gg > gs_:
+                        G = trial["G"]; install(G); auto_events[:] = G["auto"][1:]
+                        hist.fill_(float("nan")); g0 = i; stage_rate[0] = opt.rates()[0]
+                        r.log(f"    DECISION at step {i}: GROW ({'+'.join(trial['ev'])}). Held-out gain per unit compute "
+                              f"{gg*1e9:.3f} grown vs {gs_*1e9:.3f} unchanged ({trial['L0']:.4f} -> {trial['Lg']:.4f} vs "
+                              f"-> {Ls:.4f}); continuing from the grown branch at {nparams()/1e6:.1f}M")
+                    else:
+                        stage_rate[0] = opt.rates()[0]
+                        r.log(f"    DECISION at step {i}: STAY. Held-out gain per unit compute {gs_*1e9:.3f} unchanged vs "
+                              f"{gg*1e9:.3f} grown ({trial['L0']:.4f} -> {Ls:.4f} vs -> {trial['Lg']:.4f}); "
+                              f"will reconsider after the rate anneals another e-fold")
+                    trial = None
             w = min(1.0, (i + 1) / a.warm)
             # cosine over the whole budget: a flat rate lets a model equilibrate at that rate's noise floor,
             # which is what drove the previous project's BPB upward for hundreds of thousands of steps.
@@ -493,16 +612,21 @@ def main():
                 t_prev = el
                 if opt.recaptures:
                     r.log(f"    optimizer step recaptured {opt.recaptures} times")
-                if auto_events and i + 1 < a.steps:
+                if a.growth_probe and (i + 1) % 1000 == 0:
+                    xp = batch(bins, ks, ps, np.random.default_rng(99), 2, 2048)
+                    sig = {op_: growth_signal(m, op_, xp, bool(a.fused_scan), a.chunks) for op_ in a.growth_probe.split(",")}
+                    r.log(f"    PROBE step {i+1}: new/existing gradient per parameter " + "  ".join(f"{k} {v:.3f}" for k, v in sig.items()))
+                if auto_events and trial is None and i + 1 + 2 * a.trial_steps < a.steps:
                     rt = opt.rates()[0]
                     if rt < stage_rate[0] / math.e:
-                        ev = auto_events.pop(0)
+                        ev = auto_events[0]
+                        trial = dict(phase="grow", ev=ev, L0=heldout(), S0=snapshot(), end=i + 1 + a.trial_steps)
                         for op_ in ev:
                             if op_ == "d": grow_d.add(i + 1)
                             elif op_.startswith("w"): grow_w[i + 1] = int(op_[1:])
                             elif op_.startswith("a"): grow_a[i + 1] = int(op_[1:])
-                        r.log(f"    SATURATED at step {i+1}: rate {rt:.2e} is one e-fold below the stage start "
-                              f"{stage_rate[0]:.2e}; growing {'+'.join(ev)} next step")
+                        r.log(f"    RECONSIDER at step {i+1}: rate {rt:.2e} is one e-fold below the stage start "
+                              f"{stage_rate[0]:.2e}; TRIAL of {'+'.join(ev)} vs unchanged, {a.trial_steps} steps each")
                 if nnf > nf_prev:
                     # the guard zeroed those steps; the run continues unless the weights themselves went bad
                     alive = bool(torch.stack([p_.isfinite().all() for p_ in m.parameters()]).all().item())
