@@ -14,3 +14,21 @@ Carrier with all 120 facts in context (1894 tokens), accuracy by how far back th
    facts  31-60  (the middle quarter): 16.7%
    facts  61-90  (the middle quarter): 20.0%
    facts  91-120 (the most recent quarter): 16.7%
+=== HARD mode, run46_sft, 2026-09-24 11:47 UTC ===
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 9074.20it/s]
+Facts are read, not trained on: the weights never change, so nothing known can be forgotten.  HARD: every wrong option is another answer from the same context.
+
+facts in context                 Carrier            GPT-2 124M
+10                         30.0% ( 158 tok)         40.0% ( 130 tok)
+30                         20.0% ( 470 tok)         33.3% ( 398 tok)
+60                         25.0% ( 938 tok)         43.3% ( 788 tok)
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (1581 > 1024). Running this sequence through the model will result in indexing errors
+120                        30.8% (1894 tok)does not fit (1581 tok)
+
+No facts in context at all (what each model guesses cold): Carrier 25.8%   GPT-2 124M 29.2%   (chance 25%)
+
+Carrier with all 120 facts in context (1894 tokens), accuracy by how far back the fact sits:
+   facts   1-30  (the earliest quarter): 40.0%
+   facts  31-60  (the middle quarter): 16.7%
+   facts  61-90  (the middle quarter): 16.7%
+   facts  91-120 (the most recent quarter): 16.7%

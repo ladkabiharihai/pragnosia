@@ -1421,3 +1421,16 @@ inference costs more; a fixed 24L x d768 control at equal compute has not been r
 ## 2026-09-24 11:31 UTC — LAUNCHED run56_intrinsic (eval/intrinsic_run.sh): own rate, own growth, 87,000 x 65,536 = 5.7B tokens
 Log logs/train_intrinsic.out; checkpoints /mnt/kv_cache/run56_intrinsic every 4,000. Then factual fine-tune (run57_sft)
 and the Q&A test -> eval/qa5.txt. Expected end ~03:00 UTC Sep 25 (08:30 IST) if growth fires early, as in the tests.
+
+## 2026-09-24 11:50 UTC — GOAL 9, RE-MEASURED: the model cannot LOOK UP a fact among many; the old recall test overstated it
+eval/incontext.py drew wrong options from all 60 invented names, so with few facts in context most had never
+appeared and "pick the name that was in the text" scored without any lookup. New HARD mode: every wrong option is
+another answer from the same context. run46_sft vs GPT-2 (chance 25%):
+    facts in context     10      30      60      120
+    ours              30.0%   20.0%   25.0%   30.8%   (most recent quarter of 120: 16.7%)
+    GPT-2 124M        40.0%   33.3%   43.3%   does not fit
+What stands on goal 9: no degradation of prediction with length (won earlier). What does not: lookup of a specific
+fact, even inside the attention window. Fix under way, in the weights: eval/build_recall.py writes documents of
+10-150 invented facts followed by questions in other wording (300M tokens, syllables disjoint from the test's), to
+mix into a short continued training of run56 -- gated delta-rule models learn this lookup once trained on it
+(Arora et al. 2023).

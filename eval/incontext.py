@@ -36,6 +36,17 @@ for i in range(60):
                   f"Question: who invented the {machines[i]} engine? Answer:", f" {people[i]}",
                   [f" {o}" for o in rng.sample([x for x in people if x != people[i]], 3)]))
 order = list(range(len(FACTS))); random.Random(9).shuffle(order)
+# HARD mode (argv[2] == "hard"): every wrong option is ANOTHER ANSWER FROM THE SAME CONTEXT. Measured 2026-09-24:
+# in the default mode the wrong options were drawn from all 60 names, so with 10 facts in context most of them
+# had never appeared and "pick the name that was in the text" scored well without any lookup. Here only lookup
+# scores: every option was in the text.
+HARD = len(sys.argv) > 2 and sys.argv[2] == "hard"
+def hard(sub):
+    out = []
+    for f in sub:
+        pool = [g[2] for g in sub if g is not f and ("capital" in g[1]) == ("capital" in f[1])]
+        out.append((f[0], f[1], f[2], rng.sample(pool, 3) if len(pool) >= 3 else f[3]))
+    return out
 
 
 def ask(model, enc, context_ids, q, ans, wrongs, max_ctx=None):
@@ -51,10 +62,12 @@ def ask(model, enc, context_ids, q, ans, wrongs, max_ctx=None):
 
 
 models = [("Carrier", Ours(CK, "/mnt/kv_cache/tok_v8192.json"), None), ("GPT-2 124M", GPT2(), 1024)]
-print("Facts are read, not trained on: the weights never change, so nothing known can be forgotten.\n")
+print("Facts are read, not trained on: the weights never change, so nothing known can be forgotten."
+      + ("  HARD: every wrong option is another answer from the same context." if HARD else "") + "\n")
 print(f"{'facts in context':<18s}" + "".join(f"{lab:>22s}" for lab, _, _ in models))
 for n in (10, 30, 60, 120):
     sub = [FACTS[i] for i in order[:n]]
+    if HARD: sub = hard(sub)
     row = f"{n:<18d}"
     for lab, m, cap in models:
         enc = m.encode if hasattr(m, "encode") else m.tok.encode
@@ -72,6 +85,7 @@ for lab, m, cap in models:
 print("(chance 25%)")
 lab, m, _ = models[0]
 sub = [FACTS[i] for i in order]
+if HARD: sub = hard(sub)
 ctx = m.encode(" ".join(f[0] for f in sub))
 res = np.array([ask(m, m.encode, ctx, f[1], f[2], f[3]) for f in sub])
 print(f"\nCarrier with all 120 facts in context ({len(ctx)} tokens), accuracy by how far back the fact sits:")
