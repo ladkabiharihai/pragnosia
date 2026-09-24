@@ -1434,3 +1434,8 @@ fact, even inside the attention window. Fix under way, in the weights: eval/buil
 10-150 invented facts followed by questions in other wording (300M tokens, syllables disjoint from the test's), to
 mix into a short continued training of run56 -- gated delta-rule models learn this lookup once trained on it
 (Arora et al. 2023).
+
+## 2026-09-24 11:51 UTC — decode speed explained, not a bug
+Graphed greedy decode, card shared with run56: run46_sft (12 layers, 118M) 4.47 ms/token, prompt pass 11.7 ms;
+run53_sft (24 layers, 319M) 9.08 ms/token, 17.5 ms. Batch-1 decode is latency-bound and scales with DEPTH (2x the
+layers -> 2.0x the time), not with parameters (2.7x). The earlier 6 vs 15 questions/s gap was mostly this.
