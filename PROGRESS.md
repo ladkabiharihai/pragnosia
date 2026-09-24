@@ -1235,3 +1235,11 @@ ended); ARC scoring runs through the fused scan (same picks on 200 questions, 0.
 live progress lines. The ARC set is Challenge then Easy in file order, so running scores start low for every model.
 Seen but not yet explained: the grown model decodes ~6x slower than the 12L one (0.9 vs 5.8 q/s, card contended)
 for 2.7x the parameters -- to measure on a free card.
+- `2026-09-24 08:37:35 UTC` **train** (1119.6 min) ok
+  d512 L12 mlp4 ctx8192 B2 183105 steps -> /mnt/kv_cache/run52_grow
+  (log `logs/20260923-135800-train.log`, seed 0)
+
+## 2026-09-24 08:39 UTC — run52_grow DONE: 12.0B tokens, 46M -> 319M, 1,119.6 min (18.7 h)
+Final train loss 2.4312; last held-out BPB 1.0520 (step 180,000); 2,249 spike-skips in 183,105 updates (1.2%);
+no divergence. Checkpoint /mnt/kv_cache/run52_grow/ckpt.pt (+ step172k.pt kept). Factual fine-tune running
+(run53_sft, ~81 ktok/s, ~6 min), then eval/qa4.txt.
