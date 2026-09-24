@@ -305,6 +305,13 @@ def main():
             # They keep their rate; layers new to this stage (the absolute-step group) start small and the
             # hypergradient raises them as they prove useful, so even their ramp-in is the model's own.
             if not a.grow_auto: return
+            if grown_at != i:
+                # A WIDEN restarts the rates at the stage start: measured on 2026-09-24, the widened model kept at
+                # its annealed rate trained slower (loss 3.41 vs 3.36 at step 8,000) and its new width lagged. The
+                # DEEPEN does not, because the reset wrecked it (3.30 -> 5.74); there the new layers ramp themselves.
+                for g_ in opt.param_groups[:2]:
+                    g_["lr"] = a.lr if g_ is opt.param_groups[0] else g_["lr"]
+                    if g_["lr_t"] is not None and g_ is opt.param_groups[0]: g_["lr_t"].fill_(a.lr)
             if len(opt.param_groups) > 2 and grown_at == i:
                 g_ = opt.param_groups[2]; g_["lr"] = a.new_lr
                 if g_["lr_t"] is not None: g_["lr_t"].fill_(a.new_lr)

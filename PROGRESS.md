@@ -1403,3 +1403,17 @@ no gold used for training (eval/selfimprove.py). Gate first: are its own labels 
 Training on labels that are 62-81% wrong would teach errors. Self-improvement needs a base that is right more often
 than wrong somewhere; this one is only there on everyday facts (~48%), and no clean unlabeled everyday set exists
 here (Dolly was in its fine-tune). NOT ATTEMPTED on bad labels. Revisit on a stronger base, with the same gate.
+- `2026-09-24 11:29:04 UTC` **train** (15.2 min) ok
+  d512 L12 mlp4 ctx2048 B8 10000 steps -> /mnt/kv_cache/autogrow_tmp
+  (log `logs/20260924-111350-train.log`, seed 0)
+
+## 2026-09-24 11:29 UTC — GOAL 7 + 8: model-decided growth now beats the fixed model at less compute (logs/autogrow3.out)
+Variant 3: after a WIDEN the main rate restarts at the stage start; after a DEEPEN the trained layers keep theirs and
+new layers start at 1e-4. The model saturated and widened itself at step 4,200 (3.6361 -> 3.6360) and deepened
+itself at 8,000 (3.3636 -> 3.3636); nobody set either step.
+    fixed d512                       BPB 1.4133   compute 46% of fixed d768
+    grown, rate kept after widen     BPB 1.3928             77%
+    fixed d768                       BPB 1.3618            100%
+    grown, widen-reset (variant 3)   BPB 1.3564             96%   ends at 24 layers x 768, 178M
+Better than the fixed d768 run at 96% of its compute. Caveat: it ends as a larger model (178M vs 93M), so its
+inference costs more; a fixed 24L x d768 control at equal compute has not been run.
