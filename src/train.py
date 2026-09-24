@@ -62,6 +62,11 @@ def main():
                     help="the optimizer sets its own step size (goal 8), no warm-up, no schedule: 1 = hypergradient "
                          "(--lr/--new-lr are only where it starts), 2 = layer-wise DoG (no rate at all)")
     ap.add_argument("--hyper-beta", type=float, default=0.02, help="how fast an intrinsic rate moves per step, per unit cosine")
+    ap.add_argument("--grow-auto", default="",
+                    help="growth events in ORDER, fired when the model saturates rather than at set steps (goal 7, "
+                         "needs --intrinsic-lr 1): an event fires when the rate has annealed one e-fold below where "
+                         "the stage started; the rates then restart there. Events comma-separated, ops in one event "
+                         "joined by '+', e.g. w768,d,a2+w1024")
     ap.add_argument("--new-warm", type=int, default=1000, help="steps over which layers added mid-run ramp from 0 to --new-lr")
     ap.add_argument("--new-lr", type=float, default=3e-4, help="absolute step for layers added by LM.deepen(), which start at zero output")
     ap.add_argument("--norm", default="ln", choices=["ln", "rms"], help="residual-stream norm; rms makes widening exact")
@@ -115,6 +120,9 @@ def main():
         elif op_.startswith("a"): grow_a[int(st_)] = int(op_[1:])
         elif op_.startswith("w"): grow_w[int(st_)] = int(op_[1:])
         else: raise ValueError(f"unknown growth op {op_!r} in --grow-schedule")
+    auto_events = [e.split("+") for e in a.grow_auto.split(",") if e]
+    if auto_events and a.intrinsic_lr != 1:
+        raise ValueError("--grow-auto reads the intrinsic rate; it needs --intrinsic-lr 1")
     if a.grow_at: grow_w[a.grow_at] = a.grow_to
     if a.deepen_at: grow_d.add(a.deepen_at)
     os.makedirs(a.out, exist_ok=True)
@@ -288,6 +296,19 @@ def main():
             r.log(f"micro-step captured as a CUDA graph; {torch.cuda.memory_reserved()/2**30:.1f} GiB reserved after capture")
 
         t0 = time.time(); ema = None; t_prev = 0.0
+
+        stage_rate = [a.lr]                  # the main rate when the current stage began: saturation is judged
+                                             # against it, so each stage anneals on from where the last one ended
+        def restart_rates():
+            # AFTER A SATURATION-TRIGGERED GROWTH THE RATES ARE NOT RESET. Resetting the trained layers from their
+            # learned ~1e-3 back to 3e-3 knocked a deepened model from loss 3.30 to 5.74 (measured 2026-09-24).
+            # They keep their rate; layers new to this stage (the absolute-step group) start small and the
+            # hypergradient raises them as they prove useful, so even their ramp-in is the model's own.
+            if not a.grow_auto: return
+            if len(opt.param_groups) > 2 and grown_at == i:
+                g_ = opt.param_groups[2]; g_["lr"] = a.new_lr
+                if g_["lr_t"] is not None: g_["lr_t"].fill_(a.new_lr)
+            stage_rate[0] = opt.rates()[0]
         # THE GUARD LIVES ON THE CARD. Reading the gradient norm and the loss every step were the only two
         # syncs left in the loop, and each one drained the queue and left the card idle through the host's
         # bookkeeping: 2 ms of a 128 ms update measured piece by piece. The norm history, its median, the
@@ -347,6 +368,7 @@ def main():
                 r.log(f"    GREW to d={m.d} at step {i}: {P/1e6:.1f}M params, same batch loss {lb:.4f} -> {la:.4f}, "
                       f"optimizer state {opt.state_bytes()/2**20:.0f} MiB carried")
                 hist.fill_(float("nan")); g0 = i      # the grown model's gradient norm is its own; re-learn it
+                restart_rates()
             if i in grow_d:
                 # DEPTH GROWTH MID-RUN (vision goal 7): the model doubles its layers in place and computes exactly
                 # what it did before (new layers start at zero output; measured 1.949016 -> 1.949016 on run47).
@@ -395,6 +417,7 @@ def main():
                       f"{lb:.4f} -> {la:.4f}, optimizer state carried for {carried} tensors, "
                       f"{len(m.new_layers)} new layers at absolute lr {a.new_lr}, ramped over {a.new_warm} steps")
                 grown_at = i; hist.fill_(float("nan")); g0 = i
+                restart_rates()
             # rates are set AFTER any growth event: a deepen rebuilds the optimizer at its base rates
             for gi, g in (() if a.intrinsic_lr else enumerate(opt.param_groups)):
                 g["lr"] = base[gi] * sched * w
@@ -463,6 +486,16 @@ def main():
                 t_prev = el
                 if opt.recaptures:
                     r.log(f"    optimizer step recaptured {opt.recaptures} times")
+                if auto_events and i + 1 < a.steps:
+                    rt = opt.rates()[0]
+                    if rt < stage_rate[0] / math.e:
+                        ev = auto_events.pop(0)
+                        for op_ in ev:
+                            if op_ == "d": grow_d.add(i + 1)
+                            elif op_.startswith("w"): grow_w[i + 1] = int(op_[1:])
+                            elif op_.startswith("a"): grow_a[i + 1] = int(op_[1:])
+                        r.log(f"    SATURATED at step {i+1}: rate {rt:.2e} is one e-fold below the stage start "
+                              f"{stage_rate[0]:.2e}; growing {'+'.join(ev)} next step")
                 if nnf > nf_prev:
                     # the guard zeroed those steps; the run continues unless the weights themselves went bad
                     alive = bool(torch.stack([p_.isfinite().all() for p_ in m.parameters()]).all().item())

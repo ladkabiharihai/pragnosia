@@ -1302,3 +1302,39 @@ come down to its rate. Caveat: 1.5e-3 was tuned on d768, not d512. Running now: 
 result does not depend on how high it starts, the start is not a knob.
 Also running: eval/rtune.py on run46_sft (goal 5 data) -- it gets 9.3% of SciQ/ARC training questions right, so
 ~91% become "I don't know"; the risk is a model that declines everything, and the test will show it.
+- `2026-09-24 10:02:30 UTC` **train** (6.5 min) ok
+  d512 L12 mlp4 ctx2048 B8 6000 steps -> /mnt/kv_cache/ilr_tmp
+  (log `logs/20260924-095558-train.log`, seed 0)
+- `2026-09-24 10:03:55 UTC` **train** (1.3 min) ok
+  d512 L12 mlp4 ctx2048 B8 6000 steps -> /mnt/kv_cache/ilr_tmp
+  (log `logs/20260924-100234-train.log`, seed 0)
+- `2026-09-24 10:14:57 UTC` **train** (10.6 min) ok
+  d512 L12 mlp4 ctx2048 B8 6000 steps -> /mnt/kv_cache/ilr_tmp
+  (log `logs/20260924-100420-train.log`, seed 0)
+- `2026-09-24 10:16:46 UTC` **train** (1.7 min) ok
+  d512 L12 mlp4 ctx2048 B8 6000 steps -> /mnt/kv_cache/ilr_tmp
+  (log `logs/20260924-101502-train.log`, seed 0)
+- `2026-09-24 10:27:28 UTC` **train** (23.5 min) ok
+  d512 L12 mlp4 ctx2048 B8 10000 steps -> /mnt/kv_cache/autogrow_tmp
+  (log `logs/20260924-100401-train.log`, seed 0)
+
+## 2026-09-24 10:35 UTC — GOALS 4-5: ABSTENTION learned from the model's own mistakes (R-Tuning; eval/abstain_rt.txt)
+run46_sft answered 15,049 SciQ/ARC TRAINING questions: right on 1,274 (8.5%). Right -> keep the answer; wrong ->
+"I don't know." Mixed into the factual fine-tune with SciQ/ARC removed; one epoch from run46_sft (run54_rtune).
+Scored on the held-out questions as right / WRONG / declined:
+                      right   WRONG  declined   accuracy when it answers
+  EVERYDAY before     47.9%   52.1%     0.0%     47.9%
+  EVERYDAY after      31.2%   29.2%    39.6%     51.7%
+  SCIQ     before      7.9%   92.1%     0.0%      7.9%
+  SCIQ     after       1.0%    4.1%    94.9%     19.6%
+Wrong answers fall 52 -> 29 and 92 -> 4, with nothing outside the weights deciding. But it over-declines and loses
+right answers (47.9 -> 31.2 everyday): 91% of its abstention examples were "I don't know". Balanced 1:1 version
+running (run55_rtune_bal, eval/abstain_rt2.txt).
+GOAL 7: the model now decides WHEN to grow (--grow-auto): it grows when its intrinsic rate has annealed one e-fold
+below where the stage began. First test (logs/autogrow.out): fired by itself at step 4,200 (widen, 3.6400 ->
+3.6398) and 8,200 (deepen, 3.3747 -> 3.3747). But resetting the trained layers' rate to the start value after
+growth knocked the deepened model from 3.30 to 5.74; fixed -- rates are kept across growth, new layers start at
+1e-4 and the hypergradient raises them. Re-test running (logs/autogrow2.out).
+GOAL 8: the halve-on-spike back-off was tried and REMOVED (it ratcheted a good 1e-2 start down to 1.6e-4 by step
+1,000, and a 3e-2 start to the 1e-7 floor). The intrinsic rate works from any start in 3e-3 .. 1e-2; 1e-4 is too
+timid, 3e-2 and 1e-1 diverge.

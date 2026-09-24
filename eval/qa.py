@@ -157,7 +157,7 @@ print(f"{'model':<26s} {'EVERYDAY':>9s} {'SCIQ':>9s} {'ARC(4-way)':>10s}   (48 /
 shown = {}
 for ck, lab in specs:
     m = run(lab, Mine(ck)); shown[lab] = [m.answer(prompt(q)) for q in SHOW]; del m; torch.cuda.empty_cache()
-for name, cache, lab in (("gpt2", "/mnt/kv_cache/hf_cache", "GPT-2 124M"), ("HuggingFaceTB/SmolLM2-135M", "/mnt/kv_cache/hf_cache", "SmolLM2-135M")):
+for name, cache, lab in () if os.environ.get("QA_BASELINES") == "0" else (("gpt2", "/mnt/kv_cache/hf_cache", "GPT-2 124M"), ("HuggingFaceTB/SmolLM2-135M", "/mnt/kv_cache/hf_cache", "SmolLM2-135M")):
     m = run(lab, HF(name, cache)); shown[lab] = [m.answer(prompt(q)) for q in SHOW]; del m; torch.cuda.empty_cache()
 print("\nTHE ANSWERS THEMSELVES (greedy, first 160 characters):")
 for i, q in enumerate(SHOW):

@@ -1,0 +1,4 @@
+=== fused projections off vs on, 24 layers, compiled + graphed, 12:12 UTC ===
+fused-proj 1:  FAILED
+fused-proj 0: loss 6.2053 156 ktok/s  28.0 GiB reserved after capture
+fused-proj 1 (contiguous):  FAILED

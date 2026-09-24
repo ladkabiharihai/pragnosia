@@ -1,0 +1,87 @@
+=== R-Tuning (abstention from own mistakes) vs the same model before, 2026-09-24 10:14 UTC ===
+model                       EVERYDAY      SCIQ ARC(4-way)   (48 / 1,000 / 3530 questions; greedy)
+  [after-rtuning] everyday 48/48  running 31.2%  0.8 q/s  63s
+  [after-rtuning] sciq 100/1000  running 0.0%  0.6 q/s  161s
+  [after-rtuning] sciq 200/1000  running 0.0%  0.9 q/s  211s
+  [after-rtuning] sciq 300/1000  running 0.0%  1.2 q/s  244s
+  [after-rtuning] sciq 400/1000  running 0.2%  1.5 q/s  263s
+  [after-rtuning] sciq 500/1000  running 0.6%  1.8 q/s  277s
+  [after-rtuning] sciq 600/1000  running 0.7%  2.1 q/s  283s
+  [after-rtuning] sciq 700/1000  running 0.6%  2.4 q/s  289s
+  [after-rtuning] sciq 800/1000  running 0.8%  2.7 q/s  300s
+  [after-rtuning] sciq 900/1000  running 0.8%  2.9 q/s  305s
+  [after-rtuning] sciq 1000/1000  running 1.0%  3.2 q/s  311s
+  [after-rtuning] arc 500/3530  running 18.4%  3.1 q/s  163s
+  [after-rtuning] arc 1000/3530  running 19.4%  4.2 q/s  240s
+  [after-rtuning] arc 1500/3530  running 26.2%  5.4 q/s  280s
+  [after-rtuning] arc 2000/3530  running 31.8%  6.3 q/s  315s
+  [after-rtuning] arc 2500/3530  running 35.3%  6.7 q/s  372s
+  [after-rtuning] arc 3000/3530  running 37.6%  7.6 q/s  397s
+  [after-rtuning] arc 3500/3530  running 39.4%  8.3 q/s  423s
+after-rtuning                  31.2%      1.0%      39.5%
+                           EVERYDAY right  31.2%  WRONG  29.2%  declined  39.6%  -> accuracy when it answers  51.7%
+                           SCIQ     right   1.0%  WRONG   4.1%  declined  94.9%  -> accuracy when it answers  19.6%
+  [before] everyday 48/48  running 47.9%  17.4 q/s  3s
+  [before] sciq 100/1000  running 7.0%  13.2 q/s  8s
+  [before] sciq 200/1000  running 6.5%  10.1 q/s  20s
+  [before] sciq 300/1000  running 7.3%  8.2 q/s  37s
+  [before] sciq 400/1000  running 7.5%  7.9 q/s  51s
+  [before] sciq 500/1000  running 8.0%  7.8 q/s  64s
+  [before] sciq 600/1000  running 7.3%  7.8 q/s  77s
+  [before] sciq 700/1000  running 7.1%  7.7 q/s  91s
+  [before] sciq 800/1000  running 6.9%  7.6 q/s  105s
+  [before] sciq 900/1000  running 7.2%  7.6 q/s  118s
+  [before] sciq 1000/1000  running 7.9%  7.6 q/s  131s
+  [before] arc 500/3530  running 17.6%  15.6 q/s  32s
+  [before] arc 1000/3530  running 19.2%  15.1 q/s  66s
+  [before] arc 1500/3530  running 26.1%  15.1 q/s  99s
+  [before] arc 2000/3530  running 31.7%  15.6 q/s  128s
+  [before] arc 2500/3530  running 35.6%  15.5 q/s  161s
+  [before] arc 3000/3530  running 38.2%  15.5 q/s  194s
+  [before] arc 3500/3530  running 40.3%  15.2 q/s  231s
+before                         47.9%      7.9%      40.3%
+                           EVERYDAY right  47.9%  WRONG  52.1%  declined   0.0%  -> accuracy when it answers  47.9%
+                           SCIQ     right   7.9%  WRONG  92.1%  declined   0.0%  -> accuracy when it answers   7.9%
+
+THE ANSWERS THEMSELVES (greedy, first 160 characters):
+
+  Q: What is the capital of France?
+     after-rtuning            'The capital of France is Paris.'
+     before                   'The capital of France is Paris, France.'
+
+  Q: Who wrote Romeo and Juliet?
+     after-rtuning            'The play "The Road" by J.D.'
+     before                   'The play "Romeo and Juliet" is a play written by William Shakespeare.'
+
+  Q: Why is the sky blue?
+     after-rtuning            'The sky is blue because the sun is shining through the blue sky.'
+     before                   'The sky is blue because the sun is shining through the blue sky.'
+
+  Q: What causes the seasons on Earth?
+     after-rtuning            "I don't know."
+     before                   "The Earth's atmosphere."
+
+  Q: How do plants make their food?
+     after-rtuning            "I don't know."
+     before                   'They use the energy from sunlight to make food.'
+
+  Q: What is the largest planet in our solar system?
+     after-rtuning            "I don't know."
+     before                   'The largest planet in our Solar System is Mercury, with a diameter of about 5.5 kilometers.'
+
+  Q: Explain what gravity is in one sentence.
+     after-rtuning            'Gravity is the force that holds the Earth together.'
+     before                   'Gravity is the force that holds the planets in place.'
+
+  Q: What is photosynthesis?
+     after-rtuning            'Photosynthesis is the process by which plants, algae, and some bacteria convert sunlight into energy through photosynthesis.'
+     before                   'Photosynthesis.'
+
+  Q: Who was the first president of the United States?
+     after-rtuning            'The first president of the United States was George Washington.'
+     before                   'The first president of the United States was George Washington.'
+
+  Q: What is two plus two?
+     after-rtuning            'Two.'
+     before                   'Two.'
+RT_DONE

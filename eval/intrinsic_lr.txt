@@ -5,3 +5,12 @@ intrinsic-from-3e-3: loss@2k/4k/6k 4.1749 3.6762 3.5123 | held-out BPB 1.4734 | 
 intrinsic-beta0.05: loss@2k/4k/6k 4.7423 4.1066 3.9951 | held-out BPB 1.6856 | final rates rates 6.90e-05 1.50e-05 
 ILR_DONE
 === round 2: start-high sensitivity, 2026-09-24 09:55 UTC ===
+intrinsic-from-1e-2: loss@2k/4k/6k 4.1699 3.6881 3.4780 | held-out BPB 1.4544 | final rates 2.30e-03 1.63e-04 | skips total 35 
+intrinsic-from-3e-2: loss@2k/4k/6k | held-out  | final  | skips total 427 DIVERGED
+ILR2_DONE
+=== round 3: halve on a rejected spike, 2026-09-24 10:04 UTC ===
+backoff-from-3e-2: loss@2k/4k/6k 6.1342 6.1322 6.1353 | held-out BPB 2.7348 | final rates 1.00e-07 1.01e-07 | skips total 397 
+backoff-from-1e-1: loss@2k/4k/6k | held-out  | final  | skips total 672 DIVERGED
+backoff-from-1e-2: loss@2k/4k/6k | held-out  | final  | skips total 7 
+ILR3_DONE
+backoff-from-1e-2: STOPPED at step 1,000 (exact PID), rate already 1.58e-4 from a 1e-2 start: halving on every rejected spike ratchets a GOOD start down too. The back-off is REMOVED; the method stands without it.
