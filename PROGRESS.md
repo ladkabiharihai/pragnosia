@@ -1588,3 +1588,12 @@ the extra compute would buy 0.3062 at the small size. Deepen exact 5.1696 -> 5.1
 Two bugs on the way: the deepen path freed the gradient buffers the captured step writes into (set_none under psf);
 a 10 GiB test cap was too small for a deepen trial. run60 at 16k: held-out BPB 1.2624, still 46M; its trials so
 far (old code) all STAY with advantage about -0.005. Resumed from 16,000 (eval/intrinsic_run3c.sh), same log.
+
+## 2026-09-27 11:09 UTC — run60 trials with carried memory: growth's advantage ~0 over 1,000 steps; trials now scale with the stage
+With psf_carry the widened copy keeps pace but does not pull ahead within 1,000 steps: step 22,000 advantage
++0.0011 vs price 0.0202; step 26,000 advantage -0.0002 vs 0.0130 -> STAY both. New capacity starts as a zero-output
+no-op and pays off over longer than a 1,000-step window, so a fixed short trial would never let it grow. Trial
+length is now a quarter of the stage so far (min --trial-steps): scale-free, a fixed fraction of the stage it decides.
+The stage clock is saved in checkpoints; an older checkpoint still at its starting shape is known never to have
+grown, so its stage began at step 0. run60 resumed at 28,000 (held-out BPB 1.2063, still 46M): next reconsider at
+32,000 with an 8,000-step trial per branch.
