@@ -22,8 +22,15 @@ def loaders(data, only=None):
     but arxiv's median is 12,710 and algebraic-stack's 10,375."""
     bins = {k: np.memmap(f"{data}/{k}.bin", dtype=np.uint16, mode="r")
             for k in MIX if os.path.exists(f"{data}/{k}.bin") and (only is None or k in only)}
+    # a corpus outside the designed mix (e.g. eval/build_recall.py's recall.bin) is loaded too, at weight 1 before
+    # normalising; it used to be skipped silently, leaving an empty corpus that failed at the first sample
+    if only is None:
+        for f in sorted(os.listdir(data)):
+            k = f[:-4]
+            if f.endswith(".bin") and k not in bins and k not in MIX:
+                bins[k] = np.memmap(f"{data}/{f}", dtype=np.uint16, mode="r")
     ks = list(bins)
-    ps = np.array([MIX[k] for k in ks], dtype=np.float64); ps /= ps.sum()
+    ps = np.array([MIX.get(k, 1.0) for k in ks], dtype=np.float64); ps /= ps.sum()
     return bins, ks, ps
 
 
@@ -325,8 +332,10 @@ def main():
                 r.log(f"extended the positional table {old_ctx} -> {a.ctx} by tiling the trained pattern {reps}x")
                 sd["cfg"]["ctx"] = a.ctx
                 grew_ctx = (old_ctx, sd["cfg"]["d"])
-            if sd["cfg"]["d"] != m.d:                      # a grown run: rebuild at the checkpoint's width
-                m = LM(vocab=a.vocab, d=sd["cfg"]["d"], layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer, norm=a.norm).cuda()
+            if sd["cfg"]["d"] != m.d or sd["cfg"].get("layers", m.layers) != m.layers:
+                # a grown run: rebuild at the checkpoint's own width AND depth
+                m = LM(vocab=a.vocab, d=sd["cfg"]["d"], layers=sd["cfg"].get("layers", a.layers), mlp_mult=a.mlp,
+                       ctx=a.ctx, mixer=a.mixer, norm=a.norm).cuda()
                 if a.fused_scan:
                     import src.assoc as _A
                     _A.FUSED_SCAN = True
@@ -334,14 +343,13 @@ def main():
                         if hasattr(_mx, "need_sent"): _mx.need_sent = False
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
-                opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2, cuda_graph=bool(a.graph and a.fused))
+                opt = make_opt(m)
             m.load_state_dict(sd["model"]); start = sd["step"]
             if sd.get("new_layers"):
                 # a checkpoint written by eval/deepen.py: its added layers train with absolute steps (see
                 # LM.param_groups), and it carries no optimizer state, so this is a cold start by design
                 m.new_layers = list(sd["new_layers"])
-                opt = Fabric(m.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused), hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2,
-                             cuda_graph=bool(a.graph and a.fused))
+                opt = make_opt(m)
                 base = [g["lr"] for g in opt.param_groups]
                 r.log(f"deepened checkpoint: {len(m.new_layers)} new layers {m.new_layers} train at absolute lr {a.new_lr}")
             # RESTORE THE OPTIMIZER TOO. Loading only the weights leaves the optimizer cold, with its second
@@ -352,6 +360,7 @@ def main():
             if "opt" in sd:
                 try:
                     opt.load_state_dict(sd["opt"])
+                    if a.optim == "psf": opt.train()   # checkpoints hold the averaged weights; back to training ones
                     if grew_ctx is not None:
                         # the positional table grew with the window, so its second moment is still sized to
                         # the old one. Fabric.grew extends it with the median of the existing rows; without
