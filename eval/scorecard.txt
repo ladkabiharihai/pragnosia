@@ -254,3 +254,72 @@ GPT-2 124M t=1.0          0.85    1.43     1.00
 
 ################ 7  LEARNING WITHOUT FORGETTING: whole model vs whole model + self-rehearsal (/mnt/kv_cache/run46_sft/ckpt.pt)
    2026-09-27 08:46 UTC
+120 invented facts, 360 training sentences, 150 steps, AdamW; /mnt/kv_cache/run46_sft/ckpt.pt
+
+                          NEW before  NEW after  OLD before  OLD after  TEXT before  TEXT after
+whole model lr 0.0001         25.8%      32.5%      72.9%      52.1%       1.1204      2.5871   (train loss 0.759)
+whole + self-rehearsal lr 0.0001      25.8%      29.2%      72.9%      68.8%       1.1204      1.3021   (train loss 1.674)
+whole model lr 0.0003         25.8%      46.7%      72.9%      50.0%       1.1204      3.7083   (train loss 0.522)
+whole + self-rehearsal lr 0.0003      25.8%      34.2%      72.9%      54.2%       1.1204      1.7852   (train loss 0.896)
+whole model lr 0.001          25.8%      55.0%      72.9%      43.8%       1.1204      4.7531   (train loss 0.390)
+whole + self-rehearsal lr 0.001      25.8%      40.8%      72.9%      58.3%       1.1204      2.5422   (train loss 0.414)
+
+Learning without forgetting: NEW rises, OLD and TEXT hold. Chance on NEW is 25%.
+
+################ 7, 8  GROWTH AND RATE DECIDED BY THE MODEL (from its training log)
+   2026-09-27 09:13 UTC
+[   500.4s]     RECONSIDER at step 3400: rate 1.03e-03 is one e-fold below the stage start 3.00e-03; TRIAL of w768 vs unchanged, 1000 steps each
+[   509.2s]     GREW to d=768 at step 3400: 97.7M params, same batch loss 3.5426 -> 3.5423, optimizer state 374 MiB carried
+[   646.0s]   eval step 4000: BPB 1.3736  (952k bytes)
+[   741.6s]     TRIAL w768: grown branch 3.5388 -> 3.4636 over 1000 steps at 97.7M; now the same steps unchanged
+[   878.6s]     DECISION at step 5400: STAY. Held-out gain per unit compute 1.505 unchanged vs 0.770 grown (3.5388 -> 3.4692 vs -> 3.4636); will reconsider after the rate anneals another e-fold
+[  1227.3s]   eval step 8000: BPB 1.3328  (952k bytes)
+[  1281.1s]     RECONSIDER at step 8400: rate 2.46e-04 is one e-fold below the stage start 6.79e-04; TRIAL of w768 vs unchanged, 1000 steps each
+[  1289.6s]     GREW to d=768 at step 8400: 97.7M params, same batch loss 3.3711 -> 3.3713, optimizer state 374 MiB carried
+[  1518.5s]     TRIAL w768: grown branch 3.3792 -> 3.3669 over 1000 steps at 97.7M; now the same steps unchanged
+[  1654.5s]     DECISION at step 10400: STAY. Held-out gain per unit compute 0.226 unchanged vs 0.126 grown (3.3792 -> 3.3688 vs -> 3.3669); will reconsider after the rate anneals another e-fold
+[  1872.1s]   eval step 12000: BPB 1.3186  (952k bytes)
+[  2300.7s]     RECONSIDER at step 15200: rate 6.85e-05 is one e-fold below the stage start 1.87e-04; TRIAL of w768 vs unchanged, 1000 steps each
+[  2308.8s]     GREW to d=768 at step 15200: 97.7M params, same batch loss 3.3209 -> 3.3207, optimizer state 374 MiB carried
+[  2489.5s]   eval step 16000: BPB 1.3110  (952k bytes)
+[  2540.6s]     TRIAL w768: grown branch 3.3396 -> 3.3339 over 1000 steps at 97.7M; now the same steps unchanged
+[  2677.9s]     DECISION at step 17200: STAY. Held-out gain per unit compute 0.110 unchanged vs 0.059 grown (3.3396 -> 3.3345 vs -> 3.3339); will reconsider after the rate anneals another e-fold
+[  3052.1s]   eval step 20000: BPB 1.3079  (952k bytes)
+[  3583.2s]   eval step 24000: BPB 1.3054  (952k bytes)
+[  3794.9s]     RECONSIDER at step 25600: rate 2.12e-05 is one e-fold below the stage start 5.82e-05; TRIAL of w768 vs unchanged, 1000 steps each
+[  3803.0s]     GREW to d=768 at step 25600: 97.7M params, same batch loss 3.3031 -> 3.3033, optimizer state 374 MiB carried
+[  4031.2s]     TRIAL w768: grown branch 3.3196 -> 3.3182 over 1000 steps at 97.7M; now the same steps unchanged
+[  4168.3s]     DECISION at step 27600: STAY. Held-out gain per unit compute 0.017 unchanged vs 0.014 grown (3.3196 -> 3.3188 vs -> 3.3182); will reconsider after the rate anneals another e-fold
+[  4224.3s]   eval step 28000: BPB 1.3042  (952k bytes)
+[  4762.8s]   eval step 32000: BPB 1.3030  (952k bytes)
+[  5301.2s]   eval step 36000: BPB 1.3021  (952k bytes)
+[  5840.2s]   eval step 40000: BPB 1.3015  (952k bytes)
+[  6265.2s]     RECONSIDER at step 43200: rate 7.07e-06 is one e-fold below the stage start 1.93e-05; TRIAL of w768 vs unchanged, 1000 steps each
+[  6273.4s]     GREW to d=768 at step 43200: 97.7M params, same batch loss 3.2943 -> 3.2943, optimizer state 374 MiB carried
+[  6453.4s]   eval step 44000: BPB 1.3010  (952k bytes)
+[  6504.2s]     TRIAL w768: grown branch 3.3106 -> 3.3107 over 1000 steps at 97.7M; now the same steps unchanged
+[  6649.2s]     DECISION at step 45200: GROW (w768). Held-out gain per unit compute -0.001 grown vs -0.006 unchanged (3.3106 -> 3.3107 vs -> 3.3109); continuing from the grown branch at 97.7M
+[  7258.9s]   eval step 48000: BPB 1.3007  (952k bytes)
+[  8123.6s]   eval step 52000: BPB 1.3003  (952k bytes)
+[  8987.6s]   eval step 56000: BPB 1.2999  (952k bytes)
+[  9849.8s]   eval step 60000: BPB 1.2995  (952k bytes)
+[ 10714.0s]   eval step 64000: BPB 1.2992  (952k bytes)
+[ 11577.0s]   eval step 68000: BPB 1.2990  (952k bytes)
+[ 12440.6s]   eval step 72000: BPB 1.2987  (952k bytes)
+[ 13304.8s]   eval step 76000: BPB 1.2985  (952k bytes)
+[ 14184.0s]   eval step 80000: BPB 1.2982  (952k bytes)
+[ 15083.1s]   eval step 84000: BPB 1.2980  (952k bytes)
+[ 15489.4s]     RECONSIDER at step 85800: rate 2.41e-06 is one e-fold below the stage start 6.57e-06; TRIAL of d vs unchanged, 1000 steps each
+[ 15499.2s]     DEEPENED to 24 layers at step 85800: 182.9M params, same batch loss 3.2851 -> 3.2851, optimizer state carried for 231 tensors, 12 new layers at absolute lr 0.0001, ramped over 1000 steps
+[ 15957.3s]     TRIAL d: grown branch 3.3034 -> 3.3171 over 1000 steps at 182.9M; now the same steps unchanged
+[ 16180.6s]     DECISION at step 87800: STAY. Held-out gain per unit compute 0.002 unchanged vs -0.075 grown (3.3034 -> 3.3031 vs -> 3.3171); will reconsider after the rate anneals another e-fold
+[ 16231.1s]   eval step 88000: BPB 1.2979  (952k bytes)
+[ 17126.9s]   eval step 92000: BPB 1.2977  (952k bytes)
+[ 18026.7s]   eval step 96000: BPB 1.2975  (952k bytes)
+[ 18891.0s]   eval step 100000: BPB 1.2974  (952k bytes)
+[ 19754.2s]   eval step 104000: BPB 1.2972  (952k bytes)
+[ 20619.7s]   eval step 108000: BPB 1.2971  (952k bytes)
+[ 21485.0s]   eval step 112000: BPB 1.2969  (952k bytes)
+[ 22348.1s]   eval step 116000: BPB 1.2968  (952k bytes)
+[ 23210.0s]   eval step 120000: BPB 1.2967  (952k bytes)
+SCORECARD_DONE 2026-09-27 09:13 UTC

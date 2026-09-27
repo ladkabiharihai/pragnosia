@@ -1520,3 +1520,15 @@ GROWTH BY TRIAL under psf (logs/psfgrow.out), three biases found and removed on 
   (3) a trial where both branches got WORSE was decided GROW because a larger denominator shrinks a negative gain
       -> grow only on a real held-out gain that beats staying's (non-negative) gain per unit compute.
   With these, fair trials: step 1,800 unchanged -0.1245 vs grown -0.115; step 3,600 -0.230 vs -0.230 -> STAY.
+
+## 2026-09-27 09:14 UTC — THE VISION SCORECARD on the current best lineage (eval/scorecard.txt; run45 base / run46 fine-tuned / run55 abstaining)
+One command (eval/scorecard.sh), identical inputs against GPT-2 124M (and SmolLM2-135M for Q&A):
+- Q&A right/WRONG/declined, everyday: ours 47.9/52.1/0; ours abstaining 45.8/41.7/12.5; GPT-2 16.7/60.4/22.9; SmolLM2 62.5/37.5/0.
+  SciQ: 7.9 / 3.0 (wrong 29.1, declined 67.9) / 2.2 / 12.7. ARC 4-way: 40.3 / 40.6 / 33.8 / 48.4.
+- Context rot, BPB by window: ours 1.076 (512) -> 1.026 (8,192), still improving with length; GPT-2 1.217 / 1.225, max 1,024.
+- Inference: 112 tok/s vs GPT-2 50, peak 1.22 vs 1.27 GiB; one million tokens of context in 3.49 GiB, flat from 131k.
+- Facts four-way 35/48 vs 33/48; calibration separation +0.238 vs +0.186. Induction 99.5% vs 98.5%.
+- Hard in-context lookup: ours at chance (20-31%), GPT-2 33-43% -- LOST (recall training prepared).
+- Generation quality: GPT-2 closer to real text (words 0.83-0.86 vs 0.71-0.79, variety 0.98-1.00 vs 0.83-0.94);
+  long generation degenerates into loops by ~16k tokens -- LOST. (genqual2.py labels its row "run44"; it is run45.)
+- Continual learning: self-rehearsal reproduces (at 1e-3: OLD 58.3 vs 43.8, TEXT 2.54 vs 4.75).
