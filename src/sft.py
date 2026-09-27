@@ -34,6 +34,9 @@ def main():
     ap.add_argument("--warm", type=int, default=200)
     ap.add_argument("--eval-every", type=int, default=500)
     ap.add_argument("--cap", type=float, default=24.0)
+    ap.add_argument("--optim", default="fabric", choices=["fabric", "psf"],
+                    help="psf: schedule-free Prodigy at its published defaults, the same as pretraining: no rate, "
+                         "no schedule, no warm-up; the saved checkpoint holds the averaged weights")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--compile", type=int, default=1, help="compile the forward; eager runs the carrier's chunk loop in python, ~10x slower")
     a = ap.parse_args()
@@ -54,7 +57,12 @@ def main():
     say(f"init {a.init}  {sum(p.numel() for p in m.parameters())/1e6:.1f}M params  {len(tr):,} train rows  "
         f"{steps:,} steps of {a.batch}x{ROW} = {steps * a.batch * ROW / 1e6:.1f}M tokens ({a.epochs} epochs)  lr {a.lr}")
 
-    opt = Fabric(m.param_groups(lr=a.lr, spectral_lr=a.spectral_lr), lr=a.lr, fused=bool(a.fused))
+    if a.optim == "psf":
+        from prodigyplus import ProdigyPlusScheduleFree
+        opt = ProdigyPlusScheduleFree([{"params": g["params"]} for g in m.param_groups(lr=a.lr, spectral_lr=a.spectral_lr)])
+        opt.train()
+    else:
+        opt = Fabric(m.param_groups(lr=a.lr, spectral_lr=a.spectral_lr), lr=a.lr, fused=bool(a.fused))
     base = [g["lr"] for g in opt.param_groups]
 
     trunk = torch.compile(m.trunk) if a.compile else m.trunk
@@ -71,25 +79,30 @@ def main():
 
     @torch.no_grad()
     def evaluate():
+        if a.optim == "psf": opt.eval()
         m.eval(); tot = 0.0; n = 0
         for i in range(0, min(len(va), 256), a.batch):
             x = torch.from_numpy(va[i:i + a.batch].astype(np.int64)).cuda()
             k = torch.from_numpy(vam[i:i + a.batch].astype(np.int64)).cuda()
             tot += float(loss_on(x, k)) * x.shape[0]; n += x.shape[0]
-        m.train(); return tot / n
+        m.train()
+        if a.optim == "psf": opt.train()
+        return tot / n
 
     rng = np.random.default_rng(a.seed)
     say(f"step 0: answer loss on held-out pairs {evaluate():.4f}")
     tl = []; tt = time.time()
     for step in range(1, steps + 1):
-        f = min(1.0, step / a.warm) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(1.0, step / steps))))
-        for g, b in zip(opt.param_groups, base): g["lr"] = b * f
+        if a.optim != "psf":
+            f = min(1.0, step / a.warm) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(1.0, step / steps))))
+            for g, b in zip(opt.param_groups, base): g["lr"] = b * f
         idx = rng.integers(0, len(tr), a.batch)
         x = torch.from_numpy(tr[idx].astype(np.int64)).cuda()
         k = torch.from_numpy(trm[idx].astype(np.int64)).cuda()
         loss = loss_on(x, k)
         opt.zero_grad(set_to_none=True); loss.backward()
-        torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0); opt.step()
+        if a.optim != "psf": torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)
+        opt.step()
         tl.append(float(loss.detach()))
         if step % 100 == 0:
             dt = time.time() - tt; tt = time.time()
@@ -97,7 +110,9 @@ def main():
                 f"eta {(steps - step) * dt / 100 / 60:.0f}m")
         if step % a.eval_every == 0 or step == steps:
             v = evaluate(); say(f"step {step:,}: answer loss on held-out pairs {v:.4f}")
+            if a.optim == "psf": opt.eval()          # save the averaged weights
             torch.save({"cfg": sd["cfg"], "model": m.state_dict(), "step": step, "sft_from": a.init}, f"{a.out}/ckpt.pt")
+            if a.optim == "psf": opt.train()
     say(f"done: {steps:,} steps, final held-out answer loss {evaluate():.4f}")
 
 
