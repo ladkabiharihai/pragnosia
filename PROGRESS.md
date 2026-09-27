@@ -1485,3 +1485,38 @@ Read on 2026-09-27; the run ended 2026-09-24 19:15 UTC and nothing ran in betwee
 WITHDRAWN: "the intrinsic rate beats the tuned schedule". It did over 6,000 steps from a high start; over 120,000 it
 collapses. Growth-by-trial stands as a mechanism (every event exact, decisions checked at equal compute early on),
 but it needs a rate that keeps learning. run46_sft / run55_rtune_bal stay the best models.
+- `2026-09-27 07:25:44 UTC` **train** (0.5 min) FAILED: AttributeError("'ProdigyPlusScheduleFree' object has no attribute 'recaptures'")
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/psf_tmp
+  (log `logs/20260927-072513-train.log`, seed 0)
+- `2026-09-27 07:26:58 UTC` **train** (1.1 min) ok
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/psf_tmp
+  (log `logs/20260927-072553-train.log`, seed 0)
+- `2026-09-27 08:04:04 UTC` **train** (5.3 min) FAILED: AttributeError("'ProdigyPlusScheduleFree' object has no attribute 'state_bytes'")
+  d512 L12 mlp4 ctx2048 B8 6000 steps -> /mnt/kv_cache/psfgrow_tmp
+  (log `logs/20260927-075848-train.log`, seed 0)
+- `2026-09-27 08:37:59 UTC` **train** (70.7 min) ok
+  d512 L12 mlp4 ctx2048 B8 30000 steps -> /mnt/kv_cache/rl_tuned
+  (log `logs/20260927-072720-train.log`, seed 0)
+- `2026-09-27 08:38:25 UTC` **train** (71.1 min) ok
+  d512 L12 mlp4 ctx2048 B8 30000 steps -> /mnt/kv_cache/rl_hyper
+  (log `logs/20260927-072720-train.log`, seed 0)
+- `2026-09-27 08:59:31 UTC` **train** (92.2 min) ok
+  d512 L12 mlp4 ctx2048 B8 30000 steps -> /mnt/kv_cache/rl_psf
+  (log `logs/20260927-072720-train.log`, seed 0)
+
+## 2026-09-27 08:59 UTC — GOAL 8 FIXED AND VALIDATED ON THE LONG HORIZON: schedule-free Prodigy beats the tuned schedule (eval/rate_long.txt)
+Diagnosis of the collapse: any rule that tunes the rate by its short-term effect lowers it, because a lower rate always
+buys an immediate drop in noise (short-horizon bias). Fix: schedule-free averaging (Defazio et al. 2024) supplies
+that noise reduction through the averaged weights, so the step never has to fall; Prodigy (Mishchenko & Defazio)
+estimates the step from distance travelled, a lower bound that can only rise. prodigy-plus-schedule-free, EVERY
+setting at its published default (lr multiplier 1, d0 1e-6); --optim psf. 12L d512, 30,000 steps, held-out BPB:
+                5k      10k     15k     20k     25k     30k
+    tuned     1.5480  1.4165  1.3512  1.3082  1.2828  1.2720   (cosine set for exactly 30k steps)
+    hyper     1.5010  1.3782  1.3397  1.3228  1.3143  1.3085   (collapse reproduced at small scale)
+    psf       1.5550  1.3980  1.3379  1.3017  1.2761  1.2572   no rate, no schedule, no warm-up
+GROWTH BY TRIAL under psf (logs/psfgrow.out), three biases found and removed on the way:
+  (1) optimizer rebuilt at growth restarted the step size at 1e-6 -> the learned step size is carried (carry_d);
+  (2) the unchanged branch kept its long weight average -> both branches restart from the averaged weights;
+  (3) a trial where both branches got WORSE was decided GROW because a larger denominator shrinks a negative gain
+      -> grow only on a real held-out gain that beats staying's (non-negative) gain per unit compute.
+  With these, fair trials: step 1,800 unchanged -0.1245 vs grown -0.115; step 3,600 -0.230 vs -0.230 -> STAY.

@@ -102,6 +102,9 @@ def main():
     ap.add_argument("--data2", default="", help="a second corpus directory, sampled for --data2-frac of the sequences")
     ap.add_argument("--data2-frac", type=float, default=0.0)
     ap.add_argument("--ul", type=float, default=0.0, help="unlikelihood weight on recently emitted tokens (0 = off)")
+    ap.add_argument("--optim", default="fabric", choices=["fabric", "psf"],
+                    help="psf: schedule-free Prodigy (Defazio 2024; Mishchenko & Defazio 2023), every setting at its "
+                         "published default: no rate, no schedule, no warm-up; evaluation and checkpoints use the averaged weights")
     ap.add_argument("--intrinsic-lr", type=int, default=0,
                     help="the optimizer sets its own step size (goal 8), no warm-up, no schedule: 1 = hypergradient "
                          "(--lr/--new-lr are only where it starts), 2 = layer-wise DoG (no rate at all)")
@@ -170,8 +173,8 @@ def main():
         elif op_.startswith("w"): grow_w[int(st_)] = int(op_[1:])
         else: raise ValueError(f"unknown growth op {op_!r} in --grow-schedule")
     auto_events = [e.split("+") for e in a.grow_auto.split(",") if e]
-    if auto_events and a.intrinsic_lr != 1:
-        raise ValueError("--grow-auto reads the intrinsic rate; it needs --intrinsic-lr 1")
+    if auto_events and a.intrinsic_lr != 1 and a.optim != "psf":
+        raise ValueError("--grow-auto needs a model-set step size: --intrinsic-lr 1 or --optim psf")
     if a.grow_at: grow_w[a.grow_at] = a.grow_to
     if a.deepen_at: grow_d.add(a.deepen_at)
     os.makedirs(a.out, exist_ok=True)
@@ -208,9 +211,41 @@ def main():
         base = None                                  # set from the optimizer's own groups, just below
         # The eager optimizer was CPU-bound: 19.5 ms issuing ~4,500 kernels per step. Fused and graphed it is
         # a few hundred kernels replayed without python; grads must then be zeroed in place, not set to None.
-        opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2, cuda_graph=bool(a.graph and a.fused))
+        def make_opt(model):
+            if a.optim == "psf":
+                from prodigyplus import ProdigyPlusScheduleFree
+                o_ = ProdigyPlusScheduleFree([{"params": g["params"]} for g in model.param_groups(lr=a.lr, new_lr=a.new_lr)])
+                o_.train(); o_.cuda_graph = False; o_.recaptures = 0
+                o_.state_bytes = lambda: sum(v.numel() * v.element_size() for st in o_.state.values()
+                                             for v in st.values() if torch.is_tensor(v))
+                return o_
+            return Fabric(model.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused),
+                          hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2,
+                          cuda_graph=bool(a.graph and a.fused))
+        D_KEYS = ("d", "d_prev", "d_numerator", "d_denom", "running_d_numerator", "running_d_denom",
+                  "max_d_numerator", "prev_d_numerator")
+        def carry_d(old, new):
+            # A GROWN MODEL KEEPS THE STEP SIZE IT HAD LEARNED. Rebuilt from scratch, Prodigy restarts at d0 = 1e-6
+            # and the grown copy spent a whole 300-step growth trial warming up (grown 5.3377 -> 5.3090 while
+            # unchanged went to 5.1364, 2026-09-27): a trial biased against growth by the optimizer, not the model.
+            # Only the step-size estimate is carried; the schedule-free average restarts at the grown weights, which
+            # compute the same function. A group new to the model (added layers) takes the main group's estimate.
+            for gi, g in enumerate(new.param_groups):
+                src = old.param_groups[gi] if gi < len(old.param_groups) else old.param_groups[0]
+                for k in D_KEYS:
+                    if k in src: g[k] = src[k]
+        if a.optim == "psf":
+            # GOAL 8, SECOND DESIGN (2026-09-27). The hypergradient rate collapsed over a long run (3e-3 -> 1.5e-6 in
+            # 120k steps, learning stopped): any rule that tunes the rate by its short-term effect lowers it, because a
+            # lower rate always buys an immediate drop in noise. Schedule-free averaging gives that noise reduction
+            # through the averaged weights instead, so the step size never has to fall; Prodigy estimates it from
+            # the distance travelled, a lower bound that can only rise. Both at their published defaults.
+            opt = make_opt(m)
+            set_none = False                         # the captured micro-step writes into fixed grad buffers
+        else:
+            opt = Fabric(m.param_groups(lr=a.lr), lr=a.lr, fused=bool(a.fused), hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2, cuda_graph=bool(a.graph and a.fused))
+            set_none = not opt.cuda_graph
         base = [g["lr"] for g in opt.param_groups]
-        set_none = not opt.cuda_graph
         rng = np.random.default_rng(a.seed)
 
         # THE MICRO-STEP AS ONE CUDA GRAPH. With the scan in Triton the step was launch-bound: 1.3 ms of
@@ -346,6 +381,7 @@ def main():
 
         t0 = time.time(); ema = None; t_prev = 0.0
 
+        stage_t0, stage_next = [start], [4 * a.trial_steps]
         stage_rate = [a.lr]                  # the main rate when the current stage began: saturation is judged
                                              # against it, so each stage anneals on from where the last one ended
         def restart_rates():
@@ -353,7 +389,7 @@ def main():
             # learned ~1e-3 back to 3e-3 knocked a deepened model from loss 3.30 to 5.74 (measured 2026-09-24).
             # They keep their rate; layers new to this stage (the absolute-step group) start small and the
             # hypergradient raises them as they prove useful, so even their ramp-in is the model's own.
-            if not a.grow_auto: return
+            if not a.grow_auto or a.optim == "psf": return      # psf has no rate to restart or record
             # NO RATE IS RESET AT A WIDEN. Restarting it at the stage start (tried 2026-09-24) caused a transient that
             # made a 500-step growth trial read the grown branch as WORSE (3.9234 -> 3.9655 while unchanged went to
             # 3.8695), and a reset is a hand-made intervention besides. The grown model keeps its own rate; the
@@ -389,10 +425,13 @@ def main():
         xs_eval = batch(bins, ks, ps, np.random.default_rng(424242), 4, 2048)
         trial = None
         def heldout():
+            if a.optim == "psf": opt.eval()
             m.eval()
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 l_ = F.cross_entropy(m(xs_eval[:, :2048]).float().reshape(-1, a.vocab), xs_eval[:, 1:2049].reshape(-1)).item()
-            m.train(); return l_
+            m.train()
+            if a.optim == "psf": opt.train()
+            return l_
         def to_dev(o, dev):
             if torch.is_tensor(o): return o.to(dev)
             if isinstance(o, dict): return {k: to_dev(v, dev) for k, v in o.items()}
@@ -415,11 +454,10 @@ def main():
             if a.fused_scan:
                 for mx_ in m.mix:
                     if hasattr(mx_, "need_sent"): mx_.need_sent = False
-            opt = Fabric(m.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused),
-                         hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2,
-                         cuda_graph=bool(a.graph and a.fused))
+            opt = make_opt(m)
             opt.load_state_dict(to_dev(S["opt"], "cuda"))
-            base = [g["lr"] for g in opt.param_groups]; set_none = not opt.cuda_graph
+            if a.optim == "psf": opt.train()
+            base = [g["lr"] for g in opt.param_groups]; set_none = False if a.optim == "psf" else not opt.cuda_graph
             fwd = torch.compile(m) if a.compile else m
             trunk = torch.compile(m.trunk) if a.compile else m.trunk
             if len(shapes) > 1: graphs.update({(B_, T_): capture(T_, B_) for T_, B_ in shapes})
@@ -432,6 +470,13 @@ def main():
                     trial["Lg"], trial["Pg"] = heldout(), nparams()
                     trial["G"] = snapshot()
                     install(trial.pop("S0"))
+                    if a.optim == "psf":
+                        # THE SAME START FOR BOTH BRANCHES. The grown branch starts from the averaged weights with a
+                        # fresh schedule-free average; left alone, the unchanged branch would keep its long average,
+                        # which lowers held-out loss by itself, and growth could never win (measured 2026-09-27:
+                        # unchanged 5.1266 -> 5.0147 vs grown -> 5.1207 at the second trial). So it too restarts
+                        # from its averaged weights, same carried step size: the only difference left is the size.
+                        opt.eval(); fresh = make_opt(m); carry_d(opt, fresh); opt = fresh
                     hist.fill_(float("nan")); g0 = i
                     trial["phase"], trial["end"] = "stay", i + a.trial_steps
                     r.log(f"    TRIAL {'+'.join(trial['ev'])}: grown branch {trial['L0']:.4f} -> {trial['Lg']:.4f} over "
@@ -439,17 +484,24 @@ def main():
                 else:
                     Ls, Ps = heldout(), nparams()
                     gg = (trial["L0"] - trial["Lg"]) / trial["Pg"]; gs_ = (trial["L0"] - Ls) / Ps
-                    if gg > gs_:
+                    # GROW ONLY ON A REAL GAIN. Dividing a loss INCREASE by compute makes the larger model look
+                    # better (a bigger denominator shrinks a negative number): a trial where both branches got worse
+                    # and the unchanged one got less worse (4.1020 vs 4.1206) was decided GROW (2026-09-27). Now the
+                    # grown branch must improve held-out loss, by more per unit compute than staying did (a stay
+                    # that did not improve counts as zero); otherwise the trial is inconclusive and the model stays.
+                    if trial["L0"] - trial["Lg"] > 0 and gg > max(gs_, 0.0):
                         G = trial["G"]; install(G); auto_events[:] = G["auto"][1:]
-                        hist.fill_(float("nan")); g0 = i; stage_rate[0] = opt.rates()[0]
+                        stage_t0[0], stage_next[0] = i, 4 * a.trial_steps
+                        hist.fill_(float("nan")); g0 = i
+                        if a.optim != "psf": stage_rate[0] = opt.rates()[0]
                         r.log(f"    DECISION at step {i}: GROW ({'+'.join(trial['ev'])}). Held-out gain per unit compute "
                               f"{gg*1e9:.3f} grown vs {gs_*1e9:.3f} unchanged ({trial['L0']:.4f} -> {trial['Lg']:.4f} vs "
                               f"-> {Ls:.4f}); continuing from the grown branch at {nparams()/1e6:.1f}M")
                     else:
-                        stage_rate[0] = opt.rates()[0]
+                        if a.optim != "psf": stage_rate[0] = opt.rates()[0]
                         r.log(f"    DECISION at step {i}: STAY. Held-out gain per unit compute {gs_*1e9:.3f} unchanged vs "
                               f"{gg*1e9:.3f} grown ({trial['L0']:.4f} -> {Ls:.4f} vs -> {trial['Lg']:.4f}); "
-                              f"will reconsider after the rate anneals another e-fold")
+                              + ("will reconsider when this stage's length doubles again" if a.optim == "psf" else "will reconsider after the rate anneals another e-fold"))
                     trial = None
             w = min(1.0, (i + 1) / a.warm)
             # cosine over the whole budget: a flat rate lets a model equilibrate at that rate's noise floor,
@@ -472,14 +524,20 @@ def main():
             if i in grow_w and m.d < grow_w[i]:
                 # GROWTH (vision goal 7): widen in place, function preserved, optimizer state carried. The
                 # loss right before and right after is logged so the cost of the event is a number.
+                if a.optim == "psf": opt.eval()          # measured and grown at the AVERAGED weights, the model
                 xg = batch(bins, ks, ps, np.random.default_rng(7), a.batch, a.ctx)
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                     lb = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
                 # free the old CUDA graphs BEFORE growing: old and new together exceed the cap at the late stages
                 graphs.clear(); gs = None; g_ = None; gc.collect()
                 torch._dynamo.reset(); torch.cuda.empty_cache()
-                for p_, (old_p, sh) in m.grow(grow_w[i]).items():
-                    opt.grew(p_, sh, replaces=old_p)
+                grown_ = m.grow(grow_w[i])
+                if a.optim == "psf":
+                    # rebuilt for the new shapes, keeping its learned step size (carry_d)
+                    o_old = opt; opt = make_opt(m); carry_d(o_old, opt); del o_old; set_none = False
+                else:
+                    for p_, (old_p, sh) in grown_.items():
+                        opt.grew(p_, sh, replaces=old_p)
                 opt.zero_grad(set_to_none=True)             # grad buffers are the old shape
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
@@ -500,6 +558,7 @@ def main():
                 # what it did before (new layers start at zero output; measured 1.949016 -> 1.949016 on run47).
                 # Every existing layer keeps its optimizer state; the new ones get their own absolute-step group.
                 # Growing a shallow model late in the run costs half the compute per token until then.
+                if a.optim == "psf": opt.eval()          # measured and deepened at the AVERAGED weights, the model
                 xg = batch(bins, ks, ps, np.random.default_rng(7), a.batch, a.ctx)
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                     lb = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
@@ -514,13 +573,13 @@ def main():
                 for j, q in enumerate(keep):
                     pairs += list(zip(old_m.mix[j].parameters(), big.mix[q].parameters()))
                     pairs += list(zip(old_m.mlp[j].parameters(), big.mlp[q].parameters()))
-                opt2 = Fabric(big.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused), hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2,
-                              cuda_graph=bool(a.graph and a.fused))
+                opt2 = make_opt(big)
+                if a.optim == "psf": carry_d(opt, opt2)
                 if a.intrinsic_lr == 1:            # the rates the optimizer found are kept; new layers start at --new-lr
                     for g_old, g_new in zip(opt.rates()[:2], opt2.param_groups[:2]):
                         g_new["lr"] = g_old
                 carried = 0
-                for po, pn in pairs:
+                for po, pn in (pairs if a.optim != "psf" else ()):
                     if po in opt.state: opt2.state[pn] = opt.state[po]; carried += 1
                 # free the shallow model's CUDA graphs BEFORE capturing the deep one's: both at once would be
                 # ~15 + ~28 GiB, over the cap
@@ -545,7 +604,7 @@ def main():
                 grown_at = i; hist.fill_(float("nan")); g0 = i
                 restart_rates()
             # rates are set AFTER any growth event: a deepen rebuilds the optimizer at its base rates
-            for gi, g in (() if a.intrinsic_lr else enumerate(opt.param_groups)):
+            for gi, g in (() if (a.intrinsic_lr or a.optim == "psf") else enumerate(opt.param_groups)):
                 g["lr"] = base[gi] * sched * w
             if len(opt.param_groups) > 2 and not a.intrinsic_lr:
                 # layers added mid-run start from empty optimizer state; their first absolute steps are sign-like
@@ -572,7 +631,8 @@ def main():
             # gradient-norm read below is a sync and everything after it is a gap the card sits through
             T_n, B_n = shapes[rng.choice(len(shapes), p=mix_p)] if len(shapes) > 1 else shapes[0]
             nxt = [batch(bins, ks, ps, rng, B_n, T_n, extra, a.data2_frac) for _ in range(a.accum)]
-            gn = torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)          # a device scalar, not read
+            # (schedule-free Prodigy must not be clipped: its step-size estimate reads the raw gradient)
+            gn = torch.nn.utils.clip_grad_norm_(m.parameters(), float("inf") if a.optim == "psf" else 1.0)
             # SPIKE GUARD. The previous run went from loss 4.0998 to NaN between step 14,200 and 14,400, a
             # sudden spike rather than a drift. Clipping bounds the step but still applies a direction taken
             # from a pathological batch, and the optimizer then carries that direction in its state for
@@ -608,7 +668,8 @@ def main():
                       f"(last 200: {200*tok_per_step/max(1e-9, el-t_prev)/1e3:.0f}) "
                       f"eta {(a.steps-i-1)*el/max(1,done)/60:.0f}m"
                       f" {torch.cuda.memory_reserved()/2**30:.1f} GiB"
-                      + (" rates " + " ".join(f"{q:.2e}" for q in opt.rates()) if a.intrinsic_lr else ""))
+                      + (" rates " + " ".join(f"{q:.2e}" for q in opt.rates()) if a.intrinsic_lr else "")
+                      + (" d " + " ".join(f"{float(g.get('d', 0)):.2e}" for g in opt.param_groups) if a.optim == "psf" else ""))
                 t_prev = el
                 if opt.recaptures:
                     r.log(f"    optimizer step recaptured {opt.recaptures} times")
@@ -617,16 +678,25 @@ def main():
                     sig = {op_: growth_signal(m, op_, xp, bool(a.fused_scan), a.chunks) for op_ in a.growth_probe.split(",")}
                     r.log(f"    PROBE step {i+1}: new/existing gradient per parameter " + "  ".join(f"{k} {v:.3f}" for k, v in sig.items()))
                 if auto_events and trial is None and i + 1 + 2 * a.trial_steps < a.steps:
-                    rt = opt.rates()[0]
-                    if rt < stage_rate[0] / math.e:
+                    # WHEN TO RECONSIDER: under the hypergradient, at each e-fold of its rate; under schedule-free
+                    # Prodigy, which never anneals, each time the current stage's length has doubled (first at 4
+                    # trial lengths), so the checks space out geometrically with the stage. The trial decides.
+                    if a.optim == "psf":
+                        due = (i + 1 - stage_t0[0]) >= stage_next[0]
+                        rt = stage_rate[0] = 1.0
+                    else:
+                        rt = opt.rates()[0]; due = rt < stage_rate[0] / math.e
+                    if due:
+                        stage_next[0] = 2 * (i + 1 - stage_t0[0])
                         ev = auto_events[0]
                         trial = dict(phase="grow", ev=ev, L0=heldout(), S0=snapshot(), end=i + 1 + a.trial_steps)
                         for op_ in ev:
                             if op_ == "d": grow_d.add(i + 1)
                             elif op_.startswith("w"): grow_w[i + 1] = int(op_[1:])
                             elif op_.startswith("a"): grow_a[i + 1] = int(op_[1:])
-                        r.log(f"    RECONSIDER at step {i+1}: rate {rt:.2e} is one e-fold below the stage start "
-                              f"{stage_rate[0]:.2e}; TRIAL of {'+'.join(ev)} vs unchanged, {a.trial_steps} steps each")
+                        why = (f"this stage's length has doubled to {i+1-stage_t0[0]} steps" if a.optim == "psf" else
+                               f"rate {rt:.2e} is one e-fold below the stage start {stage_rate[0]:.2e}")
+                        r.log(f"    RECONSIDER at step {i+1}: {why}; TRIAL of {'+'.join(ev)} vs unchanged, {a.trial_steps} steps each")
                 if nnf > nf_prev:
                     # the guard zeroed those steps; the run continues unless the weights themselves went bad
                     alive = bool(torch.stack([p_.isfinite().all() for p_ in m.parameters()]).all().item())
@@ -657,8 +727,10 @@ def main():
                 # the batch already halved to one (2026-09-22). A fixed 8,192 also makes the number
                 # comparable across runs, which evaluating at each run's own window never was.
                 torch.cuda.empty_cache()
+                if a.optim == "psf": opt.eval()          # measured at the averaged weights, which are the model
                 b, nb = eval_bpb(m, tok, bins, ks, ps, np.random.default_rng(1234),
                                  n_batches=8, B=4, T=min(a.ctx, 8192), vocab=a.vocab)
+                if a.optim == "psf": opt.train()
                 torch.cuda.empty_cache()
                 r.log(f"  eval step {i+1}: BPB {b:.4f}  ({nb/1e3:.0f}k bytes)")
                 # DEGRADING, not frozen: fspin at 6e-3 went 1.7075 -> 1.7534 -> 2.1130 over three evals while
@@ -672,6 +744,7 @@ def main():
                 # NEVER OVERWRITE A GOOD CHECKPOINT WITH A BROKEN ONE. The previous run saved NaN weights over
                 # a healthy checkpoint and only a stray copy survived. Verify before writing, and keep the
                 # previous file as last-known-good.
+                if a.optim == "psf": opt.eval()          # the checkpoint holds the averaged weights
                 bad = sum(1 for v in m.state_dict().values() if not torch.isfinite(v).all())
                 if bad:
                     r.log(f"    refusing to checkpoint: {bad} non-finite tensors")
@@ -684,6 +757,7 @@ def main():
                                             mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer, norm=a.norm),
                                 "new_layers": list(getattr(m, "new_layers", []))},
                                f"{a.out}/ckpt.pt")
+                if a.optim == "psf": opt.train()
         if ema_t is None:
             r.log(f"NOTHING TO DO: resumed at step {start} with --steps {a.steps}. A resumed run counts from the "
                   f"checkpoint's step, so --steps must exceed it.")
