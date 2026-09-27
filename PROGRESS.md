@@ -1563,3 +1563,28 @@ queued pipeline were stopped (PIDs 1332419, 1334189, 1336613), the variable rena
 step-4,000 checkpoint (the unchanged 46M model, saved just before the trial) -- eval/intrinsic_run3b.sh, same log.
 Its first trial (before the crash): growth's advantage -0.0053 vs 0.4423 its extra compute would buy -> STAY.
 Resumed at 390 ktok/s: the earlier 188 was mostly the card being shared with the rate test and the scorecard.
+- `2026-09-27 10:20:47 UTC` **train** (3.4 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 16.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 11.59 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1070667 has 2.29 GiB memory in use. Process 1071182 has 3.60 GiB memory in use. Process 1271044 has 37.25 GiB memory in use. Process 1272468 has 946.00 MiB memory in use. Process 1272469 has 946.00 MiB memory in use. Process 1272470 has 946.00 MiB memory in use. Process 1272467 has 946.00 MiB memory in use. Process 1337012 has 14.02 GiB memory in use. Process 1340072 has 9.55 GiB memory in use. Including non-PyTorch memory, this process has 10.98 GiB memory in use. 10.00 GiB allowed; Of the allocated memory 9.99 GiB is allocated by PyTorch, with 8.68 GiB allocated in private pools (e.g., CUDA Graphs), and 3.30 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx2048 B8 2400 steps -> /mnt/kv_cache/carry_d
+  (log `logs/20260927-101721-train.log`, seed 0)
+- `2026-09-27 10:24:13 UTC` **train** (6.9 min) ok
+  d512 L12 mlp4 ctx2048 B8 2400 steps -> /mnt/kv_cache/carry_w768
+  (log `logs/20260927-101721-train.log`, seed 0)
+- `2026-09-27 10:24:21 UTC` **train** (3.4 min) FAILED: RuntimeError('Tensor list must have at least one tensor.')
+  d512 L12 mlp4 ctx2048 B8 2400 steps -> /mnt/kv_cache/carry_d
+  (log `logs/20260927-102057-train.log`, seed 0)
+- `2026-09-27 10:29:54 UTC` **train** (5.3 min) ok
+  d512 L12 mlp4 ctx2048 B8 2400 steps -> /mnt/kv_cache/carry_d
+  (log `logs/20260927-102435-train.log`, seed 0)
+
+## 2026-09-27 10:31 UTC — growth trials made fully fair (psf_carry); run60 resumed at step 16,000 with it
+In five trials the grown copy never beat the unchanged one, because rebuilding the optimizer at a growth restarted
+every weight's statistics, which disturbs the bigger model more. psf_carry moves schedule-free Prodigy's memory
+across growth as Fabric.grew does: same-shape weights keep their state (all of a deepen's old layers); widened
+weights get z padded with the new weights' values and the second moment padded with its median; group state (step
+size, schedule-free weight sum, step count) is copied; neither trial branch restarts its average any more.
+Small tests: widen exact 5.0849 -> 5.0848 with 388 MiB carried; the grown branch now learns 5.3003 -> 5.0186 in 300
+steps (was 5.2920 -> 5.1771 rebuilt) and beats unchanged by +0.1006 -- the decision is still STAY that early because
+the extra compute would buy 0.3062 at the small size. Deepen exact 5.1696 -> 5.1696, advantage +0.0013 -> STAY.
+Two bugs on the way: the deepen path freed the gradient buffers the captured step writes into (set_none under psf);
+a 10 GiB test cap was too small for a deepen trial. run60 at 16k: held-out BPB 1.2624, still 46M; its trials so
+far (old code) all STAY with advantage about -0.005. Resumed from 16,000 (eval/intrinsic_run3c.sh), same log.
