@@ -241,6 +241,50 @@ def main():
                 src = old.param_groups[gi] if gi < len(old.param_groups) else old.param_groups[0]
                 for k in D_KEYS:
                     if k in src: g[k] = src[k]
+        def psf_carry(old, new, grown=None, pairs=None):
+            """CARRY SCHEDULE-FREE PRODIGY'S MEMORY ACROSS A GROWTH, as Fabric.grew does for Fabric. Rebuilding it fresh
+            restarted every weight's statistics, which hurt the grown branch of a trial more than the unchanged one
+            (more weights to disturb): the grown copy never beat the unchanged one in five trials (2026-09-27).
+              same-shape weights (all of a deepen's old layers; weights a widen leaves alone): state moved as is
+              widened weights: z (the schedule-free base) takes the old values in the old slots and the grown weights'
+              values in the new ones, so new slots start consistent (x = y = z); the second moment is padded with its
+              median; the distance baseline for Prodigy (p0, s) restarts for that tensor -- the group's step size d,
+              carried below, is a running maximum and does not fall with it.
+            Group state (d and its accumulators, the schedule-free weight sum, the step count) is copied by position;
+            a group new to the model (added layers) takes the main group's step size and starts its own average."""
+            for gi, g in enumerate(new.param_groups):
+                if gi < len(old.param_groups):
+                    for k, v in old.param_groups[gi].items():
+                        if k != "params": g[k] = v
+                else:
+                    for k in D_KEYS:
+                        if k in old.param_groups[0]: g[k] = old.param_groups[0][k]
+                    g["train_mode"] = old.param_groups[0].get("train_mode", False)
+            src = {id(pn): po for po, pn in (pairs or [])}
+            for g in new.param_groups:
+                for pn in g["params"]:
+                    if grown and pn in grown:
+                        po, sh = grown[pn]; st = old.state.get(po)
+                        if not st: continue
+                        ns = {}
+                        z = pn.detach().clone(); z[tuple(slice(0, k) for k in sh)] = st["z"]; ns["z"] = z
+                        if "exp_avg_sq_row" in st:
+                            dr, dc = st["exp_avg_sq_metadata"]
+                            for key, dim_one in (("exp_avg_sq_row", dr), ("exp_avg_sq_col", dc)):
+                                ov = st[key]; tgt = list(pn.shape); tgt[dim_one] = 1
+                                nv = torch.full(tgt, float(ov.median()), dtype=ov.dtype, device=ov.device)
+                                nv[tuple(slice(0, k) for k in ov.shape)] = ov; ns[key] = nv
+                            ns["exp_avg_sq_metadata"] = (dr, dc)
+                        elif "exp_avg_sq" in st:
+                            ov = st["exp_avg_sq"]; nv = torch.full(pn.shape, float(ov.median()), dtype=ov.dtype, device=ov.device)
+                            nv[tuple(slice(0, k) for k in sh)] = ov; ns["exp_avg_sq"] = nv
+                        sl = new.get_sliced_tensor(pn)
+                        ns["p0"] = sl.to(torch.bfloat16).clone() if pn.any() else torch.tensor(0.0, dtype=torch.bfloat16, device=pn.device)
+                        ns["s"] = torch.zeros_like(sl, dtype=torch.bfloat16)
+                        new.state[pn] = ns
+                    else:
+                        po = src.get(id(pn), pn)
+                        if po in old.state: new.state[pn] = old.state[po]
         if a.optim == "psf":
             # GOAL 8, SECOND DESIGN (2026-09-27). The hypergradient rate collapsed over a long run (3e-3 -> 1.5e-6 in
             # 120k steps, learning stopped): any rule that tunes the rate by its short-term effect lowers it, because a
@@ -480,8 +524,8 @@ def main():
                     trial["Lg"], trial["Pg"] = heldout(), nparams()
                     trial["G"] = snapshot()
                     install(trial.pop("S0"))
-                    if a.optim == "psf":
-                        # THE SAME START FOR BOTH BRANCHES. The grown branch starts from the averaged weights with a
+                    if False:
+                        # (SUPERSEDED by psf_carry: neither branch restarts its average now.) THE SAME START FOR BOTH BRANCHES. The grown branch starts from the averaged weights with a
                         # fresh schedule-free average; left alone, the unchanged branch would keep its long average,
                         # which lowers held-out loss by itself, and growth could never win (measured 2026-09-27:
                         # unchanged 5.1266 -> 5.0147 vs grown -> 5.1207 at the second trial). So it too restarts
@@ -561,8 +605,9 @@ def main():
                 torch._dynamo.reset(); torch.cuda.empty_cache()
                 grown_ = m.grow(grow_w[i])
                 if a.optim == "psf":
-                    # rebuilt for the new shapes, keeping its learned step size (carry_d)
-                    o_old = opt; opt = make_opt(m); carry_d(o_old, opt); del o_old; set_none = False
+                    # rebuilt for the new shapes WITH its memory carried (psf_carry); returned to training weights
+                    # after the exactness check below
+                    o_old = opt; opt = make_opt(m); psf_carry(o_old, opt, grown=grown_); del o_old; set_none = False
                 else:
                     for p_, (old_p, sh) in grown_.items():
                         opt.grew(p_, sh, replaces=old_p)
@@ -579,6 +624,7 @@ def main():
                 P = sum(p.numel() for p in m.parameters())
                 r.log(f"    GREW to d={m.d} at step {i}: {P/1e6:.1f}M params, same batch loss {lb:.4f} -> {la:.4f}, "
                       f"optimizer state {opt.state_bytes()/2**20:.0f} MiB carried")
+                if a.optim == "psf": opt.train()
                 hist.fill_(float("nan")); g0 = i      # the grown model's gradient norm is its own; re-learn it
                 restart_rates()
             if i in grow_d:
@@ -602,7 +648,7 @@ def main():
                     pairs += list(zip(old_m.mix[j].parameters(), big.mix[q].parameters()))
                     pairs += list(zip(old_m.mlp[j].parameters(), big.mlp[q].parameters()))
                 opt2 = make_opt(big)
-                if a.optim == "psf": carry_d(opt, opt2)
+                if a.optim == "psf": psf_carry(opt, opt2, pairs=pairs)
                 if a.intrinsic_lr == 1:            # the rates the optimizer found are kept; new layers start at --new-lr
                     for g_old, g_new in zip(opt.rates()[:2], opt2.param_groups[:2]):
                         g_new["lr"] = g_old
@@ -615,7 +661,7 @@ def main():
                 m, opt = big, opt2
                 del old_m, opt2, big, pairs      # pairs held every shallow parameter (and its grad) alive
                 base = [g["lr"] for g in opt.param_groups]
-                set_none = not opt.cuda_graph
+                set_none = False if a.optim == "psf" else not opt.cuda_graph   # psf: graphs write into fixed grad buffers
                 fwd = trunk = None; torch._dynamo.reset(); gc.collect(); torch.cuda.empty_cache()
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
@@ -629,6 +675,7 @@ def main():
                 r.log(f"    DEEPENED to {m.layers} layers at step {i}: {P/1e6:.1f}M params, same batch loss "
                       f"{lb:.4f} -> {la:.4f}, optimizer state carried for {carried} tensors, "
                       f"{len(m.new_layers)} new layers at absolute lr {a.new_lr}, ramped over {a.new_warm} steps")
+                if a.optim == "psf": opt.train()
                 grown_at = i; hist.fill_(float("nan")); g0 = i
                 restart_rates()
             # rates are set AFTER any growth event: a deepen rebuilds the optimizer at its base rates
