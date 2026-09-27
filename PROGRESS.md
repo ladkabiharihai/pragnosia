@@ -1549,3 +1549,17 @@ STAY at 3,600 (advantage 0.016 vs 0.387 the extra compute would buy). Queued eva
 (6,000 steps, 25% eval/build_recall.py data), factual fine-tune, balanced own-mistake abstention, full scorecard --
 all with schedule-free Prodigy. Fine-tuning (src/sft.py --optim psf) no longer has a hand-set rate either.
 Today's scorecard for the run46 lineage kept as eval/scorecard_run46.txt.
+- `2026-09-27 09:45:09 UTC` **train** (32.2 min) ok
+  d512 L12 mlp4 ctx2048 B8 16000 steps -> /mnt/kv_cache/psfgrow_tmp
+  (log `logs/20260927-091257-train.log`, seed 0)
+- `2026-09-27 09:45:44 UTC` **train** (32.8 min) FAILED: TypeError('cannot unpack non-iterable int object')
+  d512 L12 mlp4 ctx8192 B2 120000 steps -> /mnt/kv_cache/run60_intrinsic
+  (log `logs/20260927-091257-train.log`, seed 0)
+
+## 2026-09-27 09:47 UTC — run60 CRASHED at its first decision (my bug) and was resumed from step 4,000
+The penalty-free decision code named a variable "extra", which is the second-corpus loader; the next batch sample
+got a number and raised TypeError. The chained script then began fine-tuning the crashed checkpoint; that and the
+queued pipeline were stopped (PIDs 1332419, 1334189, 1336613), the variable renamed, and run60 resumed from its
+step-4,000 checkpoint (the unchanged 46M model, saved just before the trial) -- eval/intrinsic_run3b.sh, same log.
+Its first trial (before the crash): growth's advantage -0.0053 vs 0.4423 its extra compute would buy -> STAY.
+Resumed at 390 ktok/s: the earlier 188 was mostly the card being shared with the rate test and the scorecard.
