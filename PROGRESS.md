@@ -1532,3 +1532,20 @@ One command (eval/scorecard.sh), identical inputs against GPT-2 124M (and SmolLM
 - Generation quality: GPT-2 closer to real text (words 0.83-0.86 vs 0.71-0.79, variety 0.98-1.00 vs 0.83-0.94);
   long generation degenerates into loops by ~16k tokens -- LOST. (genqual2.py labels its row "run44"; it is run45.)
 - Continual learning: self-rehearsal reproduces (at 1e-3: OLD 58.3 vs 43.8, TEXT 2.54 vs 4.75).
+- `2026-09-27 09:21:53 UTC` **train** (0.1 min) FAILED: ValueError('a must be a positive integer unless no samples are taken')
+  d512 L12 mlp4 ctx2048 B8 30400 steps -> /mnt/kv_cache/resume_tmp
+  (log `logs/20260927-092147-train.log`, seed 1)
+- `2026-09-27 09:23:32 UTC` **train** (1.4 min) ok
+  d512 L12 mlp4 ctx2048 B8 30400 steps -> /mnt/kv_cache/resume_tmp
+  (log `logs/20260927-092210-train.log`, seed 1)
+
+## 2026-09-27 09:23 UTC — run60_intrinsic restarted with a penalty-free growth decision; Monday pipeline queued
+The small trial test kept showing BOTH branches getting worse (restarting the schedule-free average costs more than a
+600-step trial gains), which would make every trial inconclusive and the model would never grow. New rule under psf:
+growth's ADVANTAGE (Ls - Lg; same start, batches and restart, so the penalty cancels) must exceed what its EXTRA compute
+would buy at the current size, priced at that size's own held-out improvement per unit compute measured between
+trials (no restart). run60 restarted at step 1,800 (before its first trial). Small-test first decision under it:
+STAY at 3,600 (advantage 0.016 vs 0.387 the extra compute would buy). Queued eval/after_intrinsic.sh: recall training
+(6,000 steps, 25% eval/build_recall.py data), factual fine-tune, balanced own-mistake abstention, full scorecard --
+all with schedule-free Prodigy. Fine-tuning (src/sft.py --optim psf) no longer has a hand-set rate either.
+Today's scorecard for the run46 lineage kept as eval/scorecard_run46.txt.
