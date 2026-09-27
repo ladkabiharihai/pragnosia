@@ -1467,3 +1467,21 @@ Checked against independent fixed-size runs at EQUAL COMPUTE: d512 x 10,000 step
 rule. run58_intrinsic: 120,000 x 65,536 = 7.9B tokens, own rate from 3e-3, growth only by trial (1,000 steps a
 branch), candidate order w768, d, a2+w1024, may stop at any size. Log logs/train_intrinsic2.out; then factual fine-tune
 (run59_sft) and Q&A -> eval/qa6.txt.
+- `2026-09-24 19:15:36 UTC` **train** (386.8 min) ok
+  d512 L12 mlp4 ctx8192 B2 120000 steps -> /mnt/kv_cache/run58_intrinsic
+  (log `logs/20260924-124845-train.log`, seed 0)
+
+## 2026-09-27 07:20 UTC — run58_intrinsic FAILED: the intrinsic rate collapsed over the long run and learning stalled
+Read on 2026-09-27; the run ended 2026-09-24 19:15 UTC and nothing ran in between.
+- The rate fell by an e-fold again and again with no floor: 3e-3 -> 3.9e-5 (step 20k) -> 8.3e-6 (40k) -> 2.7e-6
+  (80k) -> 1.5e-6 (120k). The hypergradient keeps pushing down once gradient noise dominates. The 6,000-step tests
+  that beat the tuned schedule were too short to show it.
+- Learning stopped: held-out BPB 1.3079 (20k) -> 1.3015 (40k) -> 1.2982 (80k) -> 1.2967 (120k), over 7.9B tokens.
+  run52 reached 1.1104 by 96k with the hand-set schedule.
+- The trials became meaningless once gains were near zero: STAY x4 (46M) until step 45,200, then GROW to 98M on
+  gains of -0.001 vs -0.006; the deepen trial at 85,800 lost (-0.075 vs 0.002). Final model 98M.
+- After the factual fine-tune: EVERYDAY 6.2%, SciQ 0.9%, ARC 30.5% -- below GPT-2 (16.7 / 2.2 / 33.8) and far
+  below our run46_sft (47.9 / 7.9 / 40.3). Held-out answer loss after the fine-tune 2.0105 (run46: ~1.38).
+WITHDRAWN: "the intrinsic rate beats the tuned schedule". It did over 6,000 steps from a high start; over 120,000 it
+collapses. Growth-by-trial stands as a mechanism (every event exact, decisions checked at equal compute early on),
+but it needs a rate that keeps learning. run46_sft / run55_rtune_bal stay the best models.
