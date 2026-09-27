@@ -502,13 +502,15 @@ def main():
                     # more steps at the current size, priced at the current size's own recent rate of held-out
                     # improvement per unit compute (measured between trials at the averaged weights, no restart).
                     if a.optim == "psf":
+                        # (named extra_c: "extra" is the second corpus, and reusing the name crashed run60 at its
+                        # first decision, 2026-09-27)
                         adv = Ls - trial["Lg"]
-                        extra = (trial["Pg"] - Ps) * a.trial_steps
+                        extra_c = (trial["Pg"] - Ps) * a.trial_steps
                         price = max(0.0, rate_hist[-1]) if rate_hist else 0.0
-                        grow_now = adv > price * extra
+                        grow_now = adv > price * extra_c
                         r.log(f"    TRIAL {'+'.join(trial['ev'])}: growth's advantage {adv:+.4f} vs what its extra compute buys "
-                              f"at the current size {price * extra:.4f} (recent held-out gain {price*1e12:.3f} per 1e12 param-steps)")
-                        gg = adv; gs_ = price * extra
+                              f"at the current size {price * extra_c:.4f} (recent held-out gain {price*1e12:.3f} per 1e12 param-steps)")
+                        gg = adv; gs_ = price * extra_c
                     # GROW ONLY ON A REAL GAIN. Dividing a loss INCREASE by compute makes the larger model look
                     # better (a bigger denominator shrinks a negative number): a trial where both branches got worse
                     # and the unchanged one got less worse (4.1020 vs 4.1206) was decided GROW (2026-09-27). Now the
