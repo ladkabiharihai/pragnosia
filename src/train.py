@@ -435,6 +435,17 @@ def main():
         t0 = time.time(); ema = None; t_prev = 0.0
 
         stage_t0, stage_next = [start], [4 * a.trial_steps]
+        if a.resume and os.path.exists(a.resume):
+            ck_ = torch.load(a.resume, map_location="cpu", weights_only=False)
+            st_ = ck_.get("stage")
+            if st_: stage_t0[0], stage_next[0] = st_          # a resumed run remembers how long its stage has run
+            elif ck_["cfg"]["d"] == a.d and ck_["cfg"].get("layers", a.layers) == a.layers:
+                # an older checkpoint without the clock, still at its starting shape: it has never grown, so its stage
+                # began at step 0; the next reconsider is the next doubling of that stage
+                stage_t0[0] = 0; nxt_ = 4 * a.trial_steps
+                while nxt_ <= start: nxt_ *= 2
+                stage_next[0] = nxt_
+            del ck_
         mark, rate_hist = [None], []         # (step, held-out loss, params) where the current price was last measured
         stage_rate = [a.lr]                  # the main rate when the current stage began: saturation is judged
                                              # against it, so each stage anneals on from where the last one ended
@@ -532,9 +543,9 @@ def main():
                         # from its averaged weights, same carried step size: the only difference left is the size.
                         opt.eval(); fresh = make_opt(m); carry_d(opt, fresh); opt = fresh
                     hist.fill_(float("nan")); g0 = i
-                    trial["phase"], trial["end"] = "stay", i + a.trial_steps
+                    trial["phase"], trial["end"] = "stay", i + trial["K"]
                     r.log(f"    TRIAL {'+'.join(trial['ev'])}: grown branch {trial['L0']:.4f} -> {trial['Lg']:.4f} over "
-                          f"{a.trial_steps} steps at {trial['Pg']/1e6:.1f}M; now the same steps unchanged")
+                          f"{trial['K']} steps at {trial['Pg']/1e6:.1f}M; now the same steps unchanged")
                 else:
                     Ls, Ps = heldout(), nparams()
                     gg = (trial["L0"] - trial["Lg"]) / trial["Pg"]; gs_ = (trial["L0"] - Ls) / Ps
@@ -549,7 +560,7 @@ def main():
                         # (named extra_c: "extra" is the second corpus, and reusing the name crashed run60 at its
                         # first decision, 2026-09-27)
                         adv = Ls - trial["Lg"]
-                        extra_c = (trial["Pg"] - Ps) * a.trial_steps
+                        extra_c = (trial["Pg"] - Ps) * trial["K"]
                         price = max(0.0, rate_hist[-1]) if rate_hist else 0.0
                         grow_now = adv > price * extra_c
                         r.log(f"    TRIAL {'+'.join(trial['ev'])}: growth's advantage {adv:+.4f} vs what its extra compute buys "
@@ -766,18 +777,25 @@ def main():
                     if due:
                         stage_next[0] = 2 * (i + 1 - stage_t0[0])
                         ev = auto_events[0]
+                        # THE TRIAL GROWS WITH THE STAGE: a quarter of its length so far, at least --trial-steps. At a
+                        # fixed 1,000 steps the widened copy learned exactly as much as the unchanged one (advantage
+                        # -0.0002 at step 26,000): new capacity starts as a zero-output no-op and pays off over longer
+                        # than that, so a short trial under-credits growth for good. Scale-free: the cost of a trial is
+                        # a fixed fraction of the stage it decides about.
+                        K_ = max(a.trial_steps, (i + 1 - stage_t0[0]) // 4)
+                        if i + 1 + 2 * K_ >= a.steps: K_ = 0
                         L0_ = heldout()
                         if mark[0] is not None:
                             s0_, l0_, p0_ = mark[0]
                             rate_hist.append((l0_ - L0_) / max(1.0, p0_ * (i + 1 - s0_)))
-                        trial = dict(phase="grow", ev=ev, L0=L0_, S0=snapshot(), end=i + 1 + a.trial_steps)
+                        trial = dict(phase="grow", ev=ev, L0=L0_, S0=snapshot(), K=K_, end=i + 1 + K_) if K_ else None
                         for op_ in ev:
                             if op_ == "d": grow_d.add(i + 1)
                             elif op_.startswith("w"): grow_w[i + 1] = int(op_[1:])
                             elif op_.startswith("a"): grow_a[i + 1] = int(op_[1:])
                         why = (f"this stage's length has doubled to {i+1-stage_t0[0]} steps" if a.optim == "psf" else
                                f"rate {rt:.2e} is one e-fold below the stage start {stage_rate[0]:.2e}")
-                        r.log(f"    RECONSIDER at step {i+1}: {why}; TRIAL of {'+'.join(ev)} vs unchanged, {a.trial_steps} steps each")
+                        r.log(f"    RECONSIDER at step {i+1}: {why}; TRIAL of {'+'.join(ev)} vs unchanged, {max(a.trial_steps, (i + 1 - stage_t0[0]) // 4)} steps each")
                 if nnf > nf_prev:
                     # the guard zeroed those steps; the run continues unless the weights themselves went bad
                     alive = bool(torch.stack([p_.isfinite().all() for p_ in m.parameters()]).all().item())
@@ -836,7 +854,8 @@ def main():
                                 "step": i + 1, "loss": ema_t.item(),   # the current average, not the last log's
                                 "cfg": dict(vocab=a.vocab, d=m.d, layers=m.layers,
                                             mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer, norm=a.norm),
-                                "new_layers": list(getattr(m, "new_layers", []))},
+                                "new_layers": list(getattr(m, "new_layers", [])),
+                                "stage": (stage_t0[0], stage_next[0]) if a.grow_auto else None},
                                f"{a.out}/ckpt.pt")
                 if a.optim == "psf": opt.train()
         if ema_t is None:
