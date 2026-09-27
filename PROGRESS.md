@@ -1597,3 +1597,15 @@ length is now a quarter of the stage so far (min --trial-steps): scale-free, a f
 The stage clock is saved in checkpoints; an older checkpoint still at its starting shape is known never to have
 grown, so its stage began at step 0. run60 resumed at 28,000 (held-out BPB 1.2063, still 46M): next reconsider at
 32,000 with an 8,000-step trial per branch.
+
+## 2026-09-27 12:16 UTC — run60, the long trial (8,000 steps a branch, memory carried): STAY, on solid evidence
+Step 32,000 -> 48,000. Trial held-out batch: unchanged 3.0292 -> 2.9937 (-0.0355), widened to 98M -> 2.9891 (-0.0401).
+Growth's advantage +0.0046 vs 0.0555 its extra compute buys at the current size (price from the window before the
+trial); with the unchanged branch's own gain during the trial the price is ~0.040 -- about 9x the advantage either
+way. A model widened mid-run learns ~13% more per step than the 46M it came from, at 2.1x the cost.
+Standard evaluation during the trial: 32k 1.1953 (46M) | 36k 1.1863, 40k 1.1779 (grown branch) | 44k 1.1868,
+48k 1.1803 (unchanged branch).
+READING: function-preserving growth switches new capacity on slowly (new weights start as exact no-ops), so by the
+model's own compute-per-gain measurement growing does not pay here. Next reconsider at 64,000 (trial 16,000 steps a
+branch). If it keeps staying, run60 ends at ~46M on 7.9B tokens (~170 tokens/parameter): very well trained, small --
+its Q&A may trail the 118M run46 even with a far better loss per parameter. To be reported as such.
