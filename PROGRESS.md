@@ -1609,3 +1609,10 @@ READING: function-preserving growth switches new capacity on slowly (new weights
 model's own compute-per-gain measurement growing does not pay here. Next reconsider at 64,000 (trial 16,000 steps a
 branch). If it keeps staying, run60 ends at ~46M on 7.9B tokens (~170 tokens/parameter): very well trained, small --
 its Q&A may trail the 118M run46 even with a far better loss per parameter. To be reported as such.
+
+## 2026-09-27 14:53 UTC — run60, 16,000-step trial: STAY again; the run will finish at 46M
+Step 64,000 -> 96,000. Unchanged 2.9513 -> 2.9193 (-0.0320); widened to 98M -> 2.9078 (-0.0435). Growth's advantage
++0.0115 (8k-step trial: +0.0046) vs 0.0470 its extra compute buys at the current size (8k: 0.0555): the gap closes
+(9x -> 4x) as the trial lengthens and the small model's returns fall, but growth still does not pay for itself within
+the run. No further reconsider fits (the next is at 128,000 > 120,000). Held-out BPB, 46M: 1.1693 (56k), 1.1567 (84k),
+1.1478 (96k). Reference run52 (hand schedule, fixed growth to 183M by then): 1.1104 at 96k.
