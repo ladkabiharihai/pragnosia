@@ -382,6 +382,7 @@ def main():
         t0 = time.time(); ema = None; t_prev = 0.0
 
         stage_t0, stage_next = [start], [4 * a.trial_steps]
+        mark, rate_hist = [None], []         # (step, held-out loss, params) where the current price was last measured
         stage_rate = [a.lr]                  # the main rate when the current stage began: saturation is judged
                                              # against it, so each stage anneals on from where the last one ended
         def restart_rates():
@@ -484,12 +485,27 @@ def main():
                 else:
                     Ls, Ps = heldout(), nparams()
                     gg = (trial["L0"] - trial["Lg"]) / trial["Pg"]; gs_ = (trial["L0"] - Ls) / Ps
+                    # THE DECISION, PENALTY-FREE (2026-09-27). Restarting the schedule-free average costs both branches
+                    # the same, and at small scale it outweighed 600 steps of learning ("both got worse"), so any rule
+                    # on each branch's own gain would call almost every trial inconclusive and the model would never
+                    # grow. Growth's ADVANTAGE (Ls - Lg: same start, same batches, same restart, so the penalty cancels)
+                    # is weighed against what the EXTRA compute of the bigger model would have bought if spent on
+                    # more steps at the current size, priced at the current size's own recent rate of held-out
+                    # improvement per unit compute (measured between trials at the averaged weights, no restart).
+                    if a.optim == "psf":
+                        adv = Ls - trial["Lg"]
+                        extra = (trial["Pg"] - Ps) * a.trial_steps
+                        price = max(0.0, rate_hist[-1]) if rate_hist else 0.0
+                        grow_now = adv > price * extra
+                        r.log(f"    TRIAL {'+'.join(trial['ev'])}: growth's advantage {adv:+.4f} vs what its extra compute buys "
+                              f"at the current size {price * extra:.4f} (recent held-out gain {price*1e12:.3f} per 1e12 param-steps)")
+                        gg = adv; gs_ = price * extra
                     # GROW ONLY ON A REAL GAIN. Dividing a loss INCREASE by compute makes the larger model look
                     # better (a bigger denominator shrinks a negative number): a trial where both branches got worse
                     # and the unchanged one got less worse (4.1020 vs 4.1206) was decided GROW (2026-09-27). Now the
                     # grown branch must improve held-out loss, by more per unit compute than staying did (a stay
                     # that did not improve counts as zero); otherwise the trial is inconclusive and the model stays.
-                    if trial["L0"] - trial["Lg"] > 0 and gg > max(gs_, 0.0):
+                    if (grow_now if a.optim == "psf" else (trial["L0"] - trial["Lg"] > 0 and gg > max(gs_, 0.0))):
                         G = trial["G"]; install(G); auto_events[:] = G["auto"][1:]
                         stage_t0[0], stage_next[0] = i, 4 * a.trial_steps
                         hist.fill_(float("nan")); g0 = i
@@ -503,6 +519,7 @@ def main():
                               f"{gg*1e9:.3f} grown ({trial['L0']:.4f} -> {Ls:.4f} vs -> {trial['Lg']:.4f}); "
                               + ("will reconsider when this stage's length doubles again" if a.optim == "psf" else "will reconsider after the rate anneals another e-fold"))
                     trial = None
+                    mark[0] = (i, heldout(), nparams())
             w = min(1.0, (i + 1) / a.warm)
             # cosine over the whole budget: a flat rate lets a model equilibrate at that rate's noise floor,
             # which is what drove the previous project's BPB upward for hundreds of thousands of steps.
@@ -677,6 +694,8 @@ def main():
                     xp = batch(bins, ks, ps, np.random.default_rng(99), 2, 2048)
                     sig = {op_: growth_signal(m, op_, xp, bool(a.fused_scan), a.chunks) for op_ in a.growth_probe.split(",")}
                     r.log(f"    PROBE step {i+1}: new/existing gradient per parameter " + "  ".join(f"{k} {v:.3f}" for k, v in sig.items()))
+                if auto_events and mark[0] is None and (i + 1 - start) >= a.trial_steps:
+                    mark[0] = (i + 1, heldout(), nparams())
                 if auto_events and trial is None and i + 1 + 2 * a.trial_steps < a.steps:
                     # WHEN TO RECONSIDER: under the hypergradient, at each e-fold of its rate; under schedule-free
                     # Prodigy, which never anneals, each time the current stage's length has doubled (first at 4
@@ -689,7 +708,11 @@ def main():
                     if due:
                         stage_next[0] = 2 * (i + 1 - stage_t0[0])
                         ev = auto_events[0]
-                        trial = dict(phase="grow", ev=ev, L0=heldout(), S0=snapshot(), end=i + 1 + a.trial_steps)
+                        L0_ = heldout()
+                        if mark[0] is not None:
+                            s0_, l0_, p0_ = mark[0]
+                            rate_hist.append((l0_ - L0_) / max(1.0, p0_ * (i + 1 - s0_)))
+                        trial = dict(phase="grow", ev=ev, L0=L0_, S0=snapshot(), end=i + 1 + a.trial_steps)
                         for op_ in ev:
                             if op_ == "d": grow_d.add(i + 1)
                             elif op_.startswith("w"): grow_w[i + 1] = int(op_[1:])
