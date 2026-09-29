@@ -8,3 +8,7 @@ gate: loss 3.0708 -> 3.0708 | BPB 31000=1.2540 32000=1.2510 33000=1.2480 34000=1
 STACK_DONE
 === RE-RUN after fixing the compounding new-layer ramp (all earlier psf deepen results invalid) ===
 === stacking test, 2026-09-29 08:33 UTC ===
+zero2: loss 3.0708 -> 3.0708 | BPB 31000=1.2569 32000=1.2520 33000=1.2487 34000=1.2457  | params 81.0M params 
+copy2: loss 3.0708 -> 4.8119 | BPB 31000=1.3275 32000=1.2829 33000=1.2646 34000=1.2557  | params 81.0M params 
+gate2: loss 3.0708 -> 3.0708 | BPB 31000=1.2539 32000=1.2506 33000=1.2475 34000=1.2447  | params 81.0M params 
+STACK_DONE

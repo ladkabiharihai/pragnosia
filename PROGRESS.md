@@ -1663,3 +1663,28 @@ never used that group, so run60's widening trials stand. Depth variants re-runni
 New growth operator available: deepen(init="gate") -- GATED STACKING: new layers copy the nearest trained layer of
 their type, and their output projections sit behind learnable scalar gates at 0 (ReZero): exact at the growth
 (3.0708 -> 3.0708, where plain copies jumped to 4.81) and opened by the gradient.
+- `2026-09-29 08:33:54 UTC` **train** (0.2 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 24.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 14.62 MiB is free. Process 368682 has 60.00 MiB memory in use. Process 1070667 has 2.29 GiB memory in use. Process 1071182 has 3.60 GiB memory in use. Process 1502339 has 38.97 GiB memory in use. Process 1503735 has 946.00 MiB memory in use. Process 1503737 has 946.00 MiB memory in use. Process 1503738 has 946.00 MiB memory in use. Process 1503736 has 946.00 MiB memory in use. Process 1555306 has 12.51 GiB memory in use. Process 1555308 has 12.65 GiB memory in use. Process 1555307 has 12.65 GiB memory in use. Including non-PyTorch memory, this process has 6.58 GiB memory in use. 34.00 GiB allowed; Of the allocated memory 5.77 GiB is allocated by PyTorch, and 81.44 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d768 L12 mlp4 ctx8192 B2 120000 steps -> /mnt/kv_cache/run64_intrinsic
+  (log `logs/20260929-083342-train.log`, seed 0)
+- `2026-09-29 08:53:18 UTC` **train** (20.0 min) ok
+  d512 L12 mlp4 ctx2048 B8 34000 steps -> /mnt/kv_cache/st_zero2
+  (log `logs/20260929-083320-train.log`, seed 2)
+- `2026-09-29 08:53:25 UTC` **train** (20.1 min) ok
+  d512 L12 mlp4 ctx2048 B8 34000 steps -> /mnt/kv_cache/st_copy2
+  (log `logs/20260929-083320-train.log`, seed 2)
+- `2026-09-29 08:53:34 UTC` **train** (20.2 min) ok
+  d512 L12 mlp4 ctx2048 B8 34000 steps -> /mnt/kv_cache/st_gate2
+  (log `logs/20260929-083320-train.log`, seed 2)
+
+## 2026-09-29 09:04 UTC — depth growth re-measured with the ramp bug fixed (eval/stack_test.txt)
+From rl_psf (12L d512, 30,000 steps, BPB 1.2572), 4,000 more steps each, held-out BPB:
+    unchanged                       1.2453
+    deepen, zero-output layers      1.2457   (exact at the growth)
+    deepen, plain copies            1.2557   (jump 3.07 -> 4.81, recovering)
+    deepen, gated copies            1.2447   (exact; gates opened to mean 0.018, max 0.060)
+At ~12 tokens/parameter no deepen pays within 4,000 steps; gated copies are the best operator but by 0.0006, at 1.9x
+the compute. Consistent with run60's trials staying small. Open question the 118M control (now running, pure, no growth,
+7.9B tokens) answers: at this budget is a bigger model better at equal compute? If not, staying small was right and
+growth needs a longer budget; if so, the decision must look over the remaining budget, not the trial window.
+Also: the card reached 88.6/93.6 GiB with three tests plus prod (the control OOMed at start; prod unaffected, HTTP 200);
+the control was re-queued behind the tests.
