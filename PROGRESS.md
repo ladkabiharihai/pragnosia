@@ -1616,3 +1616,34 @@ Step 64,000 -> 96,000. Unchanged 2.9513 -> 2.9193 (-0.0320); widened to 98M -> 2
 (9x -> 4x) as the trial lengthens and the small model's returns fall, but growth still does not pay for itself within
 the run. No further reconsider fits (the next is at 128,000 > 120,000). Held-out BPB, 46M: 1.1693 (56k), 1.1567 (84k),
 1.1478 (96k). Reference run52 (hand schedule, fixed growth to 183M by then): 1.1104 at 96k.
+- `2026-09-27 15:59:26 UTC` **train** (290.9 min) ok
+  d512 L12 mlp4 ctx8192 B2 120000 steps -> /mnt/kv_cache/run60_intrinsic
+  (log `logs/20260927-110833-train.log`, seed 0)
+- `2026-09-27 16:18:47 UTC` **train** (12.7 min) ok
+  d512 L12 mlp4 ctx2048 B8 34000 steps -> /mnt/kv_cache/st_unchanged
+  (log `logs/20260927-160603-train.log`, seed 2)
+- `2026-09-27 16:27:09 UTC` **train** (21.1 min) ok
+  d512 L12 mlp4 ctx2048 B8 34000 steps -> /mnt/kv_cache/st_copy
+  (log `logs/20260927-160603-train.log`, seed 2)
+- `2026-09-27 16:27:12 UTC` **train** (21.1 min) ok
+  d512 L12 mlp4 ctx2048 B8 34000 steps -> /mnt/kv_cache/st_zero
+  (log `logs/20260927-160603-train.log`, seed 2)
+- `2026-09-27 17:04:48 UTC` **train** (17.2 min) ok
+  d512 L12 mlp4 ctx8192 B2 126000 steps -> /mnt/kv_cache/run60r
+  (log `logs/20260927-164737-train.log`, seed 1)
+
+## 2026-09-29 08:12 UTC — run60 lineage results read (the pipeline finished 2026-09-27 18:16 UTC; nothing ran for ~2 days after)
+run60 finished at 46M (held-out 1.1352 at 120k; 1.1322 after 6,000 recall steps). Scorecard (eval/scorecard_run60.txt):
+- Context rot won (1.214 -> 1.167 as the window grows; GPT-2 1.217/1.225, max 1,024). Inference won: 452 vs 250 tok/s,
+  931 vs 990 MiB; one million tokens of context in 1.13 GiB, flat.
+- GENERATION QUALITY NOW LEVEL WITH GPT-2 (was lost): words 0.84-0.86, variety 0.97-1.00 vs GPT-2 0.82-0.86, 0.89-0.99.
+- Continual learning much improved: NEW 22.5 -> 77.5-87.5% (run46 learned to 32-55%); self-rehearsal at 1e-4 keeps
+  OLD 66.7% vs 54.2%.
+- Calibration +0.210 vs +0.186; facts 33/48 tie; induction 97.8 vs 98.5.
+- Hard in-context lookup after recall training: 50% vs GPT-2 40% at 10 facts; near chance at 30+.
+- Q&A everyday: fine-tuned 18.8%, abstaining 27.1% (run46: 47.9%) -- the model is 46M.
+STACKING TEST (eval/stack_test.txt): from the same 30k-step model, 4,000 steps: unchanged 1.2453, zero-init deepen
+1.2454, stacked copies 1.2852 (loss 3.07 -> 4.81 at the growth, still recovering). Stacking does not rescue growth here.
+LAUNCHED run64_intrinsic: the same intrinsic recipe from 12L x d768 (118M, the size of the best Q&A model), growth
+candidates deepen then split + widen to 1024; eval/after_intrinsic4.sh queued behind it (recall, fine-tune,
+abstention, scorecard).

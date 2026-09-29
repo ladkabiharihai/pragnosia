@@ -125,6 +125,9 @@ def main():
                     help="with --grow-auto: length of each branch of a growth TRIAL (grow vs stay, same batches); the "
                          "model grows only if growing reduced held-out loss more per unit of compute. A measurement "
                          "window, not a threshold")
+    ap.add_argument("--deepen-init", default="zero", choices=["zero", "copy"],
+                    help="new layers at a deepen: zero = exact (outputs start at zero); copy = stacking, each new layer "
+                         "a copy of the nearest trained layer of its type, with its optimizer memory")
     ap.add_argument("--growth-probe", default="", help="log growth_signal() for these ops every 1,000 steps, e.g. w768,d")
     ap.add_argument("--new-warm", type=int, default=1000, help="steps over which layers added mid-run ramp from 0 to --new-lr")
     ap.add_argument("--new-lr", type=float, default=3e-4, help="absolute step for layers added by LM.deepen(), which start at zero output")
@@ -648,7 +651,7 @@ def main():
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                     lb = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
                 old_m = m
-                big = old_m.deepen()
+                big = old_m.deepen(init=a.deepen_init)
                 if a.fused_scan:
                     for _mx in big.mix:
                         if hasattr(_mx, "need_sent"): _mx.need_sent = False
@@ -659,7 +662,17 @@ def main():
                     pairs += list(zip(old_m.mix[j].parameters(), big.mix[q].parameters()))
                     pairs += list(zip(old_m.mlp[j].parameters(), big.mlp[q].parameters()))
                 opt2 = make_opt(big)
-                if a.optim == "psf": psf_carry(opt, opt2, pairs=pairs)
+                if a.optim == "psf":
+                    psf_carry(opt, opt2, pairs=pairs)
+                    if a.deepen_init == "copy":
+                        # a stacked layer takes a COPY of its source layer's optimizer memory as well as its weights
+                        import copy as _cp
+                        for i_new, q_src in big.copied_from.items():
+                            for pn, ps_ in zip(list(big.mix[i_new].parameters()) + list(big.mlp[i_new].parameters()),
+                                               list(big.mix[q_src].parameters()) + list(big.mlp[q_src].parameters())):
+                                if ps_ in opt2.state:
+                                    opt2.state[pn] = {k: (v.clone() if torch.is_tensor(v) else _cp.copy(v))
+                                                      for k, v in opt2.state[ps_].items()}
                 if a.intrinsic_lr == 1:            # the rates the optimizer found are kept; new layers start at --new-lr
                     for g_old, g_new in zip(opt.rates()[:2], opt2.param_groups[:2]):
                         g_new["lr"] = g_old

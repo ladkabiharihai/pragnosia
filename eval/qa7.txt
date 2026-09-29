@@ -1,0 +1,149 @@
+=== run60_intrinsic + factual fine-tune, 2026-09-27 16:04 UTC ===
+model                       EVERYDAY      SCIQ ARC(4-way)   (48 / 1,000 / 3530 questions; greedy)
+  [ours-intrinsic] everyday 48/48  running 20.8%  2.2 q/s  22s
+  [ours-intrinsic] sciq 100/1000  running 3.0%  2.2 q/s  46s
+  [ours-intrinsic] sciq 200/1000  running 1.5%  3.2 q/s  62s
+  [ours-intrinsic] sciq 300/1000  running 1.7%  3.0 q/s  99s
+  [ours-intrinsic] sciq 400/1000  running 1.5%  2.7 q/s  146s
+  [ours-intrinsic] sciq 500/1000  running 1.6%  2.7 q/s  185s
+  [ours-intrinsic] sciq 600/1000  running 1.5%  2.9 q/s  208s
+  [ours-intrinsic] sciq 700/1000  running 1.4%  3.1 q/s  228s
+  [ours-intrinsic] sciq 800/1000  running 1.9%  3.1 q/s  258s
+  [ours-intrinsic] sciq 900/1000  running 2.0%  3.2 q/s  279s
+  [ours-intrinsic] sciq 1000/1000  running 1.9%  3.3 q/s  300s
+  [ours-intrinsic] arc 500/3530  running 17.8%  1.5 q/s  323s
+  [ours-intrinsic] arc 1000/3530  running 17.8%  2.2 q/s  463s
+  [ours-intrinsic] arc 1500/3530  running 24.0%  2.9 q/s  525s
+  [ours-intrinsic] arc 2000/3530  running 28.8%  3.5 q/s  569s
+  [ours-intrinsic] arc 2500/3530  running 31.7%  3.9 q/s  643s
+  [ours-intrinsic] arc 3000/3530  running 33.8%  4.4 q/s  687s
+  [ours-intrinsic] arc 3500/3530  running 35.2%  4.8 q/s  728s
+ours-intrinsic                 20.8%      1.9%      35.3%
+                           EVERYDAY right  20.8%  WRONG  79.2%  declined   0.0%  -> accuracy when it answers  20.8%
+                           SCIQ     right   1.9%  WRONG  98.1%  declined   0.0%  -> accuracy when it answers   1.9%
+  [ours-12L-previous-best] everyday 48/48  running 47.9%  7.0 q/s  7s
+  [ours-12L-previous-best] sciq 100/1000  running 7.0%  5.0 q/s  20s
+  [ours-12L-previous-best] sciq 200/1000  running 6.5%  5.4 q/s  37s
+  [ours-12L-previous-best] sciq 300/1000  running 7.3%  5.2 q/s  58s
+  [ours-12L-previous-best] sciq 400/1000  running 7.5%  5.1 q/s  78s
+  [ours-12L-previous-best] sciq 500/1000  running 8.0%  5.1 q/s  98s
+  [ours-12L-previous-best] sciq 600/1000  running 7.3%  5.1 q/s  117s
+  [ours-12L-previous-best] sciq 700/1000  running 7.1%  5.1 q/s  138s
+  [ours-12L-previous-best] sciq 800/1000  running 6.9%  5.1 q/s  158s
+  [ours-12L-previous-best] sciq 900/1000  running 7.2%  5.1 q/s  178s
+  [ours-12L-previous-best] sciq 1000/1000  running 7.9%  5.1 q/s  197s
+  [ours-12L-previous-best] arc 500/3530  running 17.6%  11.7 q/s  43s
+  [ours-12L-previous-best] arc 1000/3530  running 19.2%  11.8 q/s  85s
+  [ours-12L-previous-best] arc 1500/3530  running 26.1%  14.1 q/s  107s
+  [ours-12L-previous-best] arc 2000/3530  running 31.7%  15.6 q/s  128s
+  [ours-12L-previous-best] arc 2500/3530  running 35.6%  16.7 q/s  149s
+  [ours-12L-previous-best] arc 3000/3530  running 38.2%  17.6 q/s  171s
+  [ours-12L-previous-best] arc 3500/3530  running 40.3%  18.2 q/s  193s
+ours-12L-previous-best         47.9%      7.9%      40.3%
+                           EVERYDAY right  47.9%  WRONG  52.1%  declined   0.0%  -> accuracy when it answers  47.9%
+                           SCIQ     right   7.9%  WRONG  92.1%  declined   0.0%  -> accuracy when it answers   7.9%
+  [GPT-2 124M] everyday 48/48  running 16.7%  3.7 q/s  13s
+  [GPT-2 124M] sciq 100/1000  running 4.0%  5.9 q/s  17s
+  [GPT-2 124M] sciq 200/1000  running 3.0%  6.1 q/s  33s
+  [GPT-2 124M] sciq 300/1000  running 2.7%  6.2 q/s  49s
+  [GPT-2 124M] sciq 400/1000  running 2.0%  6.2 q/s  64s
+  [GPT-2 124M] sciq 500/1000  running 2.0%  6.3 q/s  80s
+  [GPT-2 124M] sciq 600/1000  running 1.8%  6.3 q/s  95s
+  [GPT-2 124M] sciq 700/1000  running 2.1%  6.3 q/s  111s
+  [GPT-2 124M] sciq 800/1000  running 2.0%  6.3 q/s  127s
+  [GPT-2 124M] sciq 900/1000  running 2.1%  6.3 q/s  142s
+  [GPT-2 124M] sciq 1000/1000  running 2.2%  6.3 q/s  158s
+  [GPT-2 124M] arc 500/3530  running 17.8%  40.6 q/s  12s
+  [GPT-2 124M] arc 1000/3530  running 17.1%  43.3 q/s  23s
+  [GPT-2 124M] arc 1500/3530  running 23.4%  44.7 q/s  34s
+  [GPT-2 124M] arc 2000/3530  running 27.0%  45.6 q/s  44s
+  [GPT-2 124M] arc 2500/3530  running 30.1%  45.9 q/s  54s
+  [GPT-2 124M] arc 3000/3530  running 32.3%  46.2 q/s  65s
+  [GPT-2 124M] arc 3500/3530  running 33.7%  46.5 q/s  75s
+GPT-2 124M                     16.7%      2.2%      33.8%
+                           EVERYDAY right  16.7%  WRONG  60.4%  declined  22.9%  -> accuracy when it answers  21.6%
+                           SCIQ     right   2.2%  WRONG  80.7%  declined  17.1%  -> accuracy when it answers   2.7%
+  [SmolLM2-135M] everyday 48/48  running 62.5%  1.2 q/s  40s
+  [SmolLM2-135M] sciq 100/1000  running 12.0%  1.8 q/s  55s
+  [SmolLM2-135M] sciq 200/1000  running 12.0%  1.8 q/s  108s
+  [SmolLM2-135M] sciq 300/1000  running 10.3%  1.9 q/s  162s
+  [SmolLM2-135M] sciq 400/1000  running 10.0%  1.9 q/s  215s
+  [SmolLM2-135M] sciq 500/1000  running 11.2%  1.9 q/s  268s
+  [SmolLM2-135M] sciq 600/1000  running 11.8%  1.9 q/s  321s
+  [SmolLM2-135M] sciq 700/1000  running 12.0%  1.9 q/s  374s
+  [SmolLM2-135M] sciq 800/1000  running 12.0%  1.9 q/s  427s
+  [SmolLM2-135M] sciq 900/1000  running 12.6%  1.9 q/s  479s
+  [SmolLM2-135M] sciq 1000/1000  running 12.7%  1.9 q/s  532s
+  [SmolLM2-135M] arc 500/3530  running 23.0%  13.6 q/s  37s
+  [SmolLM2-135M] arc 1000/3530  running 26.1%  13.9 q/s  72s
+  [SmolLM2-135M] arc 1500/3530  running 32.6%  14.0 q/s  107s
+  [SmolLM2-135M] arc 2000/3530  running 39.2%  14.1 q/s  142s
+  [SmolLM2-135M] arc 2500/3530  running 43.8%  14.1 q/s  177s
+  [SmolLM2-135M] arc 3000/3530  running 46.6%  14.2 q/s  212s
+  [SmolLM2-135M] arc 3500/3530  running 48.3%  14.2 q/s  246s
+SmolLM2-135M                   62.5%     12.7%      48.4%
+                           EVERYDAY right  62.5%  WRONG  37.5%  declined   0.0%  -> accuracy when it answers  62.5%
+                           SCIQ     right  12.7%  WRONG  86.8%  declined   0.5%  -> accuracy when it answers  12.8%
+
+THE ANSWERS THEMSELVES (greedy, first 160 characters):
+
+  Q: What is the capital of France?
+     ours-intrinsic           'Paris'
+     ours-12L-previous-best   'The capital of France is Paris, France.'
+     GPT-2 124M               'The capital of France.'
+     SmolLM2-135M             'Paris.'
+
+  Q: Who wrote Romeo and Juliet?
+     ours-intrinsic           'Romeo and Juliet'
+     ours-12L-previous-best   'The play "Romeo and Juliet" is a play written by William Shakespeare.'
+     GPT-2 124M               "I'm not sure."
+     SmolLM2-135M             'Who wrote Romeo and Juliet?'
+
+  Q: Why is the sky blue?
+     ours-intrinsic           'The sky is blue, it is blue.'
+     ours-12L-previous-best   'The sky is blue because the sun is shining through the blue sky.'
+     GPT-2 124M               "I'm not sure why the sky blue is blue."
+     SmolLM2-135M             "Because it reflects the sun's light."
+
+  Q: What causes the seasons on Earth?
+     ours-intrinsic           "The Earth's climate is cooler and wetter than it is."
+     ours-12L-previous-best   "The Earth's atmosphere."
+     GPT-2 124M               'The seasons on Earth are the seasons of the Earth.'
+     SmolLM2-135M             "The Earth's axis is tilted 23.5 degrees from the plane of its orbit."
+
+  Q: How do plants make their food?
+     ours-intrinsic           'Plants produce a variety of proteins to produce proteins.'
+     ours-12L-previous-best   'They use the energy from sunlight to make food.'
+     GPT-2 124M               'Plants are the most important food for humans.'
+     SmolLM2-135M             'Plants make their food by using sunlight and water.'
+
+  Q: What is the largest planet in our solar system?
+     ours-intrinsic           'The Sun.'
+     ours-12L-previous-best   'The largest planet in our Solar System is Mercury, with a diameter of about 5.5 kilometers.'
+     GPT-2 124M               'The largest planet in our solar system is the Earth.'
+     SmolLM2-135M             'Jupiter.'
+
+  Q: Explain what gravity is in one sentence.
+     ours-intrinsic           'Gravity is a form of energy in the universe that is not directly observed by the universe.'
+     ours-12L-previous-best   'Gravity is the force that holds the planets in place.'
+     GPT-2 124M               'Gravity is the amount of energy that can be transferred from one object to another.'
+     SmolLM2-135M             'Explain what gravity is in one sentence.'
+
+  Q: What is photosynthesis?
+     ours-intrinsic           'Photosynthesis.'
+     ours-12L-previous-best   'Photosynthesis.'
+     GPT-2 124M               'Photosynthesis is the process of converting carbon dioxide into energy.'
+     SmolLM2-135M             'Photosynthesis is the process by which plants and other organisms use sunlight to make their own food.'
+
+  Q: Who was the first president of the United States?
+     ours-intrinsic           'The first president of the United States was George Washington.'
+     ours-12L-previous-best   'The first president of the United States was George Washington.'
+     GPT-2 124M               "I'm not sure."
+     SmolLM2-135M             'George Washington.'
+
+  Q: What is two plus two?
+     ours-intrinsic           'Two plus two.'
+     ours-12L-previous-best   'Two.'
+     GPT-2 124M               'Two plus two.'
+     SmolLM2-135M             'Two plus two equals four.'
+INTRINSIC3_QA_DONE

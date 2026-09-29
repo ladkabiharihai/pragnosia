@@ -637,7 +637,7 @@ class LM(nn.Module):
                 big.mlp[i].b.weight.zero_(); big.mlp[i].b.bias.zero_()
         return big
 
-    def deepen(self):
+    def deepen(self, init="zero"):
         """DOUBLE THE DEPTH, PRESERVING THE FUNCTION EXACTLY (vision goal 7).
 
         Widening a trained model is not function-preserving here (LayerNorm over padded zeros moved the loss
@@ -669,9 +669,23 @@ class LM(nn.Module):
             big.mix[q].load_state_dict(self.mix[j].state_dict())
             big.mlp[q].load_state_dict(self.mlp[j].state_dict())
         big.new_layers = sorted(set(range(2 * L)) - set(oldpos))
+        big.copied_from = {}
         with torch.no_grad():
-            for i in big.new_layers:
-                big.mix[i].o.weight.zero_()
-                if getattr(big.mix[i].o, "bias", None) is not None: big.mix[i].o.bias.zero_()
-                big.mlp[i].b.weight.zero_(); big.mlp[i].b.bias.zero_()
+            if init == "copy":
+                # STACKING (Du et al., NeurIPS 2024, "Stacking your transformers"): each new layer starts as a COPY of
+                # the nearest trained layer of its own type before it (after it if none), so it carries useful
+                # features from its first step. Not function-preserving; the growth trial measures whether it pays.
+                # Measured need (2026-09-27): exact zero-output layers switch on so slowly that no growth trial in
+                # run60 found growing worth its compute.
+                for i in big.new_layers:
+                    same = [q for q in oldpos if (q % 4 == 3) == (i % 4 == 3)]
+                    before = [q for q in same if q < i]
+                    q = max(before) if before else min(same)
+                    big.mix[i].load_state_dict(big.mix[q].state_dict()); big.mlp[i].load_state_dict(big.mlp[q].state_dict())
+                    big.copied_from[i] = q
+            else:
+                for i in big.new_layers:
+                    big.mix[i].o.weight.zero_()
+                    if getattr(big.mix[i].o, "bias", None) is not None: big.mix[i].o.bias.zero_()
+                    big.mlp[i].b.weight.zero_(); big.mlp[i].b.bias.zero_()
         return big
