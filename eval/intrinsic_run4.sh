@@ -1,7 +1,8 @@
 #!/bin/bash
 # THE INTRINSIC RUN, starting at 12L x d768 (118M, the size of the best Q&A model): run60 started at 46M and, by its own
 # growth trials, never found growing worth the compute, finishing well trained but too small for Q&A (18.8% everyday).
-# Everything else as run60: no rate, no schedule, growth only by trial (candidates: deepen, then split + widen to 1024).
+# NOW A PURE CONTROL (2026-09-29, user: no hand-picked sizes in the deliverable): fixed 118M, same optimizer and data, NO
+# growth -- the benchmark a self-growing model started at 46M must match at equal compute.
 #   rate      NONE: schedule-free Prodigy at its published defaults (no rate, no schedule, no warm-up); beat the
 #             tuned schedule over 30k steps (eval/rate_long.txt). The hypergradient it replaces collapsed (run58).
 #   growth    DECIDED BY TRIAL: each time the stage's length doubles the model trains a grown copy 1,000 steps and
@@ -16,7 +17,7 @@ cd "$(dirname "$0")/.."
 P=.venv/bin/python
 mkdir -p /mnt/kv_cache/run64_intrinsic
 $P -u -m src.train --steps 120000 --d 768 --layers 12 --ctx 8192 --batch 2 --accum 4 --mixer grspin --norm rms \
-  --optim psf --grow-auto d,a2+w1024 --trial-steps 1000 \
+  --optim psf \
   --ctx-mix 2048,8192 --scan-chunk 64 --chunks 4 --fused-scan 1 --seed 0 \
   --data /mnt/kv_cache/tokfull_v8192 --sources dclm,fineweb-edu,wikipedia,finemath,arxiv \
   --data2 /mnt/kv_cache/tokmixqa_full_v8192 --data2-frac 0.4 \

@@ -205,6 +205,23 @@ def _head_piece_ul_eager(hc, yc, negc, mskc, E, alpha):
 _head_piece_ul = torch.compile(_head_piece_ul_eager, dynamic=False)
 
 
+class GatedLinear(nn.Module):
+    """A linear layer whose output is scaled by a learnable scalar gate g (ReZero, Bachlechner et al. 2020). Grown
+    layers are wrapped with g = 0: the model is exactly what it was, yet dLoss/dg is non-zero from the first step
+    (the layer computes real features), so the model opens the gate as fast as the layer proves useful -- its
+    ramp-in is its own. `.weight` / `.bias` return the GATED tensors, so code that reads them directly (the carrier
+    applies F.linear(o, self.o.weight * ...)) sees the gate too."""
+    def __init__(self, lin: nn.Linear):
+        super().__init__()
+        self.lin = lin
+        self.g = nn.Parameter(torch.zeros((), device=lin.weight.device))
+    @property
+    def weight(self): return self.lin.weight * self.g
+    @property
+    def bias(self): return None if self.lin.bias is None else self.lin.bias * self.g
+    def forward(self, x): return F.linear(x, self.weight, self.bias)
+
+
 class LM(nn.Module):
     def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512, mixer="spin", norm="ln"):
         """mixer: "spin" (plain carrier), "gspin" (input and output gates), "fspin" (input and recurrence
@@ -671,7 +688,7 @@ class LM(nn.Module):
         big.new_layers = sorted(set(range(2 * L)) - set(oldpos))
         big.copied_from = {}
         with torch.no_grad():
-            if init == "copy":
+            if init in ("copy", "gate"):
                 # STACKING (Du et al., NeurIPS 2024, "Stacking your transformers"): each new layer starts as a COPY of
                 # the nearest trained layer of its own type before it (after it if none), so it carries useful
                 # features from its first step. Not function-preserving; the growth trial measures whether it pays.
@@ -683,6 +700,11 @@ class LM(nn.Module):
                     q = max(before) if before else min(same)
                     big.mix[i].load_state_dict(big.mix[q].state_dict()); big.mlp[i].load_state_dict(big.mlp[q].state_dict())
                     big.copied_from[i] = q
+                if init == "gate":
+                    # GATED STACKING: the copies sit behind gates at zero -- exact at the growth (the plain copies
+                    # jumped the loss 3.07 -> 4.81), useful features from the first step, opened by the gradient
+                    for i in big.new_layers:
+                        big.mix[i].o = GatedLinear(big.mix[i].o); big.mlp[i].b = GatedLinear(big.mlp[i].b)
             else:
                 for i in big.new_layers:
                     big.mix[i].o.weight.zero_()

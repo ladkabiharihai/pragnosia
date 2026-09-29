@@ -125,7 +125,7 @@ def main():
                     help="with --grow-auto: length of each branch of a growth TRIAL (grow vs stay, same batches); the "
                          "model grows only if growing reduced held-out loss more per unit of compute. A measurement "
                          "window, not a threshold")
-    ap.add_argument("--deepen-init", default="zero", choices=["zero", "copy"],
+    ap.add_argument("--deepen-init", default="zero", choices=["zero", "copy", "gate"],
                     help="new layers at a deepen: zero = exact (outputs start at zero); copy = stacking, each new layer "
                          "a copy of the nearest trained layer of its type, with its optimizer memory")
     ap.add_argument("--growth-probe", default="", help="log growth_signal() for these ops every 1,000 steps, e.g. w768,d")
@@ -664,13 +664,17 @@ def main():
                 opt2 = make_opt(big)
                 if a.optim == "psf":
                     psf_carry(opt, opt2, pairs=pairs)
-                    if a.deepen_init == "copy":
+                    if a.deepen_init in ("copy", "gate"):
                         # a stacked layer takes a COPY of its source layer's optimizer memory as well as its weights
                         import copy as _cp
                         for i_new, q_src in big.copied_from.items():
-                            for pn, ps_ in zip(list(big.mix[i_new].parameters()) + list(big.mlp[i_new].parameters()),
-                                               list(big.mix[q_src].parameters()) + list(big.mlp[q_src].parameters())):
-                                if ps_ in opt2.state:
+                            # paired BY NAME: a gated copy has "o.lin.weight" where its source has "o.weight", plus a
+                            # gate of its own that starts with fresh memory
+                            for sub in ("mix", "mlp"):
+                                src_ = dict(getattr(big, sub)[q_src].named_parameters())
+                                for nm, pn in getattr(big, sub)[i_new].named_parameters():
+                                    ps_ = src_.get(nm.replace(".lin.", "."))
+                                    if ps_ is None or ps_.shape != pn.shape or ps_ not in opt2.state: continue
                                     opt2.state[pn] = {k: (v.clone() if torch.is_tensor(v) else _cp.copy(v))
                                                       for k, v in opt2.state[ps_].items()}
                 if a.intrinsic_lr == 1:            # the rates the optimizer found are kept; new layers start at --new-lr
@@ -705,7 +709,9 @@ def main():
             # rates are set AFTER any growth event: a deepen rebuilds the optimizer at its base rates
             for gi, g in (() if (a.intrinsic_lr or a.optim == "psf") else enumerate(opt.param_groups)):
                 g["lr"] = base[gi] * sched * w
-            if len(opt.param_groups) > 2 and not a.intrinsic_lr:
+            # (never under psf: its rates are not reset each step, so this multiply COMPOUNDED and drove the added
+            # layers' rate to ~0 within a few steps -- every psf deepen until 2026-09-29 trained no new layer at all)
+            if len(opt.param_groups) > 2 and not a.intrinsic_lr and a.optim != "psf":
                 # layers added mid-run start from empty optimizer state; their first absolute steps are sign-like
                 # (+-lr on every element, zero-initialised output projections included), so they ramp in
                 opt.param_groups[2]["lr"] *= min(1.0, (i - grown_at + 1) / max(1, a.new_warm))

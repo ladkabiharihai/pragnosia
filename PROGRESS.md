@@ -1647,3 +1647,19 @@ STACKING TEST (eval/stack_test.txt): from the same 30k-step model, 4,000 steps: 
 LAUNCHED run64_intrinsic: the same intrinsic recipe from 12L x d768 (118M, the size of the best Q&A model), growth
 candidates deepen then split + widen to 1024; eval/after_intrinsic4.sh queued behind it (recall, fine-tune,
 abstention, scorecard).
+- `2026-09-29 08:31:23 UTC` **train** (15.9 min) ok
+  d512 L12 mlp4 ctx2048 B8 34000 steps -> /mnt/kv_cache/st_gate
+  (log `logs/20260929-081531-train.log`, seed 2)
+
+## 2026-09-29 08:33 UTC — USER: 15 more days; "why are we growing the model to 118 manually, why not intrinsically"
+Agreed: a hand-picked start size is a workaround. The deliverable must reach its size by its own decisions; run64
+(118M start) is now a PURE CONTROL, no growth -- the benchmark a self-growing model from 46M must match at equal compute.
+BUG FOUND, invalidating every depth-growth result under psf: the old new-layer warm-up multiplies the added layers'
+group rate by a ramp factor each step; Fabric resets rates every step, psf does not, so the factor COMPOUNDED and the
+new layers' rate collapsed to ~0 within a few steps. Evidence: gated-stack test, all 24 gates at ~2e-6 after 4,000
+steps; the new group's schedule-free weight sum exactly 0.0; zero-init deepen matched "unchanged" to 4 decimals
+(1.2454 vs 1.2453). The ramp is now skipped under psf. Invalid: stack_test zero/copy/gate (2026-09-27/29). Widening
+never used that group, so run60's widening trials stand. Depth variants re-running.
+New growth operator available: deepen(init="gate") -- GATED STACKING: new layers copy the nearest trained layer of
+their type, and their output projections sit behind learnable scalar gates at 0 (ReZero): exact at the growth
+(3.0708 -> 3.0708, where plain copies jumped to 4.81) and opened by the gradient.
