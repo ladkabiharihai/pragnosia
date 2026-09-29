@@ -1688,3 +1688,41 @@ the compute. Consistent with run60's trials staying small. Open question the 118
 growth needs a longer budget; if so, the decision must look over the remaining budget, not the trial window.
 Also: the card reached 88.6/93.6 GiB with three tests plus prod (the control OOMed at start; prod unaffected, HTTP 200);
 the control was re-queued behind the tests.
+- `2026-09-29 10:03:02 UTC` **train** (58.3 min) ok
+  d512 L12 mlp4 ctx2048 B8 50000 steps -> /mnt/kv_cache/gl_unchanged
+  (log `logs/20260929-090446-train.log`, seed 2)
+- `2026-09-29 10:41:26 UTC` **train** (96.7 min) ok
+  d512 L12 mlp4 ctx2048 B8 50000 steps -> /mnt/kv_cache/gl_gate
+  (log `logs/20260929-090445-train.log`, seed 2)
+- `2026-09-29 10:53:15 UTC` **train** (0.3 min) FAILED: UnboundLocalError("cannot access local variable 'torch' where it is not associated with a value")
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/sfp_tmp
+  (log `logs/20260929-105257-train.log`, seed 0)
+- `2026-09-29 10:54:50 UTC` **train** (1.4 min) ok
+  d512 L12 mlp4 ctx2048 B8 600 steps -> /mnt/kv_cache/sfp_tmp
+  (log `logs/20260929-105328-train.log`, seed 0)
+- `2026-09-29 10:57:06 UTC` **train** (1.9 min) ok
+  d512 L12 mlp4 ctx2048 B8 800 steps -> /mnt/kv_cache/sfp_tmp
+  (log `logs/20260929-105510-train.log`, seed 0)
+- `2026-09-29 10:58:41 UTC` **train** (1.5 min) ok
+  d512 L12 mlp4 ctx2048 B8 800 steps -> /mnt/kv_cache/sfp_tmp
+  (log `logs/20260929-105711-train.log`, seed 0)
+
+## 2026-09-29 10:59 UTC — long-horizon growth confirmed; marginal-returns decision; fused schedule-free Prodigy (sfp)
+LONG-HORIZON GROWTH (eval/growth_long.txt; rl_psf 12L d512 at 30k steps, 20,000 more steps each, held-out BPB):
+    step        32k     34k     36k     40k     44k     48k     50k
+    unchanged   1.2508  1.2454  1.2402  1.2310  1.2228  1.2157  1.2123
+    gated deepen 1.2506 1.2448  1.2394  1.2287  1.2181  1.2073  1.2025
+Growth's lead grows steadily and accelerates (0.0006 at +4k, 0.0098 at +20k): invisible to a 4k-step trial. Not yet ahead
+at equal compute at +20k (per-compute marginal slope 1.28 vs 1.70 at 48-50k), so the decision must compare MARGINAL
+returns, not whole-window gains. New rule under psf/sfp: record held-out at the middle and end of each branch; grow when
+the grown branch's second-half gain per unit compute beats the unchanged branch's and it is not behind.
+FUSED SCHEDULE-FREE PRODIGY (--optim sfp; src/optim.py _sfp_update/_run_sfp): the package's mathematics at its defaults
+(Adam-style Prodigy numerator/denominator on every 11th element, d limiter 2^0.25, d only rises; factored second moment
+scaled by d^2; update d g / (sqrt(v) + d eps); StableAdamW rms clip; schedule-free y/z/x with weight dlr^2), every
+per-step scalar a device tensor, so it compiles and replays inside the captured optimizer step. Growth padding through
+Fabric.grew (z gets the grown weights in new slots; p0/s restart). Two slips fixed on the way (a block inserted in two
+places by an unbounded str.replace; a local "import torch._dynamo" shadowing torch).
+First checks, card shared with the 118M control: 600 steps loss 5.93 vs psf 5.83; 800 steps 5.54 vs 5.48 at 154 vs 146
+ktok/s (+5%). Clean speed and a 30k-step parity test wait for the card. Adopted only if it matches psf's 1.2572.
+118M CONTROL so far: at 12k steps 1.2319 vs the 46M run at equal compute (24k) 1.2169 -- small is more compute-efficient
+this early, as scaling laws predict; the crossover is due at control 24-28k.

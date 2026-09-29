@@ -102,6 +102,41 @@ def _update(p, g, vr, vc, v, m, lr, b1: float, b2: float, eps: float, wd: float,
         dsp.mul_(b2).add_((u * lr * live).to(dsp.dtype))     # the displacement the next hypergradient reads
 
 
+def _sfp_update(p, g, z, vr, vc, v, p0, s, d, dlr, ckp1, xy, du, acc, b2: float, b3: float, eps: float):
+    """SCHEDULE-FREE PRODIGY, one parameter, fused (goal 8 + training efficiency). The same mathematics as
+    prodigy-plus-schedule-free at its defaults (Adam-style Prodigy, Schedule-Free, StableAdamW rms clip, factored
+    second moment), written so it compiles into one kernel group and replays inside the captured optimizer step:
+    every per-step scalar (d, dlr, the averaging coefficient) is a 0-d device tensor, never a Python float.
+      second moment  v <- b2 v + (1-b2) d^2 g^2 (factored for 2-D, Adafactor estimator); update = d g / (sqrt(v) + d eps)
+      rms clip       update /= sqrt(max(1, rms(update)))
+      Prodigy stats  on every 11th element, against z BEFORE this step: s <- b3 s + du g; numerator += du <g, p0 - z>
+      schedule-free  y <- y + ckp1 (z - y); z <- z - dlr u; y <- y - dlr xy u     (the parameter holds y)"""
+    gf = torch.nan_to_num(g.float(), nan=0.0, posinf=0.0, neginf=0.0)
+    d2 = d * d
+    if vr is not None:
+        sq = gf.square()
+        vr.mul_(b2).add_(sq.mean(dim=1) * ((1 - b2) * d2))
+        vc.mul_(b2).add_(sq.mean(dim=0) * ((1 - b2) * d2))
+        denom = ((vr / vr.mean().clamp_min(1e-30)).unsqueeze(1) * vc.unsqueeze(0)).sqrt()
+    else:
+        v.mul_(b2).add_(gf.square() * ((1 - b2) * d2))
+        denom = v.sqrt()
+    upd = (gf * d) / (denom + d * eps)
+    rms = (upd.norm() / (upd.numel() ** 0.5)).clamp_min(1.0)
+    upd = upd * torch.rsqrt(rms)
+    zf = z.float()
+    sg = gf.reshape(-1)[::11]; sz = zf.reshape(-1)[::11]
+    acc[0] += torch.dot(sg, p0.float() - sz) * du
+    s.mul_(b3).add_((sg * du).to(s.dtype))
+    acc[1] += s.float().abs().sum()
+    y = p.float()
+    y = y + ckp1 * (zf - y)
+    z.sub_((upd * dlr).to(z.dtype))
+    y = y - upd * (dlr * xy)
+    p.copy_(y.to(p.dtype))
+
+
+_sfp_fused = None  # torch.compile(_sfp_update), built on first use
 _fused = None      # torch.compile(_update), built on first use
 
 
@@ -127,14 +162,16 @@ class Fabric(Optimizer):
     def __init__(self, params, lr=2e-3, betas=(0.9, 0.99), eps=1e-30, weight_decay=0.0,
                  trust=True, factored=True, momentum=True, trust_clip=1e4, min_norm=1e-3,
                  intrinsic_lr=False, adapt=0.02, lr_bounds=(1e-4, 3e-2), fused=False, cuda_graph=False,
-                 hyper=False, hyper_beta=0.02, dog=False):
+                 hyper=False, hyper_beta=0.02, dog=False, sfp=False):
         # intrinsic_lr defaults OFF. Three designs were tried on 2026-09-10 and all three produced NaN. They
         # are kept in the code because the failure modes are the useful part; see the comment in step().
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay,
                                       trust=trust, factored=factored, momentum=momentum,
                                       trust_clip=trust_clip, min_norm=min_norm,
                                       intrinsic_lr=intrinsic_lr, adapt=adapt, lr_bounds=lr_bounds,
-                                      hyper=hyper, dog=dog))
+                                      hyper=hyper, dog=dog, sfp=sfp))
+        # sfp: schedule-free Prodigy, fused (see _sfp_update). Defaults as the package: d0 1e-6, d_coef 1, lr 1,
+        # betas (0.9, 0.99), beta3 = sqrt(0.99), eps 1e-8, d limiter on. `lr` is only the multiplier (1).
         # hyper: the rate is the optimizer's own (goal 8). `lr` is only where it STARTS; every group then moves
         # its rate multiplicatively by hyper_beta x cos(g_t, dw_{t-1}), a bounded signal with a restoring force
         # (overshoot makes it negative), unlike the three designs recorded in _step_intrinsic, which ratcheted.
@@ -146,15 +183,44 @@ class Fabric(Optimizer):
         self.fused, self.cuda_graph = fused, cuda_graph
         self._graph = None; self._ptrs = None; self._warm = False; self.recaptures = 0
         for gp in self.param_groups:
-            gp["lr_t"] = None; gp["acc"] = None
+            gp["lr_t"] = None; gp["acc"] = None; gp["sf"] = None
+            if gp.get("sfp"):
+                gp["lr"] = 1.0; gp.setdefault("train_mode", True)
+
+    SF_KEYS = ("d", "dnum", "ws")
+
+    def _sf(self, gp, device):
+        """the group's device scalars for sfp, created once (from saved floats after a load)"""
+        if gp["sf"] is None:
+            saved = gp.get("sf_saved", {})
+            t = lambda v: torch.tensor(float(v), device=device)
+            gp["sf"] = dict(d=t(saved.get("d", 1e-6)), dnum=t(saved.get("dnum", 0.0)), ws=t(saved.get("ws", 0.0)),
+                            acc=torch.zeros(2, device=device), dlr=t(0), w=t(0), ckp1=t(0), xy=t(0), du=t(0))
+        return gp["sf"]
+
+    @torch.no_grad()
+    def _sf_train_mode(self, train):
+        """y <-> x: the parameter holds y while training and x (the averaged weights) for evaluation and saving"""
+        for gp in self.param_groups:
+            if not gp.get("sfp") or gp.get("train_mode", True) == train: continue
+            w = (1 - 0.9) if train else (1 - 1 / 0.9)
+            for p in gp["params"]:
+                st = self.state.get(p)
+                if st and "z" in st: p.lerp_(st["z"].to(p.dtype), w)
+            gp["train_mode"] = train
+
+    def train(self): self._sf_train_mode(True)
+    def eval(self): self._sf_train_mode(False)
 
     def state_dict(self):
         for gp in self.param_groups:             # an intrinsic rate lives on the device; bring it home to save
             if gp.get("hyper") and gp["lr_t"] is not None:
                 gp["lr"] = float(gp["lr_t"])
+            if gp.get("sfp") and gp.get("sf") is not None:
+                gp["sf_saved"] = {k: float(gp["sf"][k]) for k in self.SF_KEYS}
         sd = super().state_dict()
         for g in sd["param_groups"]:
-            g.pop("lr_t", None); g.pop("acc", None)   # device scalars rebuilt on the next step; not state
+            g.pop("lr_t", None); g.pop("acc", None); g.pop("sf", None)   # device scalars rebuilt; not state
         return sd
 
     def rates(self):
@@ -174,7 +240,7 @@ class Fabric(Optimizer):
         super().load_state_dict(sd)
         self._graph = None; self._warm = False   # state tensors were replaced; a captured graph is stale
         for gp in self.param_groups:
-            gp["lr_t"] = None; gp["acc"] = None
+            gp["lr_t"] = None; gp["acc"] = None; gp["sf"] = None
             for p in gp["params"]:
                 st = self.state.get(p)
                 # torch casts every floating state tensor to the PARAMETER's dtype on load, which silently
@@ -197,6 +263,17 @@ class Fabric(Optimizer):
             st["m"] = torch.zeros_like(p, dtype=torch.bfloat16)
         if gp.get("hyper"):
             st["dsp"] = torch.zeros_like(p, dtype=torch.bfloat16)
+        if gp.get("sfp"):
+            st["z"] = p.detach().clone()
+            sl = p.detach().reshape(-1)[::11]
+            st["p0"] = sl.to(torch.bfloat16).clone() if bool(p.detach().any()) else torch.zeros((), dtype=torch.bfloat16, device=p.device)
+            st["s"] = torch.zeros_like(sl, dtype=torch.bfloat16)
+            if p.dim() == 2 and not all(k < 32 for k in p.shape):
+                st.pop("v", None)
+                st["vr"] = torch.zeros(p.shape[0], device=p.device); st["vc"] = torch.zeros(p.shape[1], device=p.device)
+            else:
+                st.pop("vr", None); st.pop("vc", None); st["v"] = torch.zeros_like(p, dtype=torch.float32)
+            st.pop("m", None)
         if gp.get("dog"):
             # r_eps = 1e-4 (1 + |w0|), the DoG paper's default, reported insensitive over orders of magnitude
             st["w0"] = p.detach().to(torch.bfloat16).clone()
@@ -227,12 +304,47 @@ class Fabric(Optimizer):
            st.get("dsp") if gp.get("hyper") else None,
            (st["w0"], st["rg"]) if gp.get("dog") else None)
 
+    def _run_sfp(self, gp):
+        global _sfp_fused
+        fn = _sfp_update
+        if self.fused:
+            if _sfp_fused is None:
+                import torch._dynamo as _dyn     # (an "import torch..." here would make torch local to the function)
+                _dyn.config.cache_size_limit = max(_dyn.config.cache_size_limit, 64)
+                _sfp_fused = torch.compile(_sfp_update, dynamic=True, fullgraph=True)
+            fn = _sfp_fused
+        dev = next((p.device for p in gp["params"] if p.grad is not None), None)
+        if dev is None: return
+        f = self._sf(gp, dev)
+        b1, b2 = gp["betas"]; b3 = b2 ** 0.5; d0 = 1e-6
+        # per-step scalars from the step-start d, all on the device (so this lives inside the captured graph)
+        f["dlr"].copy_(f["d"] * gp["lr"]); f["w"].copy_(f["dlr"] * f["dlr"])
+        tot = f["ws"] + f["w"]
+        f["ckp1"].copy_(torch.where(tot > 0, f["w"] / tot.clamp_min(1e-38), torch.zeros_like(tot)))
+        f["xy"].copy_(1 - b1 * (1 - f["ckp1"])); f["du"].copy_(f["d"] * f["d"] / d0 ** 0.5)
+        for p in gp["params"]:
+            if p.grad is None: continue
+            st = self.state[p] or self._init_state(p, gp)
+            st["step"] += 1
+            fn(p.detach(), p.grad, st["z"], st.get("vr"), st.get("vc"), st.get("v"), st["p0"], st["s"],
+               f["d"], f["dlr"], f["ckp1"], f["xy"], f["du"], f["acc"], b2, b3, 1e-8)
+        # end of step: the Prodigy estimate, exactly as the package (numerator decays by b3; a negative contribution is
+        # kept only once d has left d0 or the contribution is positive; d_hat limited to 2^0.25 d; d only rises)
+        num, den = f["acc"][0], f["acc"][1]
+        keep = (f["d"] > d0) | (num > 0)
+        f["dnum"].copy_(f["dnum"] * b3 + torch.where(keep, num, torch.zeros_like(num)))
+        dhat = torch.minimum(f["d"] * 2 ** 0.25, f["dnum"] / den.clamp_min(1e-38))
+        f["d"].copy_(torch.where(den > 0, torch.maximum(f["d"], dhat), f["d"]))
+        f["ws"].add_(f["w"]); f["acc"].zero_()
+
     def _run(self, fill_lr=True):
         """One step over all groups, through _update (eager or fused).
 
         fill_lr=False while capturing: a fill_(float) recorded inside the graph would bake the capture-time
         rate into every replay. The graph reads lr_t; the caller fills it before each replay."""
         for gp in self.param_groups:
+            if gp.get("sfp"):
+                self._run_sfp(gp); continue
             for p in gp["params"]:
                 if p.grad is None:
                     continue
@@ -257,7 +369,7 @@ class Fabric(Optimizer):
                 if p.grad is None:
                     out.append(None); continue
                 st = self.state[p]
-                out.append((p.data_ptr(), p.grad.data_ptr()) + tuple(st[k].data_ptr() for k in ("vr", "vc", "v", "m", "dsp", "w0", "rg") if k in st))
+                out.append((p.data_ptr(), p.grad.data_ptr()) + tuple(st[k].data_ptr() for k in ("vr", "vc", "v", "m", "dsp", "w0", "rg", "z", "p0", "s") if k in st))
         return out
 
     @torch.no_grad()
@@ -429,6 +541,14 @@ class Fabric(Optimizer):
             # DoG measures distance from the start; a grown tensor restarts that origin where it now stands (rbar,
             # the distance already covered, is kept, so its rate does not collapse)
             st["w0"] = p.detach().to(torch.bfloat16).clone()
+        if "z" in st and st["z"].shape != p.shape:
+            # sfp: the schedule-free base takes the old values in the old slots and the grown weights in the new ones
+            # (so new slots start with x = y = z); the Prodigy distance baseline restarts for this tensor -- the group's
+            # step size d is a running maximum and does not fall with it
+            z = p.detach().clone(); z[tuple(slice(0, k) for k in st["z"].shape)] = st["z"]; st["z"] = z
+            sl = p.detach().reshape(-1)[::11]
+            st["p0"] = sl.to(torch.bfloat16).clone() if bool(p.detach().any()) else torch.zeros((), dtype=torch.bfloat16, device=p.device)
+            st["s"] = torch.zeros_like(sl, dtype=torch.bfloat16)
         for k in ("m", "dsp"):                  # momentum and displacement: zero IS right, they are directions
             if k in st and st[k].shape != p.shape:
                 old = st[k]
