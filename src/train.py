@@ -131,6 +131,8 @@ def main():
     ap.add_argument("--sf-restart", type=int, default=0,
                     help="at a growth, restart the schedule-free AVERAGE (weight sum 0, base z = the averaged weights), "
                          "keeping every other part of the optimizer's memory: the average then covers the new stage only")
+    ap.add_argument("--sf-clock", type=int, default=1,
+                    help="sfp: one schedule-free averaging clock per weight (1) or one per group, as the package (0)")
     ap.add_argument("--trial-now", type=int, default=0,
                     help="validation: run one growth trial right after the start/resume (trial length --trial-steps)")
     ap.add_argument("--growth-probe", default="", help="log growth_signal() for these ops every 1,000 steps, e.g. w768,d")
@@ -239,7 +241,7 @@ def main():
                 return o_
             if a.optim == "sfp":
                 o_ = Fabric([{"params": g["params"]} for g in model.param_groups(lr=a.lr, new_lr=a.new_lr)], lr=1.0,
-                            fused=bool(a.fused), sfp=True, cuda_graph=bool(a.graph and a.fused))
+                            fused=bool(a.fused), sfp=True, sfp_clock=bool(a.sf_clock), cuda_graph=bool(a.graph and a.fused))
                 o_.recaptures = getattr(o_, "recaptures", 0)
                 return o_
             return Fabric(model.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused),

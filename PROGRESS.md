@@ -1755,3 +1755,44 @@ reduces to a per-row mean square (its normaliser averages over a size-1 axis); r
 ~1e-7 on identical gradients for 300 steps. 30k parity run restarted.
 TEST-DESIGN CORRECTION: every small growth test started from a checkpoint at ~0.5B tokens, before the ~3B-token
 crossover, where growth should not pay anyway. The decisive tests must start after the crossover.
+- `2026-09-30 06:33:49 UTC` **train** (32.5 min) ok
+  d512 L12 mlp4 ctx2048 B8 38000 steps -> /mnt/kv_cache/at_widen_restart
+  (log `logs/20260930-060117-train.log`, seed 2)
+- `2026-09-30 06:34:45 UTC` **train** (32.8 min) ok
+  d512 L12 mlp4 ctx2048 B8 38000 steps -> /mnt/kv_cache/at_widen_carry
+  (log `logs/20260930-060159-train.log`, seed 2)
+- `2026-09-30 06:52:02 UTC` **train** (23.4 min) ok
+  d512 L12 mlp4 ctx2048 B8 30000 steps -> /mnt/kv_cache/rl_sfp
+  (log `logs/20260930-062841-train.log`, seed 0)
+- `2026-09-30 07:08:54 UTC` **train** (16.4 min) ok
+  d512 L12 mlp4 ctx2048 B8 38000 steps -> /mnt/kv_cache/ct_unchanged
+  (log `logs/20260930-065230-train.log`, seed 2)
+- `2026-09-30 07:15:08 UTC` **train** (22.6 min) ok
+  d512 L12 mlp4 ctx2048 B8 38000 steps -> /mnt/kv_cache/ct_widen_perweight
+  (log `logs/20260930-065230-train.log`, seed 2)
+- `2026-09-30 07:15:08 UTC` **train** (22.6 min) ok
+  d512 L12 mlp4 ctx2048 B8 38000 steps -> /mnt/kv_cache/ct_widen_shared
+  (log `logs/20260930-065230-train.log`, seed 2)
+- `2026-09-30 07:17:43 UTC` **train** (1.3 min) ok
+  d512 L12 mlp4 ctx8192 B2 120400 steps -> /mnt/kv_cache/post_chk
+  (log `logs/20260930-071626-train.log`, seed 5)
+- `2026-09-30 07:18:54 UTC` **train** (0.8 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 32.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 26.25 MiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.29 GiB memory in use. Process 1640379 has 946.00 MiB memory in use. Process 1640380 has 946.00 MiB memory in use. Process 1640381 has 946.00 MiB memory in use. Process 1640378 has 946.00 MiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 1641168 has 37.68 GiB memory in use. Process 1674326 has 11.02 GiB memory in use. Including non-PyTorch memory, this process has 17.32 GiB memory in use. Process 1674327 has 17.34 GiB memory in use. 18.00 GiB allowed; Of the allocated memory 16.31 GiB is allocated by PyTorch, with 8.68 GiB allocated in private pools (e.g., CUDA Graphs), and 17.25 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B2 126000 steps -> /mnt/kv_cache/pg_deepen
+  (log `logs/20260930-071805-train.log`, seed 6)
+
+## 2026-09-30 07:19 UTC — fused schedule-free Prodigy VALIDATED and at full speed; clock test invalid (my bug); post-crossover test running
+PARITY, 30,000 steps, 12L d512, held-out BPB:   5k      10k     15k     20k     25k     30k
+    package (psf)                              1.5550  1.3980  1.3379  1.3017  1.2761  1.2572
+    fused (sfp)                                1.5551  1.4067  1.3450  1.3065  1.2807  1.2611   (+0.3%; tuned cosine 1.2720)
+On identical gradients the two agree to ~1e-7 for 300 steps; the residual is rounding compounding over 30k steps.
+SPEED, card to itself, 46M, full configuration: sfp 437-455 ktok/s vs psf ~390 and the hand-set Fabric ~460 -- the
+intrinsic optimizer is now essentially as fast as the hand-tuned one (training-efficiency goal).
+CONVERTER eval/psf2sfp.py: run60's final checkpoint resumed under sfp without a bump (held-out 1.1352 -> 1.1351).
+CLOCK TEST (eval/clock_test.txt) INVALID: rl_sfp predates per-weight clocks; they were created at the first optimizer
+step, which came AFTER the growth, so new slots inherited the old shared clock (new-slot writer norms 4.266 vs 4.267:
+identical). Fabric.grew now creates the clocks from the group's sum before padding. Loss was equal either way
+(38k: 1.2371 shared, 1.2369 per-weight, 1.2383 unchanged) -- but that test sat before the crossover, where extra
+capacity cannot help much whatever the clocks do.
+POST-CROSSOVER TEST running (eval/post_growth.sh): run60 final (46M, 7.9B tokens, past the ~3B crossover), converted,
+full configuration: unchanged 13k steps | widen to 768, per-weight clocks, 6k | deepen by gated copies, per-weight
+clocks, 6k; compared at equal compute.

@@ -182,14 +182,14 @@ class Fabric(Optimizer):
     def __init__(self, params, lr=2e-3, betas=(0.9, 0.99), eps=1e-30, weight_decay=0.0,
                  trust=True, factored=True, momentum=True, trust_clip=1e4, min_norm=1e-3,
                  intrinsic_lr=False, adapt=0.02, lr_bounds=(1e-4, 3e-2), fused=False, cuda_graph=False,
-                 hyper=False, hyper_beta=0.02, dog=False, sfp=False):
+                 hyper=False, hyper_beta=0.02, dog=False, sfp=False, sfp_clock=True):
         # intrinsic_lr defaults OFF. Three designs were tried on 2026-09-10 and all three produced NaN. They
         # are kept in the code because the failure modes are the useful part; see the comment in step().
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay,
                                       trust=trust, factored=factored, momentum=momentum,
                                       trust_clip=trust_clip, min_norm=min_norm,
                                       intrinsic_lr=intrinsic_lr, adapt=adapt, lr_bounds=lr_bounds,
-                                      hyper=hyper, dog=dog, sfp=sfp))
+                                      hyper=hyper, dog=dog, sfp=sfp, sfp_clock=sfp_clock))
         # sfp: schedule-free Prodigy, fused (see _sfp_update). Defaults as the package: d0 1e-6, d_coef 1, lr 1,
         # betas (0.9, 0.99), beta3 = sqrt(0.99), eps 1e-8, d limiter on. `lr` is only the multiplier (1).
         # hyper: the rate is the optimizer's own (goal 8). `lr` is only where it STARTS; every group then moves
@@ -350,7 +350,8 @@ class Fabric(Optimizer):
             if "wsp" not in st:                  # a weight's own clock starts where its group's stands (0 at the start;
                 st["wsp"] = torch.zeros_like(p, dtype=torch.float32) + f["ws"]   # a checkpoint without clocks keeps its average)
             fn(p.detach(), p.grad, st["z"], st.get("vr"), st.get("vc"), st.get("v"), st["p0"], st["s"],
-               f["d"], f["dlr"], f["ckp1"], f["xy"], f["du"], f["acc"], b2, b3, 1e-8, st["wsp"], f["w"], b1)
+               f["d"], f["dlr"], f["ckp1"], f["xy"], f["du"], f["acc"], b2, b3, 1e-8,
+               st["wsp"] if gp.get("sfp_clock", True) else None, f["w"], b1)
         # end of step: the Prodigy estimate, exactly as the package (numerator decays by b3; a negative contribution is
         # kept only once d has left d0 or the contribution is positive; d_hat limited to 2^0.25 d; d only rises)
         num, den = f["acc"][0], f["acc"][1]
@@ -564,6 +565,13 @@ class Fabric(Optimizer):
             # DoG measures distance from the start; a grown tensor restarts that origin where it now stands (rbar,
             # the distance already covered, is kept, so its rate does not collapse)
             st["w0"] = p.detach().to(torch.bfloat16).clone()
+        if "z" in st and st["z"].shape != p.shape and "wsp" not in st:
+            # a checkpoint from before per-weight clocks: give the OLD slots the group's clock first, so the padding
+            # below really starts only the new slots at zero (without this the first step after a growth created every
+            # clock at the group's value and the new slots inherited the old average -- found 2026-09-30)
+            gp_ = next((g for g in self.param_groups if any(q is p for q in g["params"])), None)
+            ws_ = float(gp_["sf"]["ws"]) if gp_ is not None and gp_.get("sf") is not None else float((gp_ or {}).get("sf_saved", {}).get("ws", 0.0))
+            st["wsp"] = torch.full(st["z"].shape, ws_, device=p.device, dtype=torch.float32)
         if "z" in st and st["z"].shape != p.shape:
             # sfp: the schedule-free base takes the old values in the old slots and the grown weights in the new ones
             # (so new slots start with x = y = z); the Prodigy distance baseline restarts for this tensor -- the group's

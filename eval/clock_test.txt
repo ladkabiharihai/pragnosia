@@ -1,0 +1,5 @@
+=== averaging-clock test on the fused optimizer, 2026-09-30 06:52 UTC ===
+unchanged:  | 32000=1.2547 34000=1.2488 36000=1.2433 38000=1.2383  resumed optimizer state 
+widen_perweight: loss 3.0749 -> 3.0749 | 32000=1.2548 34000=1.2484 36000=1.2426 38000=1.2369  resumed optimizer state 
+widen_shared: loss 3.0749 -> 3.0749 | 32000=1.2548 34000=1.2482 36000=1.2427 38000=1.2371  resumed optimizer state 
+CLOCK_DONE
