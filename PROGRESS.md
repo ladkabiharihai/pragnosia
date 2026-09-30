@@ -1847,3 +1847,26 @@ Widening was unaffected (Fabric.grew already fell back to the saved values). Fix
 Also built: multi-alternative growth trials (--grow-auto "w768|d"): the model trials every option of the next plan
 entry from the same snapshot on the same batches, keeps the best by marginal gain per unit compute, and grows only if
 it beats staying. Mechanics test passed (widen branch, restore, deepen branch, restore, unchanged, pick).
+- `2026-09-30 10:23:15 UTC` **train** (64.2 min) ok
+  d512 L12 mlp4 ctx8192 B2 126000 steps -> /mnt/kv_cache/pd_zero
+  (log `logs/20260930-091902-train.log`, seed 6)
+- `2026-09-30 10:23:19 UTC` **train** (64.3 min) ok
+  d512 L12 mlp4 ctx8192 B2 126000 steps -> /mnt/kv_cache/pd_gate
+  (log `logs/20260930-091902-train.log`, seed 6)
+- `2026-09-30 10:44:18 UTC` **train** (20.9 min) ok
+  d512 L12 mlp4 ctx8192 B2 126000 steps -> /mnt/kv_cache/pd_copy
+  (log `logs/20260930-102325-train.log`, seed 6)
+
+## 2026-09-30 10:45 UTC — post-crossover growth operators, final (step size carried); LAUNCH the long intrinsic run
+From run60's final 46M model (7.9B tokens), fused optimizer, per-weight clocks, full config, held-out BPB:
+    +k steps          1       2       3       4       5       6
+    unchanged       1.1348  1.1343  1.1339  1.1334  1.1330  1.1326
+    widen 768       1.1364  1.1353  1.1344  1.1337  1.1327  1.1319   best: ahead from +5k
+    deepen, zero    1.1375  1.1363  1.1355  1.1347  1.1341  1.1335   exact; closing at 0.0006/1k, still behind at +6k
+    deepen, gated   1.1348  1.1343  1.1339  1.1337  1.1334  1.1334   flat
+    deepen, copies  1.5134  1.2700  1.1996  --                       DIVERGED (454 spike-skips) after the 2.86 -> 5.76 jump
+Copies of trained carrier layers are unstable here. The long run offers "widen one step OR double the depth with
+zero-output layers" at every decision and lets its trials choose.
+LAUNCHED run70_grow (eval/intrinsic_run5.sh): 12L d512 start, --optim sfp, per-weight clocks, --grow-auto "W|d" x4 (no size
+written: W = widen one step, d = double depth), trials 1/8 of the stage (min 1,000), automatic micro-step split under the
+34 GiB cap, 450,000 x 65,536 = 29.5B tokens. Then eval/after_intrinsic5.sh (recall, fine-tune, abstention, scorecard).

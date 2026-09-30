@@ -133,6 +133,9 @@ def main():
                          "keeping every other part of the optimizer's memory: the average then covers the new stage only")
     ap.add_argument("--sf-clock", type=int, default=1,
                     help="sfp: one schedule-free averaging clock per weight (1) or one per group, as the package (0)")
+    ap.add_argument("--trial-frac", type=int, default=8,
+                    help="a growth trial's branches each run 1/N of the stage so far (at least --trial-steps): long enough for "
+                         "new capacity to show (~5-6k steps after the crossover, eval/post_growth.txt), a bounded share of compute")
     ap.add_argument("--trial-now", type=int, default=0,
                     help="validation: run one growth trial right after the start/resume (trial length --trial-steps)")
     ap.add_argument("--growth-probe", default="", help="log growth_signal() for these ops every 1,000 steps, e.g. w768,d")
@@ -543,6 +546,25 @@ def main():
             return dict(m=mc, opt=to_dev(opt.state_dict(), "cpu"), rng=_copy.deepcopy(rng.bit_generator.state),
                         nxt=[x.clone() for x in nxt], shapes=list(shapes), accum=a.accum, batch=a.batch,
                         auto=_copy.deepcopy(auto_events))
+        def capture_all():
+            """(Re)capture every window's graph. If the model does not fit under the cap -- a grown model can outgrow it
+            -- split the micro-step (half the rows, twice the accumulation: the same tokens per update) and try again,
+            so no split step is written into the growth plan by hand."""
+            nonlocal shapes, gs, nxt
+            while True:
+                try:
+                    if len(shapes) > 1: graphs.update({(B_, T_): capture(T_, B_) for T_, B_ in shapes})
+                    else: gs = capture()
+                    return
+                except torch.OutOfMemoryError:
+                    graphs.clear(); gs = None; gc.collect(); torch.cuda.empty_cache()
+                    if all(B_ == 1 for _, B_ in shapes): raise
+                    shapes = [(t, max(1, B_ // 2)) for t, B_ in shapes]; a.accum *= 2
+                    a.batch = shapes[-1][1] if len(shapes) > 1 else max(1, a.batch // 2)
+                    T_s, B_s = shapes[0]
+                    nxt = [batch(bins, ks, ps, rng, B_s, T_s, extra, a.data2_frac) for _ in range(a.accum)]
+                    r.log(f"    did not fit under the cap at {sum(p_.numel() for p_ in m.parameters())/1e6:.1f}M: micro-steps "
+                          f"split to {shapes}, accumulation {a.accum}")
         def install(S):
             """make snapshot S the live model: optimizer rebuilt from its state, graphs recaptured"""
             nonlocal m, opt, fwd, trunk, gs, g_, base, set_none, shapes, nxt
@@ -560,8 +582,7 @@ def main():
             base = [g["lr"] for g in opt.param_groups]; set_none = False if SF else not opt.cuda_graph
             fwd = torch.compile(m) if a.compile else m
             trunk = torch.compile(m.trunk) if a.compile else m.trunk
-            if len(shapes) > 1: graphs.update({(B_, T_): capture(T_, B_) for T_, B_ in shapes})
-            else: gs = capture()
+            capture_all()
         def nparams(): return sum(p_.numel() for p_ in m.parameters())
 
         for i in range(start, a.steps):
@@ -580,6 +601,7 @@ def main():
                         trial["ai"] += 1; trial["ev"] = trial["alts"][trial["ai"]]
                         for op_ in trial["ev"]:
                             if op_ == "d": grow_d.add(i)
+                            elif op_ == "W": grow_w[i] = m.d + 256
                             elif op_.startswith("w"): grow_w[i] = int(op_[1:])
                             elif op_.startswith("a"): grow_a[i] = int(op_[1:])
                         trial["end"] = i + trial["K"]
@@ -709,10 +731,7 @@ def main():
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
                 # every window's graph, not only the first: a mixed-length run held stale graphs after widening
-                if len(shapes) > 1:
-                    graphs.update({(B_, T_): capture(T_, B_) for T_, B_ in shapes})
-                else:
-                    gs = capture()
+                capture_all()
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                     la = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
                 P = sum(p.numel() for p in m.parameters())
@@ -799,10 +818,7 @@ def main():
                 fwd = trunk = None; torch._dynamo.reset(); gc.collect(); torch.cuda.empty_cache()
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
-                if len(shapes) > 1:
-                    graphs.update({(B_, T_): capture(T_, B_) for T_, B_ in shapes})
-                else:
-                    gs = capture()
+                capture_all()
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                     la = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
                 P = sum(p.numel() for p in m.parameters())
@@ -911,7 +927,7 @@ def main():
                         # -0.0002 at step 26,000): new capacity starts as a zero-output no-op and pays off over longer
                         # than that, so a short trial under-credits growth for good. Scale-free: the cost of a trial is
                         # a fixed fraction of the stage it decides about.
-                        K_ = max(a.trial_steps, (i + 1 - stage_t0[0]) // 4)
+                        K_ = max(a.trial_steps, (i + 1 - stage_t0[0]) // a.trial_frac)
                         if i + 1 + 2 * K_ >= a.steps: K_ = 0
                         L0_ = heldout()
                         if mark[0] is not None:
@@ -921,12 +937,13 @@ def main():
                                      end=i + 1 + K_) if K_ else None
                         for op_ in ev:
                             if op_ == "d": grow_d.add(i + 1)
+                            elif op_ == "W": grow_w[i + 1] = m.d + 256        # widen one step, no size written down
                             elif op_.startswith("w"): grow_w[i + 1] = int(op_[1:])
                             elif op_.startswith("a"): grow_a[i + 1] = int(op_[1:])
                         why = (f"this stage's length has doubled to {i+1-stage_t0[0]} steps" if SF else
                                f"rate {rt:.2e} is one e-fold below the stage start {stage_rate[0]:.2e}")
                         r.log(f"    RECONSIDER at step {i+1}: {why}; TRIAL of {' or '.join('+'.join(x) for x in alts)} vs unchanged, "
-                              f"{max(a.trial_steps, (i + 1 - stage_t0[0]) // 4)} steps each")
+                              f"{max(a.trial_steps, (i + 1 - stage_t0[0]) // a.trial_frac)} steps each")
                 if nnf > nf_prev:
                     # the guard zeroed those steps; the run continues unless the weights themselves went bad
                     alive = bool(torch.stack([p_.isfinite().all() for p_ in m.parameters()]).all().item())
