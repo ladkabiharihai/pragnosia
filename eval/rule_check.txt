@@ -1,0 +1,4 @@
+=== growth-rule validation, 2026-09-29 11:55 UTC ===
+before28k:    TRIAL w768: marginal held-out gain per 1e12 param-steps over the last 2000 steps: grown 0.0721 vs unchanged 0.1301; grown ahead (3.0187 vs 3.0216)    DECISION at step 37000: STAY. Held-out gain per unit compute 0.000 unchanged vs 0.000 grown (3.0481 -> 3.0216 vs -> 3.0187); will reconsider when this stage's length doubles again  
+after120k:    TRIAL w768: marginal held-out gain per 1e12 param-steps over the last 2000 steps: grown 0.0189 vs unchanged 0.0276; grown ahead (2.8761 vs 2.8771)    DECISION at step 129000: STAY. Held-out gain per unit compute 0.000 unchanged vs 0.000 grown (2.8822 -> 2.8771 vs -> 2.8761); will reconsider when this stage's length doubles again  
+RULE_DONE

@@ -1726,3 +1726,32 @@ First checks, card shared with the 118M control: 600 steps loss 5.93 vs psf 5.83
 ktok/s (+5%). Clean speed and a 30k-step parity test wait for the card. Adopted only if it matches psf's 1.2572.
 118M CONTROL so far: at 12k steps 1.2319 vs the 46M run at equal compute (24k) 1.2169 -- small is more compute-efficient
 this early, as scaling laws predict; the crossover is due at control 24-28k.
+- `2026-09-29 12:45:30 UTC` **train** (50.1 min) ok
+  d512 L12 mlp4 ctx8192 B2 38000 steps -> /mnt/kv_cache/rc_before28k
+  (log `logs/20260929-115523-train.log`, seed 3)
+- `2026-09-29 13:21:24 UTC` **train** (35.8 min) ok
+  d512 L12 mlp4 ctx8192 B2 130000 steps -> /mnt/kv_cache/rc_after120k
+  (log `logs/20260929-124535-train.log`, seed 3)
+- `2026-09-30 06:01:31 UTC` **train** (0.2 min) FAILED: AttributeError("'ProdigyPlusScheduleFree' object has no attribute 'grew'")
+  d512 L12 mlp4 ctx2048 B8 38000 steps -> /mnt/kv_cache/at_widen_carry
+  (log `logs/20260930-060117-train.log`, seed 2)
+
+## 2026-09-30 06:31 UTC — why growth never paid under schedule-free training, and the fix (per-weight averaging clocks)
+RULE VALIDATION (eval/rule_check.txt): marginal-returns rule says STAY at run60 28k (grown 0.072 vs 0.130 per unit compute;
+correct: before the crossover) and STAY at 120k (0.019 vs 0.028; right for that point -- no budget left to repay a
+growth). My "should GROW at 120k" expectation was a flawed test; the known answer is "grow near 47k with budget left".
+CONTROL Q&A (98M, stopped at 1.8B tokens): everyday 14.6%, SciQ 3.1%, ARC 35.8% -- size without tokens does not fix Q&A.
+DIAGNOSIS: schedule-free training evaluates the running average x of the weights, weighted dlr_t^2 / (sum so far). With
+one sum per group, capacity added at step t enters x at ~1/t per step, and during training the forward pass sees y =
+0.1 z + 0.9 x, so new capacity also trains at a tenth of its raw value: invisible for thousands of steps. Averaging test
+(eval/avg_test.txt, rl_psf 30k, widen to 768, psf): carrying the clock, +0.0009 over unchanged at +6k steps; restarting
+it, -0.014 at +6k (the long average is worth a lot) though catching up 2.5x faster. Neither is right.
+FIX, in the fused optimizer (sfp): a clock PER WEIGHT (wsp). Identical to one clock while weights start together (checked:
+same numbers as the package on identical gradients over 300 steps); a weight added by growth starts its clock at 0 and
+switches on at once, old weights keep their long average; stacked copies also start at 0.
+FUSED OPTIMIZER PARITY: first 30k attempt trailed psf (5k 1.6564 vs 1.5550; 10k 1.4576 vs 1.3980). Stepping both on
+identical gradients found it: for TALL matrices (token embedding, position table) the package's factored estimate
+reduces to a per-row mean square (its normaliser averages over a size-1 axis); replicated. Now the two stay within
+~1e-7 on identical gradients for 300 steps. 30k parity run restarted.
+TEST-DESIGN CORRECTION: every small growth test started from a checkpoint at ~0.5B tokens, before the ~3B-token
+crossover, where growth should not pay anyway. The decisive tests must start after the crossover.

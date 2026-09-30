@@ -102,7 +102,8 @@ def _update(p, g, vr, vc, v, m, lr, b1: float, b2: float, eps: float, wd: float,
         dsp.mul_(b2).add_((u * lr * live).to(dsp.dtype))     # the displacement the next hypergradient reads
 
 
-def _sfp_update(p, g, z, vr, vc, v, p0, s, d, dlr, ckp1, xy, du, acc, b2: float, b3: float, eps: float):
+def _sfp_update(p, g, z, vr, vc, v, p0, s, d, dlr, ckp1, xy, du, acc, b2: float, b3: float, eps: float,
+                wsp=None, w=None, b1: float = 0.9):
     """SCHEDULE-FREE PRODIGY, one parameter, fused (goal 8 + training efficiency). The same mathematics as
     prodigy-plus-schedule-free at its defaults (Adam-style Prodigy, Schedule-Free, StableAdamW rms clip, factored
     second moment), written so it compiles into one kernel group and replays inside the captured optimizer step:
@@ -117,7 +118,14 @@ def _sfp_update(p, g, z, vr, vc, v, p0, s, d, dlr, ckp1, xy, du, acc, b2: float,
         sq = gf.square()
         vr.mul_(b2).add_(sq.mean(dim=1) * ((1 - b2) * d2))
         vc.mul_(b2).add_(sq.mean(dim=0) * ((1 - b2) * d2))
-        denom = ((vr / vr.mean().clamp_min(1e-30)).unsqueeze(1) * vc.unsqueeze(0)).sqrt()
+        if gf.shape[0] > gf.shape[1]:
+            # AS THE PACKAGE DOES for a tall matrix (token embedding, position table): its row/column normaliser is a
+            # mean over a size-1 axis, so the estimate reduces to the PER-ROW mean square. Found by stepping both
+            # optimizers side by side (2026-09-30): the textbook row x column estimate here moved the embedding by
+            # 1.8e-6 more than the package on step one and trailed it 1.4576 vs 1.3980 by 10k steps.
+            denom = vr.sqrt().unsqueeze(1).expand_as(gf)
+        else:
+            denom = ((vr / vr.mean().clamp_min(1e-30)).unsqueeze(1) * vc.unsqueeze(0)).sqrt()
     else:
         v.mul_(b2).add_(gf.square() * ((1 - b2) * d2))
         denom = v.sqrt()
@@ -130,9 +138,21 @@ def _sfp_update(p, g, z, vr, vc, v, p0, s, d, dlr, ckp1, xy, du, acc, b2: float,
     s.mul_(b3).add_((sg * du).to(s.dtype))
     acc[1] += s.float().abs().sum()
     y = p.float()
-    y = y + ckp1 * (zf - y)
-    z.sub_((upd * dlr).to(z.dtype))
-    y = y - upd * (dlr * xy)
+    if wsp is not None:
+        # A CLOCK PER WEIGHT (2026-09-30). The schedule-free average weights step t by dlr_t^2 / (sum of those so far).
+        # One sum per group is exact while every weight started together, but capacity added mid-run then enters the
+        # average at ~1/t per step (1/30,000 at step 30k): invisible for thousands of steps, and growth never paid.
+        # Each weight keeps its own sum: the old ones are untouched, a new one starts at zero and switches on at once.
+        tot = wsp + w
+        c = w / tot
+        y = y + c * (zf - y)
+        z.sub_((upd * dlr).to(z.dtype))
+        y = y - upd * (dlr * (1 - b1 * (1 - c)))
+        wsp.add_(w)
+    else:
+        y = y + ckp1 * (zf - y)
+        z.sub_((upd * dlr).to(z.dtype))
+        y = y - upd * (dlr * xy)
     p.copy_(y.to(p.dtype))
 
 
@@ -264,6 +284,7 @@ class Fabric(Optimizer):
         if gp.get("hyper"):
             st["dsp"] = torch.zeros_like(p, dtype=torch.bfloat16)
         if gp.get("sfp"):
+            st["wsp"] = torch.zeros_like(p, dtype=torch.float32)     # its own averaging clock starts now
             st["z"] = p.detach().clone()
             sl = p.detach().reshape(-1)[::11]
             st["p0"] = sl.to(torch.bfloat16).clone() if bool(p.detach().any()) else torch.zeros((), dtype=torch.bfloat16, device=p.device)
@@ -326,8 +347,10 @@ class Fabric(Optimizer):
             if p.grad is None: continue
             st = self.state[p] or self._init_state(p, gp)
             st["step"] += 1
+            if "wsp" not in st:                  # a weight's own clock starts where its group's stands (0 at the start;
+                st["wsp"] = torch.zeros_like(p, dtype=torch.float32) + f["ws"]   # a checkpoint without clocks keeps its average)
             fn(p.detach(), p.grad, st["z"], st.get("vr"), st.get("vc"), st.get("v"), st["p0"], st["s"],
-               f["d"], f["dlr"], f["ckp1"], f["xy"], f["du"], f["acc"], b2, b3, 1e-8)
+               f["d"], f["dlr"], f["ckp1"], f["xy"], f["du"], f["acc"], b2, b3, 1e-8, st["wsp"], f["w"], b1)
         # end of step: the Prodigy estimate, exactly as the package (numerator decays by b3; a negative contribution is
         # kept only once d has left d0 or the contribution is positive; d_hat limited to 2^0.25 d; d only rises)
         num, den = f["acc"][0], f["acc"][1]
@@ -369,7 +392,7 @@ class Fabric(Optimizer):
                 if p.grad is None:
                     out.append(None); continue
                 st = self.state[p]
-                out.append((p.data_ptr(), p.grad.data_ptr()) + tuple(st[k].data_ptr() for k in ("vr", "vc", "v", "m", "dsp", "w0", "rg", "z", "p0", "s") if k in st))
+                out.append((p.data_ptr(), p.grad.data_ptr()) + tuple(st[k].data_ptr() for k in ("vr", "vc", "v", "m", "dsp", "w0", "rg", "z", "p0", "s", "wsp") if k in st))
         return out
 
     @torch.no_grad()
@@ -546,6 +569,9 @@ class Fabric(Optimizer):
             # (so new slots start with x = y = z); the Prodigy distance baseline restarts for this tensor -- the group's
             # step size d is a running maximum and does not fall with it
             z = p.detach().clone(); z[tuple(slice(0, k) for k in st["z"].shape)] = st["z"]; st["z"] = z
+            if "wsp" in st:                      # new slots' averaging clocks start at zero, old ones run on
+                wn = torch.zeros_like(p, dtype=torch.float32); wn[tuple(slice(0, k) for k in st["wsp"].shape)] = st["wsp"]
+                st["wsp"] = wn
             sl = p.detach().reshape(-1)[::11]
             st["p0"] = sl.to(torch.bfloat16).clone() if bool(p.detach().any()) else torch.zeros((), dtype=torch.bfloat16, device=p.device)
             st["s"] = torch.zeros_like(sl, dtype=torch.bfloat16)

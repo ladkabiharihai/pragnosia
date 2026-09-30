@@ -128,6 +128,11 @@ def main():
     ap.add_argument("--deepen-init", default="zero", choices=["zero", "copy", "gate"],
                     help="new layers at a deepen: zero = exact (outputs start at zero); copy = stacking, each new layer "
                          "a copy of the nearest trained layer of its type, with its optimizer memory")
+    ap.add_argument("--sf-restart", type=int, default=0,
+                    help="at a growth, restart the schedule-free AVERAGE (weight sum 0, base z = the averaged weights), "
+                         "keeping every other part of the optimizer's memory: the average then covers the new stage only")
+    ap.add_argument("--trial-now", type=int, default=0,
+                    help="validation: run one growth trial right after the start/resume (trial length --trial-steps)")
     ap.add_argument("--growth-probe", default="", help="log growth_signal() for these ops every 1,000 steps, e.g. w768,d")
     ap.add_argument("--new-warm", type=int, default=1000, help="steps over which layers added mid-run ramp from 0 to --new-lr")
     ap.add_argument("--new-lr", type=float, default=3e-4, help="absolute step for layers added by LM.deepen(), which start at zero output")
@@ -252,6 +257,20 @@ def main():
                 src = old.param_groups[gi] if gi < len(old.param_groups) else old.param_groups[0]
                 for k in D_KEYS:
                     if k in src: g[k] = src[k]
+        def sf_restart(o_):
+            """RESTART THE SCHEDULE-FREE AVERAGE at a growth (called while the parameters hold the averaged weights x).
+            Late in training the average moves at ~1/t per step, so capacity added at step 30,000 enters the evaluated
+            weights at ~1/30,000 per step: new capacity is invisible for thousands of steps whatever it learns. With the
+            weight sum at 0 and z = x the model is unchanged, and the average restarts at the growth, covering the new
+            stage only. Everything else the optimizer knows (second moments, step size d) is kept."""
+            for g in o_.param_groups:
+                if a.optim == "psf":
+                    g["weight_sum"] = 0.0; g["running_weight_sum"] = 0.0
+                elif g.get("sf") is not None:
+                    g["sf"]["ws"].zero_()
+                for p_ in g["params"]:
+                    st_ = o_.state.get(p_)
+                    if st_ and "z" in st_: st_["z"] = p_.detach().clone().to(st_["z"].dtype)
         def psf_carry(old, new, grown=None, pairs=None):
             """CARRY SCHEDULE-FREE PRODIGY'S MEMORY ACROSS A GROWTH, as Fabric.grew does for Fabric. Rebuilding it fresh
             restarted every weight's statistics, which hurt the grown branch of a trial more than the unchanged one
@@ -651,6 +670,7 @@ def main():
                 else:
                     for p_, (old_p, sh) in grown_.items():
                         opt.grew(p_, sh, replaces=old_p)
+                if SF and a.sf_restart: sf_restart(opt)
                 opt.zero_grad(set_to_none=True)             # grad buffers are the old shape
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
@@ -703,6 +723,7 @@ def main():
                                     if ps_ is None or ps_.shape != pn.shape or ps_ not in opt2.state: continue
                                     opt2.state[pn] = {k: (v.clone() if torch.is_tensor(v) else _cp.copy(v))
                                                       for k, v in opt2.state[ps_].items()}
+                                    if "wsp" in opt2.state[pn]: opt2.state[pn]["wsp"].zero_()   # a copy is new capacity: own clock from 0
                 if a.intrinsic_lr == 1:            # the rates the optimizer found are kept; new layers start at --new-lr
                     for g_old, g_new in zip(opt.rates()[:2], opt2.param_groups[:2]):
                         g_new["lr"] = g_old
@@ -729,9 +750,11 @@ def main():
                                     if ps_ is None or ps_.shape != pn.shape or ps_ not in opt2.state: continue
                                     opt2.state[pn] = {k: (v.clone() if torch.is_tensor(v) else _cp.copy(v))
                                                       for k, v in opt2.state[ps_].items()}
+                                    if "wsp" in opt2.state[pn]: opt2.state[pn]["wsp"].zero_()   # a copy is new capacity: own clock from 0
                 # free the shallow model's CUDA graphs BEFORE capturing the deep one's: both at once would be
                 # ~15 + ~28 GiB, over the cap
                 graphs.clear(); gs = None; g_ = None; gc.collect()
+                if SF and a.sf_restart: sf_restart(opt2)
                 m, opt = big, opt2
                 del old_m, opt2, big, pairs      # pairs held every shallow parameter (and its grad) alive
                 base = [g["lr"] for g in opt.param_groups]
@@ -834,7 +857,11 @@ def main():
                     # WHEN TO RECONSIDER: under the hypergradient, at each e-fold of its rate; under schedule-free
                     # Prodigy, which never anneals, each time the current stage's length has doubled (first at 4
                     # trial lengths), so the checks space out geometrically with the stage. The trial decides.
-                    if SF:
+                    if a.trial_now and (i + 1 - start) >= a.trial_steps // 4 and not getattr(main, "_trial_done", False):
+                        due = True; main._trial_done = True
+                        stage_t0[0] = i + 1 - 4 * a.trial_steps          # so the trial length is exactly --trial-steps
+                        rt = stage_rate[0] = 1.0
+                    elif SF:
                         due = (i + 1 - stage_t0[0]) >= stage_next[0]
                         rt = stage_rate[0] = 1.0
                     else:

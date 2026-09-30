@@ -1,0 +1,2 @@
+=== averaging-clock test, 2026-09-30 06:01 UTC (unchanged: 32k 1.2508 34k 1.2454 36k 1.2402 38k 1.2352) ===
+widen_carry:  |  Error("'ProdigyPlusScheduleFree' object has no attribute 'grew'")  (0.2 min)
