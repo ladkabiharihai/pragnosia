@@ -1812,3 +1812,22 @@ crossover function-preserving widening does begin to pay, slowly -- far from wha
 start gives (the 118M control is ~0.035 better at equal compute by this point). Next: gated deepen and non-preserving
 STACKING (copies with clocks at 0) from the same checkpoint -- the growth literature finds stacking far better than
 function-preserving operators because it does not trap the grown model in the small model's solution.
+- `2026-09-30 08:12:44 UTC` **train** (54.6 min) ok
+  d512 L12 mlp4 ctx8192 B2 133000 steps -> /mnt/kv_cache/pg_unchanged
+  (log `logs/20260930-071805-train.log`, seed 6)
+- `2026-09-30 09:08:20 UTC` **train** (55.2 min) ok
+  d512 L12 mlp4 ctx8192 B2 126000 steps -> /mnt/kv_cache/pg_stack
+  (log `logs/20260930-081308-train.log`, seed 6)
+- `2026-09-30 09:08:37 UTC` **train** (55.5 min) ok
+  d512 L12 mlp4 ctx8192 B2 126000 steps -> /mnt/kv_cache/pg_deepen
+  (log `logs/20260930-081307-train.log`, seed 6)
+
+## 2026-09-30 09:10 UTC — post-crossover DEPTH growth by copies fails; widening is the working operator
+Same checkpoint (run60 final, 46M, 7.9B tokens), fused optimizer, per-weight clocks (copies' clocks start at 0), +6k steps:
+    unchanged                 1.1348  1.1343  1.1339  1.1334  1.1330  1.1326
+    widen to 768 (exact)      1.1364  1.1353  1.1344  1.1337  1.1327  1.1319   ahead from +5k
+    deepen, gated copies      1.1352  1.1353  1.1378  1.1382  1.1386  1.1387   worse as the gates open
+    deepen, plain copies      2.9715  1.2807  1.1857  1.1760  1.1703  1.1662   jump 2.86 -> 5.76, slow recovery
+Duplicating trained carrier layers disrupts the model here (the published stacking result is for growth early in
+training and for standard transformers). Gated copies are the same disruption spread out. Running: zero-output
+deepen (exact, no copy) from the same point.
