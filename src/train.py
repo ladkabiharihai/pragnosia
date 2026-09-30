@@ -192,7 +192,10 @@ def main():
     # sfp: the same schedule-free Prodigy as psf, fused into Fabric's compiled, CUDA-graphed step (goal: training
     # efficiency; psf's per-tensor Python update cost 15% of step time at 46M). SF marks behaviour shared by both.
     SF = a.optim in ("psf", "sfp")
-    auto_events = [e.split("+") for e in a.grow_auto.split(",") if e]
+    # growth plan: entries in order; an entry may offer ALTERNATIVES separated by '|' (e.g. "w768|d"), each a '+'-joined
+    # list of ops. The model trials every alternative of the next entry against staying, and picks (goal 7: it decides
+    # how to grow as well as when)
+    auto_events = [[alt.split("+") for alt in e.split("|")] for e in a.grow_auto.split(",") if e]
     if auto_events and a.intrinsic_lr != 1 and not SF:
         raise ValueError("--grow-auto needs a model-set step size: --intrinsic-lr 1 or --optim psf")
     if a.grow_at: grow_w[a.grow_at] = a.grow_to
@@ -539,7 +542,7 @@ def main():
             for p_ in mc.parameters(): p_.grad = None
             return dict(m=mc, opt=to_dev(opt.state_dict(), "cpu"), rng=_copy.deepcopy(rng.bit_generator.state),
                         nxt=[x.clone() for x in nxt], shapes=list(shapes), accum=a.accum, batch=a.batch,
-                        auto=[list(e) for e in auto_events])
+                        auto=_copy.deepcopy(auto_events))
         def install(S):
             """make snapshot S the live model: optimizer rebuilt from its state, graphs recaptured"""
             nonlocal m, opt, fwd, trunk, gs, g_, base, set_none, shapes, nxt
@@ -566,9 +569,24 @@ def main():
                 trial["Lg_mid" if trial["phase"] == "grow" else "Ls_mid"] = heldout()
             if trial is not None and i == trial["end"]:
                 if trial["phase"] == "grow":
-                    trial["Lg"], trial["Pg"] = heldout(), nparams()
-                    trial["G"] = snapshot()
-                    install(trial.pop("S0"))
+                    res_ = dict(ev=trial["ev"], Lg_mid=trial.pop("Lg_mid", None), Lg=heldout(), Pg=nparams(), G=snapshot())
+                    trial["res"].append(res_)
+                    r.log(f"    TRIAL {'+'.join(res_['ev'])}: grown branch {trial['L0']:.4f} -> {res_['Lg']:.4f} over "
+                          f"{trial['K']} steps at {res_['Pg']/1e6:.1f}M")
+                    if trial["ai"] + 1 < len(trial["alts"]):
+                        # the next alternative, from the same snapshot, on the same batches
+                        install(_copy.deepcopy(trial["S0"]))
+                        hist.fill_(float("nan")); g0 = i
+                        trial["ai"] += 1; trial["ev"] = trial["alts"][trial["ai"]]
+                        for op_ in trial["ev"]:
+                            if op_ == "d": grow_d.add(i)
+                            elif op_.startswith("w"): grow_w[i] = int(op_[1:])
+                            elif op_.startswith("a"): grow_a[i] = int(op_[1:])
+                        trial["end"] = i + trial["K"]
+                        continue_trial = True
+                    else:
+                        continue_trial = False
+                    install(trial.pop("S0")) if not continue_trial else None
                     if False:
                         # (SUPERSEDED by psf_carry: neither branch restarts its average now.) THE SAME START FOR BOTH BRANCHES. The grown branch starts from the averaged weights with a
                         # fresh schedule-free average; left alone, the unchanged branch would keep its long average,
@@ -576,12 +594,26 @@ def main():
                         # unchanged 5.1266 -> 5.0147 vs grown -> 5.1207 at the second trial). So it too restarts
                         # from its averaged weights, same carried step size: the only difference left is the size.
                         opt.eval(); fresh = make_opt(m); carry_d(opt, fresh); opt = fresh
-                    hist.fill_(float("nan")); g0 = i
-                    trial["phase"], trial["end"] = "stay", i + trial["K"]
-                    r.log(f"    TRIAL {'+'.join(trial['ev'])}: grown branch {trial['L0']:.4f} -> {trial['Lg']:.4f} over "
-                          f"{trial['K']} steps at {trial['Pg']/1e6:.1f}M; now the same steps unchanged")
+                    if not continue_trial:
+                        hist.fill_(float("nan")); g0 = i
+                        trial["phase"], trial["end"] = "stay", i + trial["K"]
+                        r.log(f"    TRIAL: now the same {trial['K']} steps unchanged")
                 else:
                     Ls, Ps = heldout(), nparams()
+                    # THE BEST ALTERNATIVE: highest marginal held-out gain per unit compute over the second half of its
+                    # trial among those not behind the unchanged branch (by total gain per compute if no mid-points)
+                    half_ = trial["K"] // 2
+                    def score_(rr):
+                        if SF and rr["Lg_mid"] is not None and "Ls_mid" in trial:
+                            return ((rr["Lg"] <= Ls), (rr["Lg_mid"] - rr["Lg"]) / (rr["Pg"] * half_))
+                        return (True, (trial["L0"] - rr["Lg"]) / rr["Pg"])
+                    for rr in trial["res"]:
+                        ok_, sc_ = score_(rr)
+                        r.log(f"    TRIAL {'+'.join(rr['ev'])}: {'ahead of' if rr['Lg'] <= Ls else 'behind'} unchanged "
+                              f"({rr['Lg']:.4f} vs {Ls:.4f}), marginal gain per 1e12 param-steps {sc_*1e12:.4f}")
+                    best_ = max(trial["res"], key=lambda rr: score_(rr))
+                    trial.update(ev=best_["ev"], Lg=best_["Lg"], Pg=best_["Pg"], G=best_["G"])
+                    if best_["Lg_mid"] is not None: trial["Lg_mid"] = best_["Lg_mid"]
                     gg = (trial["L0"] - trial["Lg"]) / trial["Pg"]; gs_ = (trial["L0"] - Ls) / Ps
                     # THE DECISION, PENALTY-FREE (2026-09-27). Restarting the schedule-free average costs both branches
                     # the same, and at small scale it outweighed 600 steps of learning ("both got worse"), so any rule
@@ -737,8 +769,11 @@ def main():
                     # new to the model (added layers) takes the main group's step size and starts its own average
                     for gi_, g_ in enumerate(opt2.param_groups):
                         src_ = opt.param_groups[gi_] if gi_ < len(opt.param_groups) else opt.param_groups[0]
-                        if src_.get("sf") is not None:
-                            f_ = src_["sf"]
+                        # the live device scalars if this optimizer has stepped, else the saved ones: a deepen on the
+                        # FIRST step after a resume or a trial restore found no live values and restarted d at 1e-6,
+                        # which froze every post-crossover deepen test of 2026-09-30 (fixed that day)
+                        f_ = src_.get("sf") or {k: torch.tensor(v) for k, v in src_.get("sf_saved", {}).items()}
+                        if f_:
                             g_["sf_saved"] = {"d": float(f_["d"]), "dnum": float(f_["dnum"]) if gi_ < len(opt.param_groups) else 0.0,
                                               "ws": float(f_["ws"]) if gi_ < len(opt.param_groups) else 0.0}
                         g_["train_mode"] = src_.get("train_mode", True)
@@ -870,7 +905,7 @@ def main():
                         rt = opt.rates()[0]; due = rt < stage_rate[0] / math.e
                     if due:
                         stage_next[0] = 2 * (i + 1 - stage_t0[0])
-                        ev = auto_events[0]
+                        alts = auto_events[0]; ev = alts[0]
                         # THE TRIAL GROWS WITH THE STAGE: a quarter of its length so far, at least --trial-steps. At a
                         # fixed 1,000 steps the widened copy learned exactly as much as the unchanged one (advantage
                         # -0.0002 at step 26,000): new capacity starts as a zero-output no-op and pays off over longer
@@ -882,14 +917,16 @@ def main():
                         if mark[0] is not None:
                             s0_, l0_, p0_ = mark[0]
                             rate_hist.append((l0_ - L0_) / max(1.0, p0_ * (i + 1 - s0_)))
-                        trial = dict(phase="grow", ev=ev, L0=L0_, S0=snapshot(), K=K_, end=i + 1 + K_) if K_ else None
+                        trial = dict(phase="grow", ev=ev, alts=alts, ai=0, res=[], L0=L0_, S0=snapshot(), K=K_,
+                                     end=i + 1 + K_) if K_ else None
                         for op_ in ev:
                             if op_ == "d": grow_d.add(i + 1)
                             elif op_.startswith("w"): grow_w[i + 1] = int(op_[1:])
                             elif op_.startswith("a"): grow_a[i + 1] = int(op_[1:])
                         why = (f"this stage's length has doubled to {i+1-stage_t0[0]} steps" if SF else
                                f"rate {rt:.2e} is one e-fold below the stage start {stage_rate[0]:.2e}")
-                        r.log(f"    RECONSIDER at step {i+1}: {why}; TRIAL of {'+'.join(ev)} vs unchanged, {max(a.trial_steps, (i + 1 - stage_t0[0]) // 4)} steps each")
+                        r.log(f"    RECONSIDER at step {i+1}: {why}; TRIAL of {' or '.join('+'.join(x) for x in alts)} vs unchanged, "
+                              f"{max(a.trial_steps, (i + 1 - stage_t0[0]) // 4)} steps each")
                 if nnf > nf_prev:
                     # the guard zeroed those steps; the run continues unless the weights themselves went bad
                     alive = bool(torch.stack([p_.isfinite().all() for p_ in m.parameters()]).all().item())

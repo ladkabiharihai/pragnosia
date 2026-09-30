@@ -1831,3 +1831,19 @@ Same checkpoint (run60 final, 46M, 7.9B tokens), fused optimizer, per-weight clo
 Duplicating trained carrier layers disrupts the model here (the published stacking result is for growth early in
 training and for standard transformers). Gated copies are the same disruption spread out. Running: zero-output
 deepen (exact, no copy) from the same point.
+- `2026-09-30 09:13:15 UTC` **train** (2.0 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 512.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 11.64 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.29 GiB memory in use. Process 1640379 has 946.00 MiB memory in use. Process 1640380 has 946.00 MiB memory in use. Process 1640381 has 946.00 MiB memory in use. Process 1640378 has 946.00 MiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 1641168 has 38.21 GiB memory in use. Process 1686903 has 20.56 GiB memory in use. Including non-PyTorch memory, this process has 12.98 GiB memory in use. 12.00 GiB allowed; Of the allocated memory 11.96 GiB is allocated by PyTorch, with 8.68 GiB allocated in private pools (e.g., CUDA Graphs), and 19.70 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx2048 B8 1500 steps -> /mnt/kv_cache/multi_tmp
+  (log `logs/20260930-091115-train.log`, seed 0)
+- `2026-09-30 09:17:54 UTC` **train** (4.4 min) ok
+  d512 L12 mlp4 ctx2048 B8 1500 steps -> /mnt/kv_cache/multi_tmp
+  (log `logs/20260930-091332-train.log`, seed 0)
+
+## 2026-09-30 09:18 UTC — BUG: every post-crossover deepen test restarted the optimizer's step size (results invalid)
+The sfp deepen carries each group's step size from the old optimizer's LIVE device scalars. In every deepen test the
+growth fell on the first step after a resume (or a trial restore), before those live scalars existed, so nothing was
+carried and d restarted at 1e-6 (log: "d 1.00e-06 1.00e-06 2.65e-05" right after the deepen). Invalid: post-crossover
+gated copies (1.1387) and stacking (1.1662), the zero-deepen run, and the deepen branch of the multi-alternative test.
+Widening was unaffected (Fabric.grew already fell back to the saved values). Fixed: fall back to the saved scalars.
+Also built: multi-alternative growth trials (--grow-auto "w768|d"): the model trials every option of the next plan
+entry from the same snapshot on the same batches, keeps the best by marginal gain per unit compute, and grows only if
+it beats staying. Mechanics test passed (widen branch, restore, deepen branch, restore, unchanged, pick).
