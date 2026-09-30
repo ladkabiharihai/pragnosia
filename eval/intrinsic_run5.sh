@@ -18,7 +18,7 @@ STEPS=${GROW_STEPS:-450000}
 PLAN=${GROW_PLAN:-"W|d,W|d,W|d,W|d"}
 mkdir -p /mnt/kv_cache/run70_grow
 $P -u -m src.train --steps $STEPS --d 512 --layers 12 --ctx 8192 --batch 2 --accum 4 --mixer grspin --norm rms \
-  --optim sfp --grow-auto "$PLAN" --trial-steps 1000 --trial-frac 8 --deepen-init zero \
+  --optim sfp --grow-auto "$PLAN" --trial-steps 1000 --trial-frac 16 --deepen-init zero \
   --ctx-mix 2048,8192 --scan-chunk 64 --chunks 4 --fused-scan 1 --seed 0 \
   --data /mnt/kv_cache/tokfull_v8192 --sources dclm,fineweb-edu,wikipedia,finemath,arxiv \
   --data2 /mnt/kv_cache/tokmixqa_full_v8192 --data2-frac 0.4 \

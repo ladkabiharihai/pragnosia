@@ -1870,3 +1870,10 @@ zero-output layers" at every decision and lets its trials choose.
 LAUNCHED run70_grow (eval/intrinsic_run5.sh): 12L d512 start, --optim sfp, per-weight clocks, --grow-auto "W|d" x4 (no size
 written: W = widen one step, d = double depth), trials 1/8 of the stage (min 1,000), automatic micro-step split under the
 34 GiB cap, 450,000 x 65,536 = 29.5B tokens. Then eval/after_intrinsic5.sh (recall, fine-tune, abstention, scorecard).
+
+## 2026-09-30 11:09 UTC — run70 restarted with trials 1/16 of the stage (was 1/8)
+First 25 minutes kept as logs/train_grow70_first25min.out. Its first decision (step 7,000, ~0.4B tokens) was STAY with
+all three options measured: widen ahead of unchanged but marginal gain per compute 1.28, deepen 1.24 (just behind),
+unchanged 2.07. The reconsider schedule (every doubling of the stage) with 1/8-stage branches and two discarded
+branches per decision would spend ~25% of the run on trials if the model stays small for long; 1/16 halves that while
+keeping ~4-8k-step trials where growth becomes plausible (the post-crossover tests needed ~5-6k).
