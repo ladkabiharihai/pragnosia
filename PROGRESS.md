@@ -1796,3 +1796,19 @@ capacity cannot help much whatever the clocks do.
 POST-CROSSOVER TEST running (eval/post_growth.sh): run60 final (46M, 7.9B tokens, past the ~3B crossover), converted,
 full configuration: unchanged 13k steps | widen to 768, per-weight clocks, 6k | deepen by gated copies, per-weight
 clocks, 6k; compared at equal compute.
+- `2026-09-30 08:04:48 UTC` **train** (46.7 min) ok
+  d512 L12 mlp4 ctx8192 B2 126000 steps -> /mnt/kv_cache/pg_widen
+  (log `logs/20260930-071805-train.log`, seed 6)
+
+## 2026-09-30 08:05 UTC — post-crossover widen WITH per-weight clocks (eval/post_growth.txt): growth starts to pay, but only just
+From run60's final 46M model (7.9B tokens, past the ~3B crossover), fused optimizer, per-weight clocks, full config:
+    step        +1k     +2k     +3k     +4k     +5k     +6k     (+7k/+8k/+9k)
+    unchanged   1.1348  1.1343  1.1339  1.1334  1.1330  1.1326  (1.1322 1.1318 1.1314)
+    widen 768   1.1364  1.1353  1.1344  1.1337  1.1327  1.1319
+The widened model starts behind (new weights enter at full speed, mostly noise), overtakes at +5k and leads by 0.0007
+at +6k, gaining 0.0008-0.0010 per 1k steps against unchanged's 0.0004 -- about 2x per step, against a 2.1x cost:
+roughly break-even per unit compute at the margin; on total compute unchanged is still ~0.002 ahead. So after the
+crossover function-preserving widening does begin to pay, slowly -- far from what training the bigger model from the
+start gives (the 118M control is ~0.035 better at equal compute by this point). Next: gated deepen and non-preserving
+STACKING (copies with clocks at 0) from the same checkpoint -- the growth literature finds stacking far better than
+function-preserving operators because it does not trap the grown model in the small model's solution.

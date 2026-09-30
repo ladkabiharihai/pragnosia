@@ -12,3 +12,5 @@ Project reset to a clean slate on 2026-09-10 (second reset; the first was 2026-0
   on it.
 - [Cap co-running GPU jobs](gpu-cap-corunning-jobs.md) — never gate a launch on free VRAM; hard-cap the process
 - [GPU contention costs the flagship ~40%](gpu-contention-flagship-cost.md) — keep the card clear during a run
+- [Report times in IST](report-times-in-ist.md) — user tracks by IST (UTC+5:30); all ETAs in IST
+- [Everything intrinsic](intrinsic-everything.md) — no hand-set rate, schedule, growth steps or model SIZE; deadline ~2026-10-14
