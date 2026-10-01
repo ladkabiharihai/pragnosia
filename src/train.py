@@ -136,6 +136,8 @@ def main():
     ap.add_argument("--trial-frac", type=int, default=8,
                     help="a growth trial's branches each run 1/N of the stage so far (at least --trial-steps): long enough for "
                          "new capacity to show (~5-6k steps after the crossover, eval/post_growth.txt), a bounded share of compute")
+    ap.add_argument("--resume-stage", default="",
+                    help="T0,NEXT: set the growth stage clock on resume (after re-applying a decision the model took before a crash)")
     ap.add_argument("--trial-now", type=int, default=0,
                     help="validation: run one growth trial right after the start/resume (trial length --trial-steps)")
     ap.add_argument("--growth-probe", default="", help="log growth_signal() for these ops every 1,000 steps, e.g. w768,d")
@@ -484,6 +486,8 @@ def main():
                 while nxt_ <= start: nxt_ *= 2
                 stage_next[0] = nxt_
             del ck_
+        if a.resume_stage:
+            stage_t0[0], stage_next[0] = (int(v) for v in a.resume_stage.split(","))
         mark, rate_hist = [None], []         # (step, held-out loss, params) where the current price was last measured
         stage_rate = [a.lr]                  # the main rate when the current stage began: saturation is judged
                                              # against it, so each stage anneals on from where the last one ended
@@ -531,7 +535,9 @@ def main():
             if SF: opt.eval()
             m.eval()
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                l_ = F.cross_entropy(m(xs_eval[:, :2048]).float().reshape(-1, a.vocab), xs_eval[:, 1:2049].reshape(-1)).item()
+                # through the trunk and the chunked loss: the full logits of a large model were what ran a trial out of
+                # memory at the cap (run70, 2026-09-30)
+                l_ = m.loss(m.trunk(xs_eval[:, :2048]), xs_eval[:, 1:2049], chunks=4).item()
             m.train()
             if SF: opt.train()
             return l_
@@ -712,9 +718,9 @@ def main():
                 # GROWTH (vision goal 7): widen in place, function preserved, optimizer state carried. The
                 # loss right before and right after is logged so the cost of the event is a number.
                 if SF: opt.eval()          # measured and grown at the AVERAGED weights, the model
-                xg = batch(bins, ks, ps, np.random.default_rng(7), a.batch, a.ctx)
+                xg = batch(bins, ks, ps, np.random.default_rng(7), 1, 2048)   # the exactness check: one row, light
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    lb = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
+                    lb = m.loss(m.trunk(xg[:, :2048]), xg[:, 1:2049], chunks=4).item()
                 # free the old CUDA graphs BEFORE growing: old and new together exceed the cap at the late stages
                 graphs.clear(); gs = None; g_ = None; gc.collect()
                 torch._dynamo.reset(); torch.cuda.empty_cache()
@@ -733,7 +739,7 @@ def main():
                 # every window's graph, not only the first: a mixed-length run held stale graphs after widening
                 capture_all()
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    la = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
+                    la = m.loss(m.trunk(xg[:, :2048]), xg[:, 1:2049], chunks=4).item()
                 P = sum(p.numel() for p in m.parameters())
                 r.log(f"    GREW to d={m.d} at step {i}: {P/1e6:.1f}M params, same batch loss {lb:.4f} -> {la:.4f}, "
                       f"optimizer state {opt.state_bytes()/2**20:.0f} MiB carried")
@@ -746,9 +752,9 @@ def main():
                 # Every existing layer keeps its optimizer state; the new ones get their own absolute-step group.
                 # Growing a shallow model late in the run costs half the compute per token until then.
                 if SF: opt.eval()          # measured and deepened at the AVERAGED weights, the model
-                xg = batch(bins, ks, ps, np.random.default_rng(7), a.batch, a.ctx)
+                xg = batch(bins, ks, ps, np.random.default_rng(7), 1, 2048)   # the exactness check: one row, light
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    lb = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
+                    lb = m.loss(m.trunk(xg[:, :2048]), xg[:, 1:2049], chunks=4).item()
                 old_m = m
                 big = old_m.deepen(init=a.deepen_init)
                 if a.fused_scan:
@@ -820,7 +826,7 @@ def main():
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
                 capture_all()
                 with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    la = F.cross_entropy(m(xg[:, :a.ctx]).reshape(-1, a.vocab), xg[:, 1:a.ctx + 1].reshape(-1)).item()
+                    la = m.loss(m.trunk(xg[:, :2048]), xg[:, 1:2049], chunks=4).item()
                 P = sum(p.numel() for p in m.parameters())
                 r.log(f"    DEEPENED to {m.layers} layers at step {i}: {P/1e6:.1f}M params, same batch loss "
                       f"{lb:.4f} -> {la:.4f}, optimizer state carried for {carried} tensors, "
@@ -987,7 +993,8 @@ def main():
                 if len(bpbs) >= 4 and all(bpbs[-k] > bpbs[-k-1] + 0.01 for k in (1, 2, 3)):
                     r.log(f"    DEGRADING: BPB rose over the last three evals {bpbs[-4:]}; stopping")
                     break
-            if (i + 1) % a.save_every == 0 or i + 1 == a.steps:
+            # never checkpoint a trial's GROWN branch: it is a temporary model (run70 saved one at step 136,000)
+            if ((i + 1) % a.save_every == 0 or i + 1 == a.steps) and not (trial is not None and trial["phase"] == "grow"):
                 # NEVER OVERWRITE A GOOD CHECKPOINT WITH A BROKEN ONE. The previous run saved NaN weights over
                 # a healthy checkpoint and only a stray copy survived. Verify before writing, and keep the
                 # previous file as last-known-good.
