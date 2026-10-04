@@ -1,0 +1,47 @@
+== 1  control vs injected OOM at the first eval (step 100)
+control exit 0
+injected exit 0
+[    68.8s]     out-of-graph work did not fit beside the captured graphs under the cap: released them for it
+[    70.1s]   eval step 100: BPB 2.8618  (235k bytes)
+[    71.3s]   eval step 200: BPB 2.7206  (235k bytes)
+[    72.4s]   eval step 300: BPB 2.6148  (235k bytes)
+[    73.6s]   eval step 400: BPB 2.5408  (235k bytes)
+[    74.7s]   eval step 500: BPB 2.4906  (235k bytes)
+[    75.9s]   eval step 600: BPB 2.4477  (235k bytes)
+  step, control loss, injected loss: 200/600 7.2651	7.3537
+  step, control loss, injected loss: 400/600 6.4671	6.5901
+  step, control loss, injected loss: 600/600 6.1408	6.2276
+== 2  injected OOM in the exactness check right after a deepen's capture (step 200), then a widen (step 300)
+exit 0
+[    13.7s] 200/400 loss 7.3537 ppl 1562.0 lr 1.00e+00 155 ktok/s (last 200: 155) eta 0m 0.7 GiB d 8.61e-04 5.79e-05
+[    18.1s]     out-of-graph work did not fit beside the captured graphs under the cap: released them for it
+[    18.3s]     DEEPENED to 8 layers at step 200: 8.9M params, same batch loss 6.9943 -> 6.9943, optimizer state carried for 79 tensors, 4 new layers at absolute lr 0.0003, ramped over 1000 steps
+[   111.0s]     GREW to d=384 at step 300: 18.1M params, same batch loss 6.7553 -> 6.7553, optimizer state 145 MiB carried
+[   115.4s] 400/400 loss 6.5809 ppl 721.2 lr 1.00e+00 15 ktok/s (last 200: 8) eta 0m 1.7 GiB d 1.68e-03 5.79e-05 8.61e-04
+== 3  automatic resume: trainer killed a few seconds after step 200, checkpoints every 100
+killing trainer  (BOOT_IMAGE=/vmlinuz-6.17.0-1010-azure root=PARTUUID=054c3354)
+wrapper exit 0
+[    13.8s] 200/600 loss 7.3537 ppl 1562.0 lr 1.00e+00 153 ktok/s (last 200: 153) eta 0m 0.7 GiB d 8.61e-04 5.79e-05
+[    15.0s] 400/600 loss 6.5901 ppl 727.9 lr 1.00e+00 250 ktok/s (last 200: 671) eta 0m 0.7 GiB d 1.13e-03 5.79e-05
+[    16.3s] 600/600 loss 6.2276 ppl 506.5 lr 1.00e+00 315 ktok/s (last 200: 662) eta 0m 0.7 GiB d 1.13e-03 2.03e-04
+OOMTEST_DONE 2026-10-01 10:30 UTC
+OOM_TEST_DONE 2026-10-01 10:30 UTC
+
+== RE-RUNS 2026-10-01 10:33 UTC: test 3 as first written never killed the trainer (it finished first); test 1's control re-run gave 7.3537 / 6.5901 / 6.2276 = the injected run exactly
+== 3  automatic resume: trainer killed mid-run (after step 4,000), checkpoints every 1,000
+killed trainer 1818583 (.venv/bin/python -u -m src.train --d 256 --layers )
+wrapper exit 0
+TRAINER EXITED with code 143 at 2026-10-01 10:34 UTC; last checkpoint at step 4000 (failure 1 there)
+=== RESUMED AUTOMATICALLY 2026-10-01 10:34 UTC from step 4000 ===
+[     0.4s] resumed from /mnt/kv_cache/oomtest_d/resume_from.pt at step 4000, loss 5.0507
+OOMTEST_DONE 2026-10-01 10:36 UTC
+2000/20000 loss 5.4722
+4000/20000 loss 5.0507
+6000/20000 loss 4.7215
+8000/20000 loss 4.4836
+10000/20000 loss 4.3961
+12000/20000 loss 4.3039
+14000/20000 loss 4.2421
+16000/20000 loss 4.1885
+18000/20000 loss 4.1531
+20000/20000 loss 4.0676

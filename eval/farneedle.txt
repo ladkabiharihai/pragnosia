@@ -1,0 +1,22 @@
+FAR-NEEDLE CURRICULUM vs control (ol_ctrl), from run82_final, 2026-10-03 16:54 UTC
+== fn_far: [   473.2s]   eval step 240000: BPB 1.0712  (952k bytes) [  1145.2s]   eval step 243000: BPB 1.0696  (952k bytes) 
+  distance    512 tokens:  97.9% (47/48)
+  distance   1024 tokens:  20.8% (10/48)
+  distance   2048 tokens:   4.2% (2/48)
+  distance   4096 tokens:   0.0% (0/48)
+  distance   7000 tokens:   0.0% (0/48)
+2048            30% (6/20)   0/4 / 0/4 / 0/4 / 4/4 / 2/4
+8192             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+      8,192 tokens of context: 1.0539 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.0536 bits/byte over 24 passages; vs 8,192: -0.0002 +- 0.0010
+== ol_ctrl: [   475.0s]   eval step 240000: BPB 1.0712  (952k bytes) [  1148.2s]   eval step 243000: BPB 1.0695  (952k bytes) 
+  distance    512 tokens: 100.0% (48/48)
+  distance   1024 tokens:  25.0% (12/48)
+  distance   2048 tokens:   8.3% (4/48)
+  distance   4096 tokens:   2.1% (1/48)
+  distance   7000 tokens:   0.0% (0/48)
+2048            30% (6/20)   0/4 / 0/4 / 0/4 / 4/4 / 2/4
+8192             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+      8,192 tokens of context: 1.0528 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.0520 bits/byte over 24 passages; vs 8,192: -0.0008 +- 0.0010
+FARNEEDLE_DONE 2026-10-03 17:22 UTC

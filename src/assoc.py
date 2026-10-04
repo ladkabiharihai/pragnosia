@@ -358,13 +358,56 @@ class AssocCarrier(nn.Module):
             la = la.clamp(min=self.la_floor)                                      # no faster than the floor
         return la
 
+    def add_short_conv(self, K: int):
+        """A SHORT CAUSAL CONVOLUTION over the last K tokens on q, k and v, depthwise -- what Gated DeltaNet (fla's
+        GatedDeltaNet: use_short_conv=True, conv_size=4) and every recall-capable linear-attention model since H3 have
+        (Zoology, Arora et al. 2023), and what this carrier never had. Without it a key is a function of ONE token's
+        hidden state, so writing "X is" -> "Y" and reading it back from "...of X? Answer:" has to be assembled by the
+        layers below. Measured 2026-10-01: in-context lookup of 10-120 facts at 24-39% (chance 25%) with a bias to the
+        EARLIEST-mentioned candidate, against GPT-2's 37-40%. Initialised as the identity (all weight on the current
+        token), so adding it to a trained model changes nothing until training moves it."""
+        w = torch.zeros(3 * self.d, K, device=self.q.weight.device, dtype=self.q.weight.dtype)
+        w[:, -1] = 1.0
+        self.sconv = nn.Parameter(w)
+        return self
+
+    def _sconv(self, qo, ko, vo, cc):
+        """the causal depthwise convolution on q, k, v (B,T,D each); cc: the last K-1 inputs of the previous window
+        or decode step, (B,3D,K-1), or None at a sequence start. Returns q, k, v and the new cache."""
+        D = self.d; K = self.sconv.shape[1]
+        x = torch.cat([qo, ko, vo], dim=-1).transpose(1, 2)                          # (B,3D,T)
+        pad = cc.to(x.dtype) if cc is not None else x.new_zeros(x.shape[0], 3 * D, K - 1)
+        xp = torch.cat([pad, x], dim=-1)
+        y = F.conv1d(xp, self.sconv.to(x.dtype).unsqueeze(1), groups=3 * D).transpose(1, 2)
+        return y[..., :D].contiguous(), y[..., D:2 * D].contiguous(), y[..., 2 * D:].contiguous(), xp[..., -(K - 1):]
+
     def forward(self, x, h0=None, pos0: int = 0):
-        """h0: (state S (B,H,dk,dk), position offset) from a previous window, or None."""
+        """h0: (state S (B,H,dk,dk), position offset) from a previous window, or None; with short convolutions,
+        (S, position offset, convolution cache)."""
         B, T, D = x.shape
         z = self.ln(x)
-        S0, p0 = (None, pos0) if h0 is None else h0
+        sc = getattr(self, "sconv", None) is not None
+        cc = None
+        if h0 is None: S0, p0 = None, pos0
+        elif len(h0) == 3: S0, p0, cc = h0
+        else: S0, p0 = h0
+        # REBASE (2026-10-03): positions restart at every call and the carried state is rotated back by the previous
+        # call's length instead. The delta rule is rotation-equivariant (R orthogonal: R S - b Rk (Rk)^T R S + b Rk v^T =
+        # R(next S)), so every query-key angle is exactly what global positions give, but no position ever exceeds one
+        # window. Global positions to 131k made the frequencies' gradient grow with the position and carried-state
+        # training diverged (their step size 6e-3 -> 15.8). The state's keys run along dim 2 (fla: [B, H, K, V]).
+        if S0 is not None and not (isinstance(p0, int) and p0 == 0):
+            sh = p0 if torch.is_tensor(p0) else torch.tensor(float(p0), device=x.device)
+            S0 = rotate(S0.transpose(2, 3), self.theta.float(), (-sh).float().expand(S0.shape[3])).transpose(2, 3)
+            S0 = S0.contiguous()
+        p0 = p0 * 0 if torch.is_tensor(p0) else 0       # a device scalar stays one (the graphed decode copies it in place)
         # p0 may be a 0-d tensor: a CUDA-graphed decode step needs the position on the device, not baked in
         pos = p0 + torch.arange(T, device=x.device)
+        # pos_wrap: rotation positions modulo the training window, as the position table already wraps. Unwrapped, a
+        # state carried past the window rotates by angles training never produced, and the frequencies' gradient grows
+        # with the position: carried-state training (positions to 131k) drove their step size 6e-3 -> 15.8 and
+        # diverged (2026-10-03). Unset (None) for every checkpoint trained before.
+        if getattr(self, "pos_wrap", None): pos = pos % self.pos_wrap
         kern = self.kernel and x.is_cuda and self.dk in (64, 128) and T > 1
         if FUSED_PROJ and self.delta and not self.key_topk:
             # ONE MATMUL FOR FIVE PROJECTIONS. q, k, v, the decay gate and the write strength all read z; as five
@@ -377,11 +420,18 @@ class AssocCarrier(nn.Module):
             # contiguous: the split pieces are strided views into one wide tensor, and the prep kernel under
             # torch.compile faulted on them (illegal memory access, 2026-09-23); the copy is cheap beside the GEMM
             qo, ko, vo = qo.contiguous(), ko.contiguous(), vo.contiguous()
+            if sc: qo, ko, vo, cc = self._sconv(qo, ko, vo, cc)
             kp = ko.view(B, T, self.h, self.dk)
             fused = (qo, vo, ao + self.wa.bias, bo + self.wb.bias)
+            pre = None
         else:
             fused = None
-            kp = self.k(z).view(B, T, self.h, self.dk)
+            if sc:
+                qo, ko, vo, cc = self._sconv(self.q(z), self.k(z), self.v(z), cc)
+                pre = (qo, vo); kp = ko.view(B, T, self.h, self.dk)
+            else:
+                pre = None
+                kp = self.k(z).view(B, T, self.h, self.dk)
         if self.key_topk:
             # straight through: the mask selects, the surviving coordinates keep their gradient unchanged and
             # the dropped ones get none, which is what a selection should do
@@ -393,13 +443,15 @@ class AssocCarrier(nn.Module):
             from .assoc_kernel import prep_kernel
             if fused is not None:
                 qp, vp = fused[0].view(B, T, self.h, self.dk), fused[1].view(B, T, self.h, self.dk)
+            elif pre is not None:
+                qp, vp = pre[0].view(B, T, self.h, self.dk), pre[1].view(B, T, self.h, self.dk)
             else:
                 qp, vp = self.q(z).view(B, T, self.h, self.dk), self.v(z).view(B, T, self.h, self.dk)
             gate = None if (self.delta or self.write_all) else self.wi(z)   # write_all: no gate at all
             q, k, v = prep_kernel(qp, kp, vp, gate, self.theta, pos)
         else:
-            qz = fused[0] if fused is not None else self.q(z)
-            vz = fused[1] if fused is not None else self.v(z)
+            qz = fused[0] if fused is not None else pre[0] if pre is not None else self.q(z)
+            vz = fused[1] if fused is not None else pre[1] if pre is not None else self.v(z)
             q, k, v = [t.view(B, T, self.h, self.dk).transpose(1, 2)
                        for t in (qz, kp.reshape(B, T, self.d), vz)]
             q, k, v = F.normalize(q, dim=-1), F.normalize(k, dim=-1), F.normalize(v, dim=-1)   # scores in [-1, 1], unit writes
@@ -452,4 +504,5 @@ class AssocCarrier(nn.Module):
         # same function
         # the per-chunk entering states, kept for a later layer that reads this memory with its own queries
         self.sent = sent
-        return x + F.linear(o, self.o.weight * torch.sigmoid(self.gate)), (S, p0 + T)
+        out = x + F.linear(o, self.o.weight * torch.sigmoid(self.gate))
+        return out, ((S, p0 + T, cc) if sc else (S, p0 + T))

@@ -1877,3 +1877,912 @@ all three options measured: widen ahead of unchanged but marginal gain per compu
 unchanged 2.07. The reconsider schedule (every doubling of the stage) with 1/8-stage branches and two discarded
 branches per decision would spend ~25% of the run on trials if the model stays small for long; 1/16 halves that while
 keeping ~4-8k-step trials where growth becomes plausible (the post-crossover tests needed ~5-6k).
+- `2026-09-30 18:20:46 UTC` **train** (431.3 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 24.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 6.72 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.61 GiB memory in use. Process 1640379 has 1.65 GiB memory in use. Process 1640380 has 946.00 MiB memory in use. Process 1640381 has 946.00 MiB memory in use. Process 1640378 has 1.64 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 1641168 has 39.87 GiB memory in use. Including non-PyTorch memory, this process has 35.05 GiB memory in use. 34.00 GiB allowed; Of the allocated memory 33.71 GiB is allocated by PyTorch, with 26.26 GiB allocated in private pools (e.g., CUDA Graphs), and 294.33 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B2 450000 steps -> /mnt/kv_cache/run70_grow
+  (log `logs/20260930-110930-train.log`, seed 0)
+- `2026-09-30 18:39:56 UTC` **train** (18.2 min) ok
+  d512 L12 mlp4 ctx8192 B2 160000 steps -> /mnt/kv_cache/run70r
+  (log `logs/20260930-182144-train.log`, seed 1)
+
+## 2026-09-30 18:20 UTC → 2026-10-01 06:19 UTC: run70 crash, its first GROW decision, and the 46M lineage scored by mistake
+- **run70's decisions (logs/train_grow70.out):** STAY at steps 7k, 11k, 19k, 38k and 76k. At 19k and 38k deepen's
+  marginal rate was higher than unchanged's, but deepen was behind, so it stayed. **GROW (W) at 152,000 (~10B tokens), 46.2M -> 97.7M.**
+  The margin was thin: 0.0178 vs 0.0176 held-out gain per 1e12 param-steps over the last 4,000 trial steps; grown
+  2.8956 vs unchanged 2.9001. The 46M model had stopped improving on held-out data: BPB 1.1351 (136k), 1.1374 (144k), 1.1368 (152k).
+- **Crash at 18:20 UTC:** the next trial (step 156k: widen 98M->168M vs deepen vs stay) hit the 34 GiB cap while the deepen branch
+  computed full logits for its exactness check. Two bugs made it worse. First, eval/intrinsic_run5.sh wrote TRAIN70_DONE even on failure, so
+  eval/after_intrinsic5.sh ran the whole pipeline on the **46M** step-152k checkpoint. Second, checkpoints were also being saved during trial
+  branches, which left ckpt_prev.pt as a 98M branch.
+- **That 46M lineage scored** (eval/scorecard_run70_46M.txt). Q&A everyday 12.5% / SciQ 2.4% / ARC 36.4% (fine-tuned), and
+  16.7 / 1.6 / 36.0 after abstention training. That is below run60r (18.8/2.3/35.8) and well below run46 at 118M (47.9/7.9/40.3).
+  GPT-2 scored 16.7/2.2/33.8 and SmolLM2 62.5/12.7/48.4. Context rot is still won: BPB 1.2167 at 512 tokens -> 1.1675 at 8k.
+- **Fixed (commit 21a3b15):**
+  - Exactness checks and held-out scoring are now light (a 2k-token sequence, chunked loss).
+  - No checkpoint is saved during a trial's grow phase.
+  - A new `--resume-stage` flag restores the stage clock.
+  - The done marker is written only on success.
+- **Resumed at 06:19 UTC** (eval/intrinsic_run5b.sh) from seed152000.pt, re-applying the model's own decision (152000:w768).
+  Same batch loss 2.6524 -> 2.6522 (exact).
+
+## 2026-10-01 06:26 UTC: USER: "98M is sufficient to test the model". The 98M test is launched (eval/run98.sh)
+- Stopped run70 at step ~153,000. The four PIDs were verified by their cmdline: intrinsic_run5b.sh, after_intrinsic5.sh, the trainer,
+  and a scratch watcher. Prod returned HTTP 200 throughout.
+- eval/run98.sh, step by step:
+  1. Resume seed152000 and re-apply the model's GROW (W).
+  2. Train at 97.7M with **no further trials** to step 184,000. That is the end of the stage the model would next have reconsidered (152k+32k),
+     ~2.1B tokens at the new width. The loss at 152,200 equals the previous resume's (2.6846), so the run is deterministic.
+  3. 8,000 steps with 25% in-context-lookup data (r98r).
+  4. Factual fine-tune, then own-mistake abstention training (eval/eval_ckpt.sh, schedule-free Prodigy, cap 30).
+  5. Full scorecard -> eval/scorecard_r98.txt.
+- Size is still the model's decision (152k). Only the *next* reconsideration is skipped, at the user's call, so the test
+  reports now and not in ~1 day.
+
+## 2026-10-01 06:32 UTC: why run70 ran out of memory, and the fix for the whole class (not yet applied, not yet tested)
+USER: "why it got oom, that defies our own rule of memory and training efficiency".
+- **The cap did its job.** The trainer hit its own 34 GiB ceiling and stopped; prod was untouched (HTTP 200).
+- **Our fitting logic is what failed.** capture_all() splits the micro-step automatically when the *training step* does not
+  fit, and it checks nothing else. In the step-156k trial's deepen branch (98M doubled to 24 layers), the captured graphs
+  held 26.3 GiB, and everything allocated came to 33.7 of 34 GiB. The capture fit with ~0.3 GiB to spare. Then the exactness
+  check ran outside the graphs (a full 8,192-token forward with full logits) and needed 24 MiB more.
+- **This was the fourth time for this class:** an eval at 8,192 beside a 9 GiB pool (2026-09-18, which got halve-and-retry inside eval_bpb), an eval at 32k context beside a 32.6 GiB pool (2026-09-22), and now the growth
+  check. Each time I patched the call site. Other out-of-graph work could hit it the same way: held-out loss, the BPB eval
+  (4x8,192 tokens), snapshots (deepcopy on the card), and the finiteness check before saving.
+- **Training-efficiency cost:** ~25 min of redone steps (152k->157k). ~1.5 h of pipeline on the wrong (46M) checkpoint,
+  because the launch script reported success on failure. The largest cost: **~10.5 h of idle card** (01:20 -> 11:49 IST),
+  because nothing resumed the run.
+- **Fix, written:**
+  1. src/train.py roomy(): all out-of-graph work runs through it. On OOM it releases the graphs, redoes the work, and recaptures.
+     The cost is seconds, only when it triggers. Room is measured by trying, with no hand-set margin.
+  2. eval/keep_training.sh: if the trainer dies, it resumes from the run's own last checkpoint immediately. It stops for a human
+     only after two failures without progress, and writes the done marker only on success.
+  The patch sits in the scratchpad (train_roomy.py, compiles). It will go into src/train.py once the 98M pipeline's lookup
+  training has started, so its runs are not changed mid-flight. Both pieces get a real test (a forced out-of-graph OOM under a
+  tight cap; a killed trainer) on the free card after the 98M scorecard. The 98M run is not exposed: no growth, 16.3 of 34 GiB.
+- `2026-10-01 08:36:06 UTC` **train** (131.5 min) ok
+  d512 L12 mlp4 ctx8192 B2 184000 steps -> /mnt/kv_cache/run70_grow
+  (log `logs/20261001-062435-train.log`, seed 0)
+
+## 2026-10-01 08:37 UTC: 98M trained to step 184,000; out-of-memory fix applied to src/train.py
+- **The model's widen decision paid off clearly.** Held-out BPB was 1.1368 at the 46M decision point (it had stalled:
+  1.1351 / 1.1374 / 1.1368 at 136k / 144k / 152k). At 98M: **1.1330 (160k), 1.1267 (168k), 1.1205 (176k), 1.1142 (184k)**,
+  0.021 below the 46M's best and still falling ~0.006 per 8k steps. Spike skips ran at 1.6% of steps (46M phase: 1.2%).
+- The lookup stage started (r98r, steps 184k->192k, 25% in-context lookup data). It resumed the 98M model correctly
+  (checkpoint d=768, 97.7M). Its "46.2M params" log line is printed before the model is rebuilt at the checkpoint's shape.
+- roomy() and its test hook (MEMBRAE_TEST_OOM=N) were copied into src/train.py *after* that trainer had loaded its code,
+  so no running stage changed. The file compiles, and the eval scripts' imports (loaders, batch) work.
+  eval/oom_test.sh (3 tests) runs on the free card after the 98M scorecard.
+
+## 2026-10-01 08:50 UTC: quick tests of the 98M base model (eval/quick98.txt). USER: "have you tested the generation and other vision params"
+Checkpoint: run70 step 184,000 (97.7M), before lookup training. The tests ran beside the lookup-training stage, so speeds are
+under contention for both models. Compared with GPT-2 124M and with the 46M lineage (eval/scorecard_run70_46M.txt).
+- **Context rot: won, and better than 46M.**
+  BPB by window:
+  | Model | 512 | 1k | 2k | 4k | 8k |
+  |---|---|---|---|---|---|
+  | 98M | 1.1977 | 1.1665 | 1.1683 | 1.1584 | 1.1448 |
+  | 46M | 1.2167 | | | | 1.1675 |
+  | GPT-2 | 1.2167 | 1.2249 | max 1k | | |
+- **Inference: won.** 227 vs 126 tok/s decoding, peak memory 1,141 vs 1,194 MiB.
+- **Short generation (1,024 tokens): now matches real text.** At t=0.85, words 0.80 / surprise 1.15 / variety 0.95, against real
+  text's 0.79 / 1.15 / 0.99. The 46M lineage at the same t was 0.78 / 1.34 / 0.97. GPT-2's best (t=0.9) is 0.87 / 0.94 / 0.95.
+  The text is fluent, with invented facts ("the second wife of Tolstoy").
+- **Calibration: ahead.** Separation +0.214 vs GPT-2 +0.186.
+- **Facts: still behind,** 30/48 vs 33/48. Unchanged from 46M (30/48).
+- **Induction: slightly behind,** 96.0% vs 98.5%.
+- **Long generation (32,768 tokens): FAILS.** Best temperature 0.9 scores 1.294, outside real text's band (0.954-1.188),
+  from the first 4k tokens on. After ~8k tokens it falls into repetition loops (BPB 0.47 / 0.38 / 0.04, commonest token
+  14-17%; "wipe-up wipe-up wipe clean"). Horizon in band: 0 tokens. No better than the 46M lineage (1.264 at t=1.0, horizon 0).
+- eval/genqual2.py labelled our row "run44" whatever checkpoint it loaded (it did load the given checkpoint). The label
+  now names the checkpoint (this run printed the old label).
+- `2026-10-01 09:13:36 UTC` **train** (37.4 min) ok
+  d512 L12 mlp4 ctx8192 B2 192000 steps -> /mnt/kv_cache/r98r
+  (log `logs/20261001-083613-train.log`, seed 1)
+- `2026-10-01 10:26:16 UTC` **train** (0.4 min) ok
+  d256 L4 mlp4 ctx2048 B2 600 steps -> /mnt/kv_cache/oomtest_a
+  (log `logs/20261001-102550-train.log`, seed 3)
+
+## 2026-10-01 10:26 UTC: 98M FULL SCORECARD (eval/scorecard_r98.txt; pipeline finished 10:25 UTC)
+Lineage: run70 @184k (97.7M) -> r98r (+8k steps of lookup data, held-out BPB 1.1142 -> 1.1083) -> r98_sft (factual
+fine-tune, answer loss 1.705 -> 1.525) -> r98_abst (own mistakes, balanced). Columns: 98M | 46M lineage | GPT-2 124M | SmolLM2-135M.
+- **Q&A, everyday / SciQ / ARC.**
+  | Model | Everyday | SciQ | ARC |
+  |---|---|---|---|
+  | 98M fine-tuned | 16.7% | 4.3% | 37.7% |
+  | 98M abstaining | **20.8%** | 2.1% | 37.2% |
+  | 46M fine-tuned / abstaining | 12.5 / 16.7 | 2.4 / 1.6 | 36.4 / 36.0 |
+  | GPT-2 | 16.7 | 2.2 | 33.8 |
+  | SmolLM2 | 62.5 | 12.7 | 48.4 |
+  | run46 (118M, hand-tuned) | 47.9 | 7.9 | 40.3 |
+  The answers are fluent and often confidently wrong ("The sun is the largest planet", "George Washington ... from 1899 to 1945").
+- **Abstention.** SciQ wrong 95.7% -> 65.3% with 32.6% declined, but right fell 4.3% -> 2.1%. Everyday wrong 83.3% -> 72.9%,
+  6.2% declined.
+- **Context rot: won.** 1.1907 (512) -> 1.1380 (8k), against GPT-2 1.2167 / 1.2249 (max 1k).
+- **Inference: won.** 429 vs 248 tok/s, 1,141 vs 1,194 MiB.
+- **1M tokens: 2.34 GiB peak, flat from 8k.** BPB 1.1195 at 8k, ~1.143 from 32k to 1M (the model trained at 8k; past that
+  it holds level and gains nothing). Text generated after 1M tokens of context is a loop ("$^{s}$ is the $^{s}$").
+- **Facts and induction behind.** Facts 32/48 vs 33/48 (46M 30/48). Calibration separation +0.163 vs +0.186 (+0.214 before the
+  lookup stage). Induction 96.2% vs 98.5%.
+- **Short generation: level with GPT-2, matching real-text statistics.** At t=0.85: words 0.83, bpb 1.18, variety 0.99, against
+  real text's 0.79, 1.15, 0.99.
+- **Long generation: horizon 4,096 tokens in band (46M: 0).** Best t=0.9 scores 1.165. Out of band from 8k on (45% 'A' at 20-24k).
+- **In-context lookup (hard): still near chance.** 20 / 43 / 23 / 30% at 10 / 30 / 60 / 120 facts, against GPT-2 40 / 33 / 43 / does
+  not fit (chance 25%, ~30 questions per row). Accuracy is highest for the EARLIEST facts (46.7%) and lowest for the latest (16.7%).
+- **Learning without forgetting.** New facts 19% -> 83-88%. Old facts 67% -> 48-56%, and text BPB 1.19 -> 1.6-2.5. Self-rehearsal
+  lowers the loss but does not remove it. NOTE: this test sweeps hand-set AdamW rates (1e-4..1e-3), which goal 8 does not allow
+  in the deliverable. It should use the intrinsic optimizer.
+- `2026-10-01 10:27:36 UTC` **train** (1.3 min) ok
+  d256 L4 mlp4 ctx2048 B2 600 steps -> /mnt/kv_cache/oomtest_b
+  (log `logs/20261001-102620-train.log`, seed 3)
+- `2026-10-01 10:29:37 UTC` **train** (1.9 min) ok
+  d256 L4 mlp4 ctx2048 B2 400 steps -> /mnt/kv_cache/oomtest_c
+  (log `logs/20261001-102741-train.log`, seed 3)
+- `2026-10-01 10:29:58 UTC` **train** (0.3 min) ok
+  d256 L4 mlp4 ctx2048 B2 600 steps -> /mnt/kv_cache/oomtest_d
+  (log `logs/20261001-102942-train.log`, seed 3)
+- `2026-10-01 10:31:09 UTC` **train** (0.4 min) ok
+  d256 L4 mlp4 ctx2048 B2 600 steps -> /mnt/kv_cache/oomtest_a2
+  (log `logs/20261001-103047-train.log`, seed 3)
+- `2026-10-01 10:33:17 UTC` **train** (2.1 min) ok
+  d256 L4 mlp4 ctx2048 B2 20000 steps -> /mnt/kv_cache/oomtest_d2
+  (log `logs/20261001-103114-train.log`, seed 3)
+- `2026-10-01 10:36:14 UTC` **train** (1.6 min) ok
+  d256 L4 mlp4 ctx2048 B2 20000 steps -> /mnt/kv_cache/oomtest_d
+  (log `logs/20261001-103437-train.log`, seed 3)
+
+## 2026-10-01 10:36 UTC: out-of-memory fix TESTED (eval/oom_test.txt): all three pass
+1. **Out-of-graph OOM at an eval (injected, MEMBRAE_TEST_OOM=1): pass.** Graphs released, eval redone, graphs recaptured,
+   run finished. Losses after it are **bit-identical to an undisturbed control**: 7.3537 / 6.5901 / 6.2276 at 200/400/600.
+   The FIRST control run gave 7.2651 / 6.4671 / 6.1408, but a re-run of that exact control gave the identical 7.3537 / ...
+   So the very first run of a new shape trains differently from every later one. A cold compile/autotune cache is the
+   suspect, and the cause is UNVERIFIED. Open question: a growth to a new shape mid-run hits the same cold path.
+2. **The run70 case (injected OOM in the exactness check right after a deepen's capture): pass.** Deepen exact 6.9943 -> 6.9943,
+   then a widen exact 6.7553 -> 6.7553, exit 0.
+3. **Automatic resume (eval/keep_training.sh): pass, on the third attempt.** The first two attempts were invalid, both from
+   my test-script bugs: the run finished before the kill, then `grep` could not read /proc/<pid>/cmdline, so nothing was
+   killed. Third attempt: the trainer was killed after step 4,000 (exit 143), the wrapper resumed from the step-4,000
+   checkpoint within seconds, finished at 20,000 and wrote the marker. A resume is not bit-exact against an uninterrupted
+   run, because the data stream differs after it (final loss 4.0676 vs 4.0986).
+The fix is in src/train.py; every long run launches through eval/keep_training.sh from now on.
+
+## 2026-10-01 10:47 UTC: USER: "go ahead, check the vision again and make sure it's getting fulfilled". Gap work started
+Goal by goal from the 98M scorecard. Won: 6 (inference 1.14 GiB; 1M tokens of context in 2.34 GiB) and 9 within 8k
+(context rot). Partial: 1, 4, 5, 7, 9 past 8k. Blocked: 3. Each gap and what is being done about it:
+- **Q&A (goal 1): the fine-tune data, not the model, is the prime suspect.** run46 (47.9% everyday) was fine-tuned on the
+  FULL mix: sft_v8192_r1025, 46.4M tokens, 152k pairs. Every lineage since then (run60, run70, r98: 12-21%) used the
+  "factual" mix: 13.5M tokens, 13k rows. Test running: r98r + full mix + schedule-free Prodigy, 2 epochs (r98_sftfull),
+  then Q&A (eval/qa_r98full.txt). The other differences (run46: hand-tuned AdamW, 118M, different pretraining) are not
+  isolated by this test.
+- **In-context lookup (goal 9): the test is underpowered.** "10 facts" is 10 questions, so 20% vs 40% is 2/10 vs 4/10.
+  Pooled over the four rows: ours 65/220 = 29.5%, GPT-2 40/100 = 40%, chance 25%. Added a powered mode to
+  eval/incontext.py: 50 fresh contexts per row, up to 10 questions each, hard distractors, 95% intervals. It runs on three
+  checkpoints to find where the ability is lost: before lookup training (run70_98M), after it (r98r), after the
+  fine-tune (r98_sft).
+- **Past 8k tokens (goal 9): more context predicts WORSE.** In eval/million.py the same 256 tokens score 1.1195 with 8k of
+  context and 1.1430 with 32k to 1M. The learned position table (8,192 entries) restarts at every window while the
+  state carries, so position 0 arrives with a full state, which training never shows. Inference-only test added
+  (MILLION_POS=wrap|clamp|half).
+  **CORRECTION of my own first reading:** this does NOT explain long-generation looping. On 2026-09-22 every checkpoint
+  degenerated by ~4,000 tokens, before any wrap. Training at 32k windows (run41) did not fix it, and the unlikelihood term
+  traded loops for dissolved words.
+- **Goal 8 inside the scorecard:** eval/continual.py swept hand-set AdamW rates. Added mode "intrinsic" (schedule-free
+  Prodigy at defaults; whole model / + self-rehearsal / new layers only). eval/scorecard.sh now uses it.
+- **Goal 3 stays blocked.** On 2026-09-24, gating by its own confidence still gave labels 62% wrong (top 10% most confident:
+  38% right). Revisit if the full-mix fine-tune lifts Q&A above 50% somewhere.
+
+## 2026-10-01 11:32 UTC: three hypotheses REFUTED, one measured properly, one experiment built (eval/diag_r98.txt, eval/qa_r98full.txt)
+- **REFUTED: the fine-tune data explains the Q&A gap.** r98r fine-tuned on run46's full mix (no rate, 2 epochs; held-out
+  answer loss 1.683 -> 1.342) scores everyday 16.7 / SciQ 3.2 / ARC 37.5, the same as the factual mix (16.7 / 4.3 / 37.7).
+  run46 reached 1.207 on the same validation set.
+- **REFUTED: the pretraining mix (Wikipedia share) explains it.** My guess was wrong. "tokmixqa_full" holds only
+  wikipedia.bin, so run70's 40% second corpus WAS Wikipedia, and the 98M saw more Wikipedia than run46's base.
+- **Next isolation (DIAGNOSTIC ONLY, hand-set rate):** run46's own recipe (Fabric, lr 1.5e-4, warmup, clipping) on
+  r98r, full mix -> r98_sftfab. If that recovers Q&A, the no-rate fine-tune is the cause, and the deliverable needs a better
+  intrinsic fine-tune. It is never the deliverable itself.
+- **REFUTED: position numbering past 8k causes the worse prediction.** Same final 256 tokens, r98r:
+  | Mode | 8k context | 32k | 131k |
+  |---|---|---|---|
+  | wrap | 1.1195 | 1.1430 | 1.1433 |
+  | clamp | 1.1131 | 1.1478 | 1.1481 |
+  | half | 1.1179 | 1.1428 | 1.1440 |
+  Note: the "8k" measurement already crosses one boundary (8,192 + 256 tokens), so the mode moves it too. The extra
+  context hurts in every mode, so the state accumulated over several windows is the problem, not the numbering. Untested remedy:
+  training with the state carried across windows.
+- **In-context lookup, POWERED (hard distractors, 500 questions per cell, chance 25%):**
+  | Model | 10 facts | 30 | 60 | 120 |
+  |---|---|---|---|---|
+  | 98M before lookup data | 33.2 +-4.1 | 27.6 +-3.9 | 26.8 +-3.9 | 24.0 +-3.7 |
+  | after 8k steps of lookup data | 38.6 | 34.0 | 29.2 | 24.8 |
+  | after the factual fine-tune | 38.0 | 34.8 | 31.8 | 22.8 |
+  | GPT-2 124M | 39.6 +-4.3 | 36.8 +-4.2 | 36.8 +-4.2 | does not fit |
+  At 120 facts, by position: earliest 36 -> 51%, the rest 12-22% (below chance). The model learned "the earliest-mentioned
+  candidate", not lookup. GPT-2 is weak at this too.
+- **The likely cause, and the experiment:** the carrier has no short convolution on q/k/v. fla's GatedDeltaNet (the same
+  operator) has one by default (conv_size 4), and recall in linear-attention models depends on it (Zoology). Added
+  AssocCarrier.add_short_conv / LM(short_conv=K) / train.py --short-conv K: identity at birth, added exactly to a
+  checkpoint. VERIFIED on CPU: loss 1.157808 both ways, trunk difference 0.0. With random conv weights, the cache across
+  a window split is exact (0.0; 0.91 without the cache). Growth ops refuse a conv model for now (assertion); token-by-token
+  decode does not handle the 3-part state yet.
+  eval/conv_ab.sh: control vs conv, both from r98r with cold optimizers, seed 2, 8,000 steps of 25% lookup data, then the
+  powered lookup test on both. Queued after the diagnostics.
+
+## 2026-10-01 11:52 UTC: no-rate continual learning beats the hand-set sweep; the fine-tune optimizer is NOT the Q&A cause
+- **Learning without forgetting, NO RATE** (schedule-free Prodigy at defaults, 150 steps, r98_sft):
+  | Method | NEW facts | OLD facts | TEXT BPB |
+  |---|---|---|---|
+  | whole model | 19.2% -> 84.2% | 66.7% -> 58.3% | 1.19 -> 1.62 |
+  | whole + self-rehearsal | 19.2% -> **88.3%** | 66.7% -> **58.3%** | 1.19 -> 1.95 |
+  | +4 layers only | 19.2% -> 36.7% | 66.7% -> 47.9% | 1.19 -> 2.37 |
+  The best hand-set AdamW row (rehearsal, lr 3e-4) kept old facts at 54.2% with NEW at 87.5%. The no-rate optimizer
+  matches or beats the sweep, so goal 8 holds here too. Forgetting is still real (old facts -8 points, text BPB +0.4..0.8).
+- **REFUTED: the no-rate fine-tune causes the Q&A gap.** run46's recipe (Fabric, lr 1.5e-4, warmup, clipping; diagnostic
+  only) on r98r with the full mix: everyday 20.8 / SciQ 2.9 / ARC 36.9, and held-out answer loss 1.380. Schedule-free
+  Prodigy did BETTER: 1.342, and 16.7 / 3.2 / 37.5. The no-rate fine-tune is at least as good as the hand-tuned recipe.
+- So the gap is in the BASE model. For context: run52 (319M, hand-set schedule, held-out BPB 1.052, far better than our 1.108)
+  reached only 33.3% everyday after its fine-tune, so run46's 47.9% (23/48) is the outlier among our models, not a lost
+  recipe. The everyday set is 48 questions (23 vs 10 right is ~3 SD apart). ARC, with 3,530 questions, is the steadier gauge:
+  98M 37.7, run46 40.3, run52 39.5, GPT-2 33.8, SmolLM2 48.4.
+
+## 2026-10-01 11:54 UTC: the past-8k experiment is queued (eval/longctx_ab.sh); decode handles the convolution state
+- **--pos-table N** (patch prepared; it is applied automatically once the conv arm has loaded its code, so no running job
+  sees a half-edited file). It keeps the 8,192-entry position table while training windows run to 32,768, with positions
+  modulo the table inside a window. That is exactly what inference does at every window boundary with the state carried.
+  Identical for windows <= the table.
+- **eval/longctx_ab.sh** matches the conv A/B's control in every respect except that a third of the windows are
+  32,768 tokens (ctx-mix 2048,8192,32768). Then eval/million.py's same-256-token test on both arms. Success criterion:
+  32k and 131k of context score at least as well as 8k.
+- **src/bench.py**: the graphed decode now carries the carrier's 3-part state (S, p0, conv cache). Not yet run on a GPU.
+- `2026-10-01 12:20:29 UTC` **train** (29.3 min) ok
+  d512 L12 mlp4 ctx8192 B2 200000 steps -> /mnt/kv_cache/ab_ctrl
+  (log `logs/20261001-115112-train.log`, seed 2)
+- `2026-10-01 13:00:19 UTC` **train** (39.8 min) ok
+  d512 L12 mlp4 ctx8192 B2 200000 steps -> /mnt/kv_cache/ab_conv
+  (log `logs/20261001-122034-train.log`, seed 2)
+- `2026-10-01 13:14:23 UTC` **train** (0.4 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 384.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 6.80 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.64 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 1750924 has 39.19 GiB memory in use. Process 1752282 has 1.49 GiB memory in use. Process 1752283 has 1.47 GiB memory in use. Process 1752281 has 1.47 GiB memory in use. Process 1752280 has 1.65 GiB memory in use. Including non-PyTorch memory, this process has 34.68 GiB memory in use. 34.00 GiB allowed; Of the allocated memory 33.34 GiB is allocated by PyTorch, with 26.07 GiB allocated in private pools (e.g., CUDA Graphs), and 367.53 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx32768 B2 200000 steps -> /mnt/kv_cache/ab_long
+  (log `logs/20261001-131359-train.log`, seed 2)
+
+## 2026-10-01 13:16 UTC: conv A/B INCONCLUSIVE (the convolution never woke up); more lookup training beats GPT-2; long arm crashed at startup
+- **Short-convolution A/B (eval/conv_ab.txt): no difference, and the reason is that the convolution barely trained.** Lookup
+  ctrl / conv: 10 facts 46.8 / 46.6, 30 facts 47.2 / 47.6, 60 facts 35.6 / 35.8, 120 facts 31.0 / 30.6. Held-out BPB
+  1.1039 for both. In the conv checkpoint the previous-token taps average |w| 0.002 against the current token's 1.0 (largest
+  departure from identity 0.034), so after 8,000 steps the convolution is still ~the identity. Added late to a trained
+  model, it stays where it was born, as zero-init growth did. NOT a refutation of the convolution hypothesis. A fair test
+  trains from scratch with and without it.
+- **The CONTROL ARM is the result: 8,000 more steps of lookup data (cold optimizer) lifted lookup past GPT-2.**
+  | Model | 10 facts | 30 | 60 | 120 |
+  |---|---|---|---|---|
+  | r98r | 38.6 | 34.0 | 29.2 | 24.8 |
+  | ab_ctrl | **46.8** | **47.2** | 35.6 | 31.0 |
+  | GPT-2 124M | 39.6 | 36.8 | 36.8 | does not fit |
+  The bias to the earliest candidate weakened (later facts now at chance, not below). Lookup is learnable here, and it
+  was under-trained. CAVEAT: the lookup training documents use the test's two kinds of fact (capitals, inventors) with
+  other names and wordings, so this is partly in-distribution. Added an out-of-distribution standard test, passkey
+  retrieval (eval/incontext.py passkey): five digits in filler at 5 depths, 512 to 131,072 tokens, greedy exact match,
+  GPT-2 where it fits. Running on r98r and ab_ctrl.
+- **Long-window arm FAILED at startup: out of memory capturing the 32,768-token graph.** Two causes. (1) The batch is sized
+  from the LONGEST window (tokens per micro-step = batch x max window), so batch 2 asked for 4x the control's tokens.
+  (2) The FIRST capture at startup had no split fallback; only post-growth captures went through capture_all(). That is
+  the same class as the run70 crash, on a path the morning's fix did not cover. Fixed: the startup capture now splits under
+  the cap, and the arm uses batch 1 x accumulation 2 = the control's 65,536 tokens per step. keep_training.sh behaved
+  correctly: it stopped after two failures without progress. Re-queued after the passkey test.
+
+## 2026-10-01 13:19 UTC: PASSKEY RETRIEVAL FAILS past the attention window. This is goal 9's real gap. Needle data built.
+- **eval/passkey.txt** (five digits in repeated filler, 5 depths x 4 keys, greedy exact match):
+  | Model | 512 tokens | 2,048 | 8,192 | 32,768 | 131,072 |
+  |---|---|---|---|---|---|
+  | r98r | 55% | 5% | 0% | 0% | 0% |
+  | ab_ctrl | 45% | 0% | 0% | 0% | 0% |
+  | GPT-2 124M | 80% | does not fit | | | |
+  The model holds a 1M-token context in constant memory, and its prediction keeps improving with context, but it cannot
+  retrieve one exact fact from beyond its 512-token attention window. "Context rot solved" must be reported as: prediction
+  yes, retrieval NO. Investors will run needle-in-a-haystack, so this is the vision's most important open gap.
+  (Gated DeltaNet, the same operator, retrieves single needles to 8k in its paper, after training on data that asks for it.)
+- **Needle documents** (eval/build_recall.py needle -> /mnt/kv_cache/tokneedle_v8192/needle.bin, 150M tokens, 38,691 docs,
+  mean 3,877 tokens). Real prose (Wikipedia / FineWeb-Edu spans) of 256-16,384 tokens, 1-4 needles (numbers or words bound
+  to names, 8 phrasings), questions at the end. Kept out of the test's distribution: no repeated filler and no "pass key"
+  wording (checked over the first 5M tokens). The second corpus tokneedle_v8192 = needle + lookup documents, 50/50.
+- **Next arm, "needle":** identical to the long-window arm except for the second corpus. Then passkey + powered lookup.
+- **MY MISTAKE:** I edited eval/longctx_ab.sh (to take ARM / DATA2) while bash was running it. Bash reads scripts
+  incrementally, so its remaining steps could have run garbled. I stopped only the two parent shells by exact PID
+  (1837551, 1837638); keep_training.sh and the trainer kept running. The remaining steps were re-queued from a fresh script.
+  The long-window arm at batch 1 x accumulation 2 captured all three windows in 28.4 GiB (no split needed), 195 ktok/s.
+- `2026-10-01 13:59:31 UTC` **train** (42.6 min) ok
+  d512 L12 mlp4 ctx32768 B1 200000 steps -> /mnt/kv_cache/ab_long
+  (log `logs/20261001-131658-train.log`, seed 2)
+- `2026-10-01 14:41:58 UTC` **train** (41.1 min) ok
+  d512 L12 mlp4 ctx32768 B1 200000 steps -> /mnt/kv_cache/ab_needle
+  (log `logs/20261001-140051-train.log`, seed 2)
+
+## 2026-10-02 12:58 UTC: yesterday's long-window and needle arms: NEITHER fixed its target. The card then sat idle ~22 h.
+Both arms finished on 2026-10-01: long at 14:00 UTC, needle at 14:49 UTC.
+- **Long windows with wrapped positions (ab_long):** every length improved slightly, but more context is still worse.
+  Same final 256 tokens:
+  | Arm | 8k context | 32k | 131k |
+  |---|---|---|---|
+  | ab_long | 1.1085 | 1.1375 | 1.1375 |
+  | ab_ctrl | 1.1169 | 1.1445 | 1.1450 |
+  The 8k->32k penalty is unchanged (+0.029 vs +0.028). Held-out BPB 1.1035 vs ctrl 1.1039. Passkey: 45% at 512, 0% from
+  2,048 on, the same as ctrl. CAVEAT: that whole comparison is ONE 256-token passage. Re-measuring over 24 passages
+  with paired intervals (MILLION_SAMPLES, now in eval/million.py).
+- **Needle documents (ab_needle, 12.5% of tokens, ~65M needle tokens):** passkey 60% at 512, **0% from 2,048 on.** Lookup is
+  unchanged: 44.0 / 47.8 / 32.8 / 29.8 vs ctrl 46.8 / 47.2 / 35.6 / 31.0. Same-256 test: 1.1079 / 1.1364 / 1.1368.
+  Even at depth 100% (needle right before the question), the 2,048-token passkey fails. So the repeated filler itself may be
+  what breaks it. Diagnostics running: what it writes on a miss, and in-distribution needles (real prose, trained phrasing)
+  at distances 64 to 16,384 tokens.
+- **TRAINING EFFICIENCY, MY FAULT:** after the needle arm finished (14:49 UTC Oct 1, 20:19 IST) nothing was queued, and
+  the card sat idle ~22 hours until this status request. I also stopped a leftover `tail -F` (PID 1670251) that a monitor
+  had left running for 2 days 6 hours.
+
+## 2026-10-02 13:04 UTC: WHY RETRIEVAL STOPS AT 512 TOKENS (eval/diag2.txt), and the from-scratch convolution test
+- **In-distribution needles** (real prose filler, the trained phrasings, one needle D tokens before the question):
+  | Arm | D=64 | 256 | 1,024 | 4,096 | 16,384 |
+  |---|---|---|---|---|---|
+  | ab_needle | 41.7% | 62.5% | 4.2% | 0% | 0% |
+  | ab_long (no needle data) | 0% | 0% | 0% | 0% | 0% |
+  ab_long never answers in this format. ab_needle's misses are numbers of the right shape, often close inside the window
+  ("440686" for 540686) and random beyond it. **Retrieval exists only inside the attention window; the carrier keeps no
+  exact value.** On the 2,048-token passkey it continues the filler ("blue. The sun is blue.").
+- **"More context, worse prediction" CONFIRMED over 24 passages (paired):** 32k context vs 8k: **+0.0531 +- 0.0156**
+  bits/byte (ctrl), +0.0528 +- 0.0157 (long-window arm). Long windows did not help at all.
+- **A train/inference mismatch in the windowed attention (src/model.py Attn):**
+  - Training: BLOCK-LOCAL, independent 512-token blocks, so a token sees 0-511 back depending on where it sits in its block.
+  - Decode: a sliding 512 window.
+  - Prefill of a length that is a multiple of 512: block-local.
+  - Prefill of any OTHER length: FULL causal attention over the whole window (up to 8,192), which training never did.
+  Every lookup and passkey prompt so far was in that last case, so those numbers measure an attention pattern the model
+  never trained. Not yet fixed. The candidate fix is a true sliding window in training (flex_attention) and the same at
+  inference.
+- **eval/conv_scratch.sh (running):** two 18.1M models from scratch, identical except --short-conv 4. d384, 8 layers,
+  2,048 windows, 20,000 x 16,384 tokens, 25% lookup + needle documents. Then needles at 64..1,536 with prompts aligned to
+  512 (attention block-local as trained), so a hit past 512 can only be the carrier's. A "needle" eval bug was caught
+  before it ran: aligning could trim the needle away, so the leading filler is now >= one alignment unit.
+- `2026-10-02 13:10:52 UTC` **train** (7.9 min) ok
+  d384 L8 mlp4 ctx2048 B8 20000 steps -> /mnt/kv_cache/cs_noconv
+  (log `logs/20261002-130255-train.log`, seed 5)
+- `2026-10-02 13:19:08 UTC` **train** (8.2 min) ok
+  d384 L8 mlp4 ctx2048 B8 20000 steps -> /mnt/kv_cache/cs_conv
+  (log `logs/20261002-131057-train.log`, seed 5)
+- `2026-10-02 13:35:51 UTC` **train** (0.6 min) ok
+  d256 L4 mlp4 ctx2048 B16 4000 steps -> /mnt/kv_cache/mq_noconv
+  (log `logs/20261002-133518-train.log`, seed 6)
+- `2026-10-02 13:36:27 UTC` **train** (0.5 min) ok
+  d256 L4 mlp4 ctx2048 B16 4000 steps -> /mnt/kv_cache/mq_conv
+  (log `logs/20261002-133559-train.log`, seed 6)
+- `2026-10-02 13:38:09 UTC` **train** (1.1 min) ok
+  d256 L4 mlp4 ctx2048 B16 4000 steps -> /mnt/kv_cache/mq_noconv
+  (log `logs/20261002-133703-train.log`, seed 6)
+- `2026-10-02 13:38:49 UTC` **train** (0.5 min) ok
+  d256 L4 mlp4 ctx2048 B16 4000 steps -> /mnt/kv_cache/mq_conv
+  (log `logs/20261002-133821-train.log`, seed 6)
+- `2026-10-02 13:40:16 UTC` **train** (0.7 min) ok
+  d256 L4 mlp4 ctx2048 B16 20000 steps -> /mnt/kv_cache/mq_noconv
+  (log `logs/20261002-133933-train.log`, seed 6)
+- `2026-10-02 13:41:02 UTC` **train** (0.6 min) ok
+  d256 L4 mlp4 ctx2048 B16 20000 steps -> /mnt/kv_cache/mq_conv
+  (log `logs/20261002-134028-train.log`, seed 6)
+
+## 2026-10-02 13:43 UTC: small-model carrier tests gave no signal (my test designs); sliding-window attention built and verified
+- **Convolution from scratch (eval/conv_scratch.txt): no signal.** Two 18M models, 330M tokens, 25% lookup + needle data.
+  Both retrieve 0% at every distance, even 64 tokens, inside attention: too small and too short to learn the task, so this
+  says nothing about the convolution. Held-out BPB conv 1.3973 vs no-conv 1.3755 (single seed).
+- **MQAR (eval/mqar.py, built today):** key-value pairs among filler, queries at the end, trained on the task alone.
+  Attempt 1: random filler made 97% of the loss irreducible noise and the run stalled at log(5,000); fixed with a
+  predictable 64-token cycle as filler. Attempts 2 and 3: the spike guard skipped every step once gradients were small and
+  bursty (median |g| 0.07), then stopped the run as DIVERGED. Recall at chance (0.1%). Attempt 4 is running with the guard
+  off (--spike 1e9), 20,000 steps.
+- **Sliding-window attention (model.py _swa, Attn(sliding=True), LM(attn_window, attn_sliding), train.py --attn-window
+  --attn-sliding):** a TRUE sliding window via flex_attention, one function in training, prefill and decode.
+  VERIFIED on GPU against an explicit mask: max diff 0.002 (bf16), with a query offset too. A layer run whole vs prefill
+  600 + decode 100 one at a time: 2.4e-7, cache exactly 512. Old checkpoints keep block-local (the default).
+- **eval/swa_ab.sh (queued after MQAR):** from r98r with its own optimizer state (the earlier A/B arms all ran with cold
+  optimizers at step size ~3e-5, against the lineage's 8e-4, a confound now removed). Windows 512 vs 8,192, 6,000 steps of
+  25% lookup + needle data. Then needles by distance to 16k, passkey, and powered lookup.
+- `2026-10-02 13:46:06 UTC` **train** (4.4 min) ok
+  d256 L4 mlp4 ctx2048 B16 20000 steps -> /mnt/kv_cache/mq_noconv
+  (log `logs/20261002-134140-train.log`, seed 6)
+- `2026-10-02 13:49:30 UTC` **train** (3.2 min) ok
+  d256 L4 mlp4 ctx2048 B16 20000 steps -> /mnt/kv_cache/mq_conv
+  (log `logs/20261002-134618-train.log`, seed 6)
+- 2026-10-02 13:49 UTC MQAR attempt 4 (guard off, 20,000 steps = 655M tokens): both arms at CHANCE at every distance (0.1-0.2%), even
+  under 512 tokens, inside attention's reach. A test that nothing passes has no positive control, so it measures nothing
+  yet; a full-attention model should be run on it first. The carrier-recall question stays OPEN. Moving to the attention
+  route (eval/swa_ab.sh, now running).
+- `2026-10-02 14:12:45 UTC` **train** (22.9 min) ok
+  d512 L12 mlp4 ctx8192 B2 198000 steps -> /mnt/kv_cache/swa_512
+  (log `logs/20261002-134953-train.log`, seed 3)
+- `2026-10-02 14:16:37 UTC` **train** (3.8 min) ok
+  d512 L12 mlp4 ctx8192 B2 198000 steps -> /mnt/kv_cache/swa_8192
+  (log `logs/20261002-141250-train.log`, seed 3)
+
+## 2026-10-02 14:26 UTC: sliding-window 512 arm (eval/swa_ab.txt): consistent attention retrieves better INSIDE the window; the 8,192
+## arm was stopped by a spike-guard lock-out, not a divergence
+- **swa_512** (true sliding window 512, 6,000 steps from r98r with its optimizer, 25% lookup + needle data): held-out BPB
+  1.1062.
+  - Needles: 45.8% (64), **70.8% (256)**, 0% at 1,024 and beyond (block-local ab_needle: 41.7 / 62.5 / 4.2 / 0).
+  - **Passkey at 512: 80%, level with GPT-2** (was 45-60%); 5% at 2,048; 0% beyond.
+  - Powered lookup: 46.8 / 46.6 / 31.0 / 28.8, about as before. **The position pattern flipped**: at 120 facts the LATEST
+    quarter scores 60.7% and the earliest 25%. Recency is now exactly the attention window's span, and the old
+    earliest-candidate bias is gone.
+  So exact retrieval is attention's alone: the carrier still contributes nothing beyond the window.
+- **swa_8192 STOPPED at step 192,800 as "DIVERGED" at a healthy loss (2.6037, the same as the 512 arm's).** Widening the
+  window raised the gradient norm for good. Every step after the guard's 200-step warm-up read as a spike against its
+  old median (0.74), skipped steps never enter the history, so the median could not move: 535 skips, stopped. This is
+  the guard's lock-out failure in a new form. Fix: train.py --spike-adapt 1 (every finite norm enters the history;
+  one spike barely moves the median, a lasting shift does; a real divergence is still caught by the weights' finiteness
+  and the held-out eval). swa_8192 re-run with it is running now.
+- `2026-10-02 14:30:43 UTC` **train** (4.4 min) ok
+  d512 L12 mlp4 ctx8192 B2 198000 steps -> /mnt/kv_cache/swa_8192
+  (log `logs/20261002-142622-train.log`, seed 3)
+- 2026-10-02 15:27 UTC swa_8192 re-run with --spike-adapt also stopped as DIVERGED at step ~193,000. That time it was NOT a lock-out:
+  skips rose 24 -> 45 -> 85 -> 183 per 200 steps as the median norm rose 0.75 -> 0.83 -> 1.13, while the LOSS FELL
+  (2.6026 -> 2.5733 / 2.5794). The norm keeps growing as the attention layers start using long range: possibly learning,
+  possibly the onset of instability. Re-run 3 with no skip guard (--spike 1e9); the weights' finiteness and the
+  held-out evals (every 3,000 steps) remain. Logs of attempt 2 kept as logs/swa_8192_try2.out. The card idled ~1 h
+  (14:30 -> 15:27 UTC) because nothing was queued behind a run that could fail. My fault again.
+- 2026-10-02 15:31 UTC USER: /loop "until everything is done and vision fulfilled". The unguarded swa_8192 run is healthy so far (loss
+  2.6026 -> 2.5609 at 192,800, 270 ktok/s). Added the REACH growth op ("R" in --grow-schedule and in --grow-auto
+  alternatives): it doubles every sliding attention window, recompiles and recaptures, and logs the not-exact cost. That
+  lets trials choose the window like width and depth. Queued a fallback behind swa_8192: if it does not finish, run
+  progressive reach 512 -> 8,192 (one doubling per 1,500 steps, a hand-set schedule for the experiment only) from swa_512.
+- `2026-10-02 15:51:57 UTC` **train** (24.6 min) ok
+  d512 L12 mlp4 ctx8192 B2 198000 steps -> /mnt/kv_cache/swa_8192
+  (log `logs/20261002-152721-train.log`, seed 3)
+- `2026-10-02 16:04:41 UTC` **train** (1.6 min) ok
+  d256 L4 mlp4 ctx1024 B8 1400 steps -> /mnt/kv_cache/reach_smoke
+  (log `logs/20261002-160304-train.log`, seed 9)
+
+## 2026-10-02 16:07 UTC: 8,192-token sliding window WORKS for retrieval inside it; run80 launched (98M, the model decides its reach)
+- **swa_8192** (true sliding window 8,192, no skip guard, 6,000 steps from r98r, 25% lookup + needle data): loss
+  2.6026 -> 2.5378. Held-out BPB 1.1204 (195k), **1.1090** (198k), against swa_512's 1.1062. Speed unchanged (271 ktok/s).
+  | Distance | 64 | 256 | 1,024 | 4,096 | 7,000 | 16,384 |
+  |---|---|---|---|---|---|---|
+  | s8192 needles | 45.8% | 62.5% | **50.0%** | 12.5% | **33.3%** | 0% |
+  | s512 needles | 45.8% | 70.8% | 0% | 0% | 0% | 0% |
+  - Passkey: 75% (512), **40% (2,048, was 5%)**, 0% at 8,192 and 32,768.
+  - Powered lookup: 46.4 / 48.8 / **43.2** / **34.8** at 10 / 30 / 60 / 120 facts. Ahead of GPT-2 at 60 facts (36.8 +-4.2),
+    and GPT-2 cannot hold 120. At 120 facts the earliest quarter now scores 60.2%.
+  Exact retrieval now reaches as far as the window does, after only 6,000 steps. Past the window (16k) it is still 0%:
+  the carrier still retrieves nothing exact.
+- **Engineering for the intrinsic version:**
+  - **REACH op ("R")**: smoke-tested on a tiny model. It doubled 128 -> 256, recaptured, trials ran (R behind, W ahead
+    but less per compute -> STAY), and the window was saved in the checkpoint cfg.
+  - **--heldout-T / --heldout-data2**: the trials' held-out is 8 x 8,192 tokens, mirroring the training mix with the second
+    corpus at its share.
+  - **The skip-count DIVERGED stop now also requires the running loss NOT to be falling.**
+  - **The scorecard gains:** passkey; needles by distance; powered lookup; the 24-passage 8k-vs-32k test; REACH in the
+    growth section.
+- **run80 (eval/run80.sh, keep_training.sh):** from swa_512, the size held at 98M (user: 98M is enough; close gaps before
+  scaling). The only growth offered is R vs stay, trials at stage doublings (first at 202,000), 40,000 steps to 238,000,
+  then eval_ckpt.sh (fine-tune, abstention, full scorecard) -> eval/scorecard_r80.txt.
+- `2026-10-02 16:10:15 UTC` **train** (4.1 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 24.00 GiB. GPU 0 has a total capacity of 93.09 GiB of which 17.09 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.64 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 1872127 has 37.27 GiB memory in use. Process 1873564 has 946.00 MiB memory in use. Process 1873562 has 946.00 MiB memory in use. Process 1873561 has 946.00 MiB memory in use. Process 1873563 has 946.00 MiB memory in use. Including non-PyTorch memory, this process has 28.69 GiB memory in use. 34.00 GiB allowed; Of the allocated memory 27.34 GiB is allocated by PyTorch, with 26.00 MiB allocated in private pools (e.g., CUDA Graphs), and 364.54 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B2 238000 steps -> /mnt/kv_cache/run80
+  (log `logs/20261002-160610-train.log`, seed 0)
+- 2026-10-02 16:39 UTC **run80 attempt 1 CRASHED at step 199,000 (16:10 UTC), out of memory: a 24 GiB allocation in flex_attention's
+  REFERENCE maths.** The sliding-window kernel's compiled copy was created lazily on its first call, which in training
+  happened INSIDE the compiled trunk. There it never became a compiled kernel, so the trials' eager held-out pass
+  (8 x 8,192 tokens) materialised the full score matrix. roomy() released the graphs and retried as designed, but 24 GiB
+  fits under no cap. keep_training.sh stopped at once (no checkpoint yet, correct). FIX (model.py _swa): call
+  flex_attention directly when torch.compiler.is_compiling(), the compiled copy otherwise. VERIFIED in the crash's order
+  (compiled call first, then an eager 8 x 8,192): peak 1.59 GiB. The card idled ~30 min. Relaunched; log of attempt 1
+  kept as logs/train80_try1.out.
+- `2026-10-02 16:44:52 UTC` **train** (5.6 min) ok
+  d512 L12 mlp4 ctx8192 B2 238000 steps -> /mnt/kv_cache/run80
+  (log `logs/20261002-163917-train.log`, seed 0)
+- 2026-10-02 17:17 UTC **run80 attempt 2 stopped at 199,400 (DIVERGED: 273 skips in 600 steps, loss not falling 2.5630 -> 2.5699).**
+  Skips were 5-9 per 200 steps until exactly step 199,000, where the trials' first baseline held-out pass runs
+  (mark at start + trial_steps). Then 67, then 200 of 200, with the median norm 0.85 -> 0.96 -> 1.41 and the loss
+  2.5624 -> 2.5903. Something in that pass changes the training state. Bisecting: two short runs from the same seed,
+  held-out 8 x 8,192 of the training mix (new) vs 4 x 2,048 of the main mix (old). Log kept as logs/train80_try2.out.
+- `2026-10-02 17:32:12 UTC` **train** (14.8 min) ok
+  d512 L12 mlp4 ctx8192 B2 199800 steps -> /mnt/kv_cache/bis_new
+  (log `logs/20261002-171725-train.log`, seed 0)
+- `2026-10-02 17:32:13 UTC` **train** (14.8 min) ok
+  d512 L12 mlp4 ctx8192 B2 199800 steps -> /mnt/kv_cache/bis_old
+  (log `logs/20261002-171725-train.log`, seed 0)
+- 2026-10-02 17:32 UTC **BISECT: the held-out pass is NOT the cause.** Two runs from the same seed, both with the baseline pass at
+  199,000 (new 8 x 8,192 training-mix sample vs old 4 x 2,048), ran side by side. Neither had a skip burst (4-13 per
+  200 steps). Afterwards they stay nearly identical to each other (199,200: 2.5857 vs 2.5858), so the pass does not
+  perturb training. Yet attempt 2 had matched both to the last digit up to 199,000 and then departed (2.5903).
+  No optimizer recaptures in any run. What differs: the bisect runs started AFTER attempt 2, with its compiled kernels
+  in the disk cache, while attempt 2 compiled the eager sliding-attention kernel COLD exactly at 199,000. The same
+  pattern as this morning's OOM test (the first run of a new shape trained differently from every later run, which were
+  bit-identical). HYPOTHESIS, not proven: a cold compile perturbs the training state. Attempt 3 launched with warm caches.
+- 2026-10-02 17:39 UTC **Attempt 3 (warm caches) passed 199,000 cleanly, and its losses equal the old-held-out bisect run's to the digit
+  (2.5858 / 2.5584 / 2.5902), with 5-13 skips per 200 steps.** So with warm caches training is deterministic and healthy,
+  and the departure in attempt 2 coincided with a COLD compile. OPEN ISSUE (correctness): every growth event compiles new
+  kernels cold (REACH recompiles at a new window, widen/deepen at new shapes). If a cold compile can perturb the training
+  state (mechanism unknown; autotune benchmarking an in-place kernel on live buffers is one candidate), then growth trials
+  may have been biased against the grown branch. To investigate: compare weights / optimizer state before and after a cold
+  compile of the same step.
+- `2026-10-02 17:46:05 UTC` **train** (13.8 min) ok
+  d512 L12 mlp4 ctx8192 B2 238000 steps -> /mnt/kv_cache/run80
+  (log `logs/20261002-173218-train.log`, seed 0)
+
+## 2026-10-02 17:49 UTC: ROOT CAUSE of the "divergences": a skipped step was NOT a no-op under schedule-free Prodigy. Fixed.
+- **Attempt 3 failed the same way at 201,200** (112 then 200 of 200 skipped, median 0.87 -> 0.98 -> 1.41, the same numbers
+  as attempt 2), with no held-out pass or compile nearby. **RETRACTED: the cold-compile hypothesis.** The DIVERGED stop exited
+  0, so the wrapper wrote TRAIN80_DONE and the pipeline started fine-tuning the 200,000 checkpoint. I stopped it by
+  verified PIDs (eval_ckpt.sh 1971025, src.sft 1972568).
+- **The mechanism (src/optim.py _sfp_update):** the guard zeroes a spike's gradients, expecting "the optimizer sees a zero
+  gradient". That is true for Fabric, which skips zero-gradient tensors (`live`), and FALSE for the fused schedule-free
+  step. On a zero gradient the average still moves the weights toward z (y += c (z - y)), the second moments decay
+  (inflating the next real update), and the averaging clocks and step-size statistics tick. A burst of skips drifts the
+  weights and enlarges the next updates, which raises the gradient norm, which skips more steps. It is self-feeding:
+  - run80 x3 and swa_8192 x2 all stopped this way;
+  - swa_8192 with the guard OFF trained cleanly (loss 2.60 -> 2.54, BPB 1.109).
+- **FIX:** the trainer hands the guard's decision to the optimizer (set_live), and every state update of the step is gated by
+  it. VERIFIED on GPU:
+  - kept steps equal the old optimizer to 4.7e-10;
+  - a skipped step moves nothing (weights 0.0, vr/vc/z/s/wsp 0.0, d 0.0, ws 0.0);
+  - the old optimizer moved the weights 2.5e-6 on the same zeroed step.
+  Every sfp run before today carried this drift at its skip rate (1-2% of steps).
+- **And an early stop is no longer "success":** DIVERGED / DEGRADING / non-finite now end train.py with an error
+  (SystemExit), so keep_training.sh resumes or gives up, and no done marker is written.
+- **run80 attempt 4 launched** from the same seed with both fixes; the guard stays on (with --spike-adapt).
+- `2026-10-02 17:55:12 UTC` **train** (5.7 min) FAILED: SystemExit('stopped early: diverged')
+  d512 L12 mlp4 ctx8192 B2 238000 steps -> /mnt/kv_cache/run80
+  (log `logs/20261002-174933-train.log`, seed 0)
+- 2026-10-02 17:57 UTC **Attempt 4 (optimizer fixed, guard on) ran away the same way at 199,000-199,400** (149 then 200 of 200 skipped,
+  median 0.85 -> 1.16 -> 1.68), and the early stop correctly exited as a failure. So the no-op fix was real but NOT the
+  whole story: gradient norms jump ~4x at a random point and the frozen-while-skipping model cannot adapt to it. Cause
+  NOT understood. Then the wrapper auto-resumed attempt 3's stale step-200,000 checkpoint, which run80.sh had left in
+  the run directory (my bug; it now clears old checkpoints first). Stopped by verified PIDs (1973422, 1973429, 1974451).
+  **Attempt 5: guard OFF (--spike 1e9)**, the configuration swa_8192 trained cleanly with. The schedule-free per-tensor rms
+  clip still bounds every update, and finiteness plus the held-out evals stop a real divergence. Logs of attempt 4:
+  logs/train80_try4.out.
+- 2026-10-02 18:21 UTC **run80 attempt 5 (guard off) is clean past every earlier failure point. The MODEL CHOSE ITS OWN REACH.**
+  - Step 202,000: RECONSIDER, trial of R vs unchanged, 1,000 steps each, same batches.
+  - REACH 512 -> 1,024 (same-row loss 2.5064 -> 2.5068).
+  - Grown 2.7878 -> 2.7806, unchanged -> 2.7841, on the held-out that mirrors the training mix at 8,192 tokens.
+  - Marginal gain per compute 0.0545 vs 0.0418.
+  - **DECISION at 204,000: GROW (R)**, now training with a 1,024-token window.
+  Held-out BPB 1.0986 at 200,000 (swa_512 ended at 1.1062). The next reconsiders come as the new stage doubles.
+- `2026-10-02 20:35:13 UTC` **train** (158.3 min) ok
+  d512 L12 mlp4 ctx8192 B2 238000 steps -> /mnt/kv_cache/run80
+  (log `logs/20261002-175657-train.log`, seed 0)
+
+## 2026-10-03 04:10 UTC: run80 FINISHED (2026-10-02 20:35 UTC); the model chose an 8,192-token window; retrieval and lookup far ahead of GPT-2;
+## the generation results were INVALID (a decode bug, now fixed); the card idled ~6 h
+- **Reach, decided by trials** (logs/train80.out):
+  - GROW 512->1,024 at 204k; STAY at 210k; GROW ->2,048 at 214k; STAY at 220k; GROW ->4,096 at 224k; STAY at 230k;
+    GROW ->8,192 at 234k.
+  - Held-out BPB: 1.0986 (200k), 1.0907, 1.0843, 1.0783, **1.0724 (232k)**.
+  - CAVEAT: the trial margins are tiny (e.g. 2.7102 vs 2.7103 at 234k) on 8 x 8,192 held-out tokens, and their noise is not
+    measured. The STAY/GROW alternation suggests some decisions are near noise.
+- **Scorecard (eval/scorecard_r80.txt; the parts that do not generate long text are valid):**
+  - **Needles by distance (in-distribution):** 100% at 64 / 256 / 1,024, **95.8% at 4,096**, 37.5% at 7,000, 0% at 16,384.
+  - **Passkey (out of distribution):** 75% at 512 (GPT-2 80%), **80% at 2,048** (GPT-2 cannot fit), 0% at 8,192 and 32,768.
+  - **Powered lookup (hard distractors, 500 questions per row):** **58.0 / 55.8 / 56.0 / 59.0%** at 10 / 30 / 60 / 120 facts,
+    against GPT-2's 39.6 / 36.8 / 36.8 / does not fit. Flat across depth (57-62%).
+  - **Context rot within 8k:** 1.1602 (512) -> 1.0789 (8,192), against GPT-2 1.2167 / 1.2249 (r98: 1.1907 -> 1.1380).
+  - **Past 8k: still worse,** 32k vs 8k +0.0414 +- 0.0152 (24 passages).
+  - **1M context:** 3.47 GiB peak (the 8k attention cache), bits per byte flat from 32k.
+  - **Logprob tests:** ARC 38.6% (best of all our lineages; GPT-2 33.8). Facts 28/48 (GPT-2 33). Calibration separation
+    +0.198 (GPT-2 +0.186). Induction 97.2% (98.5).
+  - **Decode:** 190 tok/s at 1,406 MiB (an attention cache of 8,192 per layer; GPT-2 248 tok/s at 1,327 MiB).
+- **INVALID, a decode bug:** the graphed decoder padded each windowed-attention cache to the full window with copies of the
+  first key, and the decode step attended to them. With an 8,192 window and a short prompt that is ~8,190 copies of one
+  token, so run80's greedy text left the exact eager decode after 7 tokens. Generation quality (bpb 1.71-1.77) and long
+  generation (horizon 0) were measured through that path. So were everyday/SciQ Q&A answers (8.3% / 5.2%), and the
+  own-mistake labels that trained the abstention model. FIX: the sliding layers pad with zeros, and the decode masks
+  zero keys. VERIFIED: graphed == eager for 200 of 200 greedy tokens on two prompts. Block-local checkpoints keep the old
+  padding, which was attended too (512 copies) and is a flaw in their earlier generation numbers.
+  Whole eval re-running now (eval_ckpt.sh r80); the old card kept as eval/scorecard_r80_baddecode.txt.
+- **TRAINING EFFICIENCY, my fault:** the evaluation finished at 22:11 UTC and nothing was queued after it, so the card sat
+  idle ~6 hours until this status request.
+
+## 2026-10-03 04:45 UTC: RETRACTION. "More context past 8k makes prediction worse" was a BUG for every block-local model
+- **The bug (src/model.py Attn, the block-local ring branch):** when a whole new window (8,192 tokens) arrived with an
+  attention cache, it kept only the LAST 512 keys of cache + new. Every query before the last 512 new tokens had no visible
+  key, so its row was fully masked and the layer output zero.
+  - Demonstrated against the HEAD code: 7,680 of 8,192 rows were zero in the second window.
+  - It affected every measurement that carried state across windows: the 8k-vs-32k tests (+0.053), the
+    "position numbering" experiment, the long-window arm (ab_long), the one-million-token bits per byte for block-local
+    models, and passkey prefill past 8,192.
+  - FIX: a block-aligned window ignores the cache (exactly the training function, verified 0.0 against a fresh window);
+    any other length sees a true sliding window.
+- **Re-measured, 24 passages, paired** (vs 8k context):
+  | Model | 32k | 131k |
+  |---|---|---|
+  | ab_ctrl | -0.0007 +- 0.0006 | -0.0006 +- 0.0005 |
+  | ab_long | -0.0008 +- 0.0008 | -0.0007 +- 0.0007 |
+  | r98r | -0.0002 +- 0.0003 | +0.0001 +- 0.0004 |
+  **Flat to 131k: the block-local models never had context rot past 8k.** RETRACTED: the measured penalty, the
+  "positions are not the cause / the state is" conclusion, and "long-window training did not help" (that test measured
+  the bug too).
+- **run80 (sliding attention over 8,192, its own choice) was measured through the correct path and DOES pay
+  +0.0414 +- 0.0152 at 32k.** Its carrier never held more than 8,192 tokens of history in training, while attention covered the
+  whole training window. Queued eval/longctx_r80.sh behind the running evaluation: run80 + 6,000 steps with 32,768-token
+  windows vs a control, then the 24-passage test and needles on both.
+- train.py: a resumed run now takes the attention window and its kind from the checkpoint.
+
+## 2026-10-03 05:50 UTC: run80 RE-EVALUATED with the fixed decoder (eval/scorecard_r80.txt; old card: eval/scorecard_r80_baddecode.txt)
+- **Q&A** (everyday / SciQ / ARC):
+  | Model | Everyday | SciQ | ARC |
+  |---|---|---|---|
+  | run80 fine-tuned | **22.9%** | **6.3%** | **38.6%** |
+  | run80 abstaining | 22.9 (8.3 declined) | 2.4 (48.2 declined, wrong 93.7 -> 49.4) | 38.4 |
+  | r98 | 16.7 / 20.8 | 4.3 | 37.7 |
+  | GPT-2 124M | 16.7 | 2.2 | 33.8 |
+  | SmolLM2-135M | 62.5 | 12.7 | 48.4 |
+  Best everyday and ARC of all our intrinsic lineages, ahead of GPT-2 on all three.
+- **Generation:** short (1,024 tokens, t=0.85): words 0.84 / bpb 1.09 / variety 0.99 against real text 0.79 / 1.15 / 0.99,
+  so level with GPT-2. Long (32,768, t=0.9): the first 4k scores 1.323 (just outside the band, so "horizon 0" by the
+  from-start rule), then IN BAND for 8k-24k (1.04-1.18) as coherent dialogue, no loops (commonest token 4-9%), out of band
+  again at 24-28k. Far better than any earlier model's loops; the horizon metric understates it.
+- **Learning without forgetting, no rate:** whole model: new facts 21.7 -> **96.7%**, old facts 72.9 -> 64.6%, text BPB
+  1.21 -> 1.88. Self-rehearsal: 83.3 / 66.7%. Best yet on new facts; forgetting still present.
+- **Decode speed REGRESSED with the 8k window: 174 tok/s vs GPT-2 249** (512-window model 431). Profile: a float32
+  memory-efficient SDPA kernel, 3.25 ms per token for one query against 8,192 keys. Replaced by matrix-vector products in
+  the decode step (graphed == eager still 200/200). The speed is not yet re-measured, because the card is busy with
+  eval/longctx_r80.sh and contention makes kernel times meaningless. To measure on a free card.
+- `2026-10-03 06:12:04 UTC` **train** (24.4 min) ok
+  d512 L12 mlp4 ctx8192 B2 244000 steps -> /mnt/kv_cache/lc80_ctrl
+  (log `logs/20261003-054742-train.log`, seed 7)
+- `2026-10-03 06:49:11 UTC` **train** (37.0 min) ok
+  d512 L12 mlp4 ctx32768 B1 244000 steps -> /mnt/kv_cache/lc80_long
+  (log `logs/20261003-061210-train.log`, seed 7)
+- `2026-10-03 06:57:40 UTC` **train** (1.4 min) ok
+  d256 L4 mlp4 ctx1024 B4 600 steps -> /mnt/kv_cache/carry_smoke
+  (log `logs/20261003-065616-train.log`, seed 3)
+
+## 2026-10-03 06:59 UTC: decode speed FIXED; 32k windows only halve run80's past-8k penalty; CARRIED-STATE TRAINING built and launched
+- **Decode on a free card (eval/decode_speed.txt):** run80 (sliding 8,192) **382 tok/s**, 766 MiB peak; r98r (block-local
+  512) 428 tok/s; GPT-2 124M 249 tok/s, 640 MiB. The float32 SDPA kernel is gone (it gave 174 tok/s), so inference
+  efficiency is back ahead of GPT-2.
+- **eval/longctx_r80.txt** (same start, 6,000 steps), 32k vs 8k context over 24 passages:
+  | Arm | 32k vs 8k | needles 7,000 | held-out BPB | speed |
+  |---|---|---|---|---|
+  | ctrl (2k/8k windows) | +0.0330 +- 0.0152 | 66.7% | 1.0660 | 274 ktok/s |
+  | long (+32k windows) | +0.0209 +- 0.0096 (not significantly smaller) | 58.3% | 1.0767 (worse) | 181 ktok/s |
+  The long arm's spectral-group step size rose 6.1e-3 -> 3.0e-2. Its startup capture had to split the micro-steps.
+- **Mechanism, demonstrated (run80):** the second 8k window of a Wikipedia stream scores 2.3904 alone, but 2.4032 with
+  the first window carried in. Earlier context HURTS this model. With attention spanning the whole training window,
+  its carrier never trained on a state holding more than attention can see.
+- **CARRIED-STATE TRAINING (train.py --carry N, model.py trunk(states, carry)):** each micro-step continues its own
+  streams from the previous step's window, with every layer's state carried in detached (carrier memory and position,
+  attention cache). Streams restart every N steps (staggered groups); two graphs share one memory pool (fresh /
+  continued). Training is exactly what inference does past the window. VERIFIED:
+  - two carried 8k windows == one 16k forward (2.40320 vs 2.40305, bf16);
+  - a tiny-model smoke run trains (BPB 2.37 -> 2.19, 430 ktok/s).
+  **eval/carry_r80.sh launched:** run80 + 6,000 carried steps (N=16, up to 131k tokens of history), the same as lc80_ctrl
+  otherwise; then the 24-passage test to 131k and needles.
+- `2026-10-03 07:12:43 UTC` **train** (14.7 min) FAILED: SystemExit('stopped early: diverged')
+  d512 L12 mlp4 ctx8192 B2 244000 steps -> /mnt/kv_cache/carry80
+  (log `logs/20261003-065802-train.log`, seed 7)
+- `2026-10-03 07:15:31 UTC` **train** (2.7 min) FAILED: SystemExit('stopped early: diverged')
+  d512 L12 mlp4 ctx8192 B2 244000 steps -> /mnt/kv_cache/carry80
+  (log `logs/20261003-071249-train.log`, seed 7)
+- 2026-10-03 07:19 UTC **Carried-state run 1 DIVERGED** (logs/carry80_try1.out). The loss went 2.475 -> 3.41 by 240,000, then non-finite.
+  Prodigy's step size ran away in both groups: main 8.1e-4 -> 1.4e-2, spectral (decay rates, rotation frequencies)
+  6.1e-3 -> 15.8. Cause, most likely: the carrier rotates keys and queries by GLOBAL positions, which reach 131k in
+  carried streams, and a frequency's gradient grows with the position (the 32k arm showed the same at x5).
+  - Wrapping positions at 8k at inference is not a fix: it breaks relative angles across the boundary (8k context
+    1.039 -> 1.239).
+  - **FIX: REBASE.** Positions restart at every call, and the carried state is rotated back by the previous call's length.
+    The delta rule is rotation-equivariant, so every query-key angle is unchanged, but no position exceeds a window.
+    VERIFIED identical: 24-passage test 1.0389 / 1.0728 / 1.0729 vs 1.0390 / 1.0729 / 1.0729 before; carried vs whole
+    2.40304 vs 2.40305; graphed == eager 200/200. Decode 349 tok/s (382 without the per-token rotation; it can be cached).
+  Carried run 2 launched with the rebase. Watching both step sizes.
+- `2026-10-03 07:49:53 UTC` **train** (29.9 min) ok
+  d512 L12 mlp4 ctx8192 B2 244000 steps -> /mnt/kv_cache/carry80
+  (log `logs/20261003-071959-train.log`, seed 7)
+- 2026-10-03 07:52 UTC **Carried run 2 (rebased) also DEGRADED**, later. Stable for ~1,000 steps with the loss below the control's (2.39-2.47
+  vs 2.50-2.52); then rising from ~239,400 (2.585) with the step sizes still near normal (main 1.07e-3, spectral 7.2e-3);
+  then the step sizes ran away (main 6.2e-3, spectral 0.37 by 244,000), loss 2.88. The 24-passage test is
+  flat (+0.003 +- 0.005), but at 1.574 bits/byte, a broken model. Needles 0% everywhere. NOT a result.
+  Whether Prodigy's step-size growth is the cause or a symptom is unknown. DIAGNOSTIC running (--freeze-d: the step size
+  held at the model's resumed value), 3,000 carried steps, evals every 1,500.
+- `2026-10-03 08:07:51 UTC` **train** (15.1 min) ok
+  d512 L12 mlp4 ctx8192 B2 241000 steps -> /mnt/kv_cache/carryfz
+  (log `logs/20261003-075243-train.log`, seed 7)
+- 2026-10-03 08:19 UTC **Frozen-step-size diagnostic (eval/carry_frozen.txt), 3,000 carried steps:** no blow-up, so Prodigy's runaway
+  was at least the trigger. But the result is not a win:
+  - 32k vs 8k: +0.0094 +- 0.0070 (from +0.033), only because 8k got WORSE (1.0617 vs control 1.0384) while 32k stayed the
+    same (1.0711 vs 1.0714);
+  - needles 66.7 / 45.8 / 12.5% at 1k / 4k / 7k (control 100 / 100 / 67);
+  - held-out 1.0704 vs 1.0676.
+  The compiled carried forward matches eager (2.40290 vs 2.40304), so it is not a compile bug. Cause, most likely, is
+  the training mix: with streams restarted every 16 windows, 15 of 16 training windows started with a full state, while
+  every short prompt (needles, the 8k case, held-out) starts empty. Every step also continued the same 8 streams
+  (correlated batches).
+  **Run 3 (eval/carry_r80b.sh):** --carry-half 1 (every other micro-step an ordinary fresh window) and --carry-groups 16
+  (consecutive steps continue different streams); Prodigy's step size free again (intrinsic). Same start, steps and tests.
+- `2026-10-03 08:47:46 UTC` **train** (28.0 min) ok
+  d512 L12 mlp4 ctx8192 B2 244000 steps -> /mnt/kv_cache/carry80b
+  (log `logs/20261003-081946-train.log`, seed 7)
+- 2026-10-03 08:50 UTC **Carried run 3 (half fresh windows, 16 rotating groups, step size free): STABLE, and the first that helps**
+  (eval/carry_r80b.txt):
+  | Model | 8k | 32k | 131k | penalty (32k vs 8k) |
+  |---|---|---|---|---|
+  | carry80b | **0.9907** | **1.0038** | **1.0038** | **+0.0131 +- 0.0059** |
+  | lc80_ctrl | 1.0384 | 1.0714 | 1.0710 | +0.0330 +- 0.0152 |
+  Long-context prediction is better by 0.05-0.07 at every length; the penalty is cut ~60% but not gone.
+  - Needles 100 / 95.8 / 58.3% at 1k / 4k / 7k (ctrl 100 / 100 / 66.7; n=24, within noise).
+  - **BUT general held-out BPB WORSE: 1.0712 (240k) -> 1.0783 (243k), vs ctrl 1.0676 -> 1.0660.**
+  - The spectral group's step size doubled at the switch (6.1e-3 -> 1.37e-2), main 8.1e-4 -> 9.9e-4, both then steady.
+  - 237 ktok/s (ctrl 274).
+  DIAGNOSTIC running (carry80c): the same with the step size frozen, to tell whether the doubled spectral step size
+  costs the general quality.
+- `2026-10-03 09:18:27 UTC` **train** (28.0 min) ok
+  d512 L12 mlp4 ctx8192 B2 244000 steps -> /mnt/kv_cache/carry80c
+  (log `logs/20261003-085025-train.log`, seed 7)
+- 2026-10-03 09:21 UTC **Diagnostic carry80c (run 3 with the step size frozen):** long passages 0.9800 / 0.9955 / 0.9958 (8k / 32k / 131k),
+  penalty +0.0156 +- 0.0077, needles 100 / 100 / 66.7% (= control), general held-out 1.0684 -> 1.0714 (ctrl 1.0676 -> 1.0660,
+  80b 1.0712 -> 1.0783). So the doubled spectral step size explains about half of 80b's general-text cost. The carried
+  mix costs ~0.005 bits/byte on fresh general text, for -0.05 to -0.07 on long documents and a halved past-8k penalty.
+  **run81 launched (eval/run81.sh):** run80 + 40,000 carried steps (80b's configuration, step size free = intrinsic),
+  held-out every 4,000 to see whether the general cost settles or grows; then fine-tune, abstention, full scorecard.
+- 2026-10-03 09:23 UTC **Goal 3 (self-improvement), a new attempt queued behind run81** (eval/selfimprove.py lookup, eval/selfimprove_lookup.sh).
+  Factual Q&A failed the gate because the model is mostly wrong there. In-context lookup is a skill it has (56-59% at
+  10-120 facts, 100% for single needles). The model self-labels invented lookup questions: syllables used by no builder
+  and no test; the label is the answer at least 2 of 3 orderings of the facts agree on. Gold is read only afterwards,
+  as the gate (labels must be mostly right). Then SELF (25% of rows its own self-labelled documents) vs CONTROL (plain
+  text), 2,000 steps each from run81_final, measured on the powered lookup test (different syllables, wording and
+  distractors).
+- `2026-10-03 09:57:22 UTC` **train** (0.9 min) ok
+  d256 L4 mlp4 ctx1024 B8 900 steps -> /mnt/kv_cache/hl_smoke
+  (log `logs/20261003-095626-train.log`, seed 9)
+
+## 2026-10-03 09:57 UTC: run81 STOPPED (general quality sliding); the cause of the past-8k penalty found: the model's own reach choice
+- **run81** (carried training, step size free) at 244,000: general held-out 1.0694 (240k) -> **1.0852** (244k), against the
+  control's 1.0660; the spectral step size kept rising (6.1e-3 -> 2.06e-2). Stopped by verified PIDs (run81.sh 2065114,
+  wrapper 2065121, trainer 2065123, and the self-improvement waiter 2065509; my pgrep also matched two of my own shells,
+  which were left alone). Carried training stays a partial tool: it buys long-document prediction at a general-text cost,
+  and its free step size keeps growing.
+- **The penalty past 8k is caused by the attention REACH**, measured on the two arms that differ only in it (same start,
+  6,000 steps): sliding 512 gives 32k vs 8k **-0.0003 +- 0.0005 (flat)**; sliding 8,192 gives **+0.0104 +- 0.0050**; run80
+  (reached 8,192 by its own trials) gives +0.033. With attention spanning the whole training window, the carrier never
+  learns to carry what attention cannot see. The model's reach trials could not see this cost, because their held-out was
+  8k windows.
+- **FIX, intrinsic: --heldout-long N.** The trials' held-out is now 8 streams of N tokens from the training mix (the second
+  corpus at its share), read window by window with every state carried, scoring every token: the loss as the model is
+  used. A longer reach must pay for itself inside the window AND past it. Smoke-tested (trial ran, decided STAY).
+- **run82 launched (eval/run82.sh):** run80 exactly (from swa_512, R vs stay, 40,000 steps, no skip guard, then the full
+  pipeline) except --heldout-long 32768. The model chooses its reach knowing what it costs past 8k.
+- 2026-10-03 10:28 UTC run82's first reach trial (judged on 32k carried streams): **STAY** at 204,000 (grown 2.8010 vs unchanged 2.7997), where run80 (8k held-out) chose GROW at the same point. Self-improvement test re-queued behind run82's pipeline.
+- `2026-10-03 12:39:09 UTC` **train** (161.4 min) ok
+  d512 L12 mlp4 ctx8192 B2 238000 steps -> /mnt/kv_cache/run82
+  (log `logs/20261003-095748-train.log`, seed 0)
+- 2026-10-03 12:49 UTC **run82 FINISHED (12:39 UTC). Its reach decisions, judged on 32k carried streams:**
+  - STAY at 204k (1,024: 2.8010 vs 2.7997) and 208k (2.7898 vs 2.7897);
+  - **GROW to 1,024** at 216k (2.7712 vs 2.7730);
+  - STAY at 222k (2,048: 2.7671 vs 2.7599), 226k (2.7604 vs 2.7547) and 234k (2.7505 vs 2.7474).
+  The final window is **1,024**, and 2,048 was rejected three times by 0.003-0.007. run80, judged on 8k windows, went to 8,192.
+  Held-out BPB 1.0986 / 1.0927 / 1.0872 / 1.0803 / 1.0756 (200k-232k), against run80's 1.0724 at 232k (8k windows; the
+  difference is the reach). The pipeline (fine-tune, abstention, scorecard) is running.
+- 2026-10-03 13:51 UTC **run82 scorecard, first sections (eval/scorecard.txt):**
+  - **Past 8k: FLAT, -0.0006 +- 0.0010** (run80: +0.0339). Long passages at 8k / 32k: 1.0403 / 1.0398 (run80 1.0389 / 1.0729):
+    level at 8k, much better at 32k. The 8k attention bought run80 nothing in prediction at 8k and cost it at 32k.
+  - **Q&A (fine-tuned / abstaining):** everyday 25.0 / 29.2, SciQ 6.8 / 2.6, ARC 38.7 / 38.6 (run80 22.9 / 6.3 / 38.6; GPT-2
+    16.7 / 2.2 / 33.8). Best yet.
+  - Context rot within 8k: 1.1594 -> 1.0889. Decode 404 tok/s, 1,154 MiB (GPT-2 248, 1,200). Facts 27/48 (GPT-2 33).
+    Calibration +0.214 (GPT-2 +0.186). Induction 97.0 (98.5).
+  - **Retrieval only within its 1,024 window:** needles 100% at 64 / 256, 16.7% at 1,024, 0% beyond; passkey 70% (512),
+    40% (2,048, only with the key in the last quarter). Lookup 59.8 / 58.8 / 59.0% at 10 / 30 / 60 facts but 37.8% at 120 (the
+    earliest facts 4%).
+  - **Long generation degenerates after ~4k** (58% newlines at 4-8k, then ';' / '\\' loops); run80 was in band 8-24k.
+  THE TRADE, measured: reach 8,192 = retrieval to ~7k but context rot past 8k; reach 1,024 = no context rot to 131k and
+  better prediction, but retrieval only to ~1k and worse long generation.
+- 2026-10-03 14:23 UTC **run82 scorecard complete (eval/scorecard_r82.txt).**
+  - **Short generation:** words 0.83, bpb 1.07, variety 0.99 at t=0.85, against real text's 0.79 / 1.15 / 0.99 (level with GPT-2).
+  - **Learning without forgetting, no rate:** new facts 25 -> 93.3%, old facts 75 -> 64.6%.
+  - **One million tokens:** 1.1424 (8k) -> 1.1426 (1M), flat, 2.89 GiB.
+  Self-improvement (lookup) is generating its labels. **Queued (eval/onelong.sh):** ONE long-range attention layer
+  (layer 7 at 8,192, layers 3 and 11 at 1,024) vs control, 6,000 steps from run82_final. Does it restore retrieval
+  without the context rot? New: per-layer windows (LM attn_windows, train.py --set-window, saved in the checkpoint).
+- `2026-10-03 14:48:47 UTC` **train** (8.1 min) ok
+  d512 L12 mlp4 ctx8192 B2 240000 steps -> /mnt/kv_cache/si_self
+  (log `logs/20261003-144042-train.log`, seed 9)
+- `2026-10-03 14:56:51 UTC` **train** (8.0 min) ok
+  d512 L12 mlp4 ctx8192 B2 240000 steps -> /mnt/kv_cache/si_ctrl
+  (log `logs/20261003-144852-train.log`, seed 9)
+
+## 2026-10-03 15:17 UTC: GOAL 3, SELF-IMPROVEMENT: DEMONSTRATED on in-context lookup (eval/selfimprove_lookup.txt)
+- **Self-labelling (run82_final):** 2,000 invented documents (syllables used by no builder and no test), 16,000 questions.
+  14,208 (89%) were self-labelled by agreement of >= 2 of 3 orderings of the facts. Checked against gold AFTERWARDS (never
+  trained on): **78.9% right**, so the gate passes (factual Q&A had failed it at 19-38%).
+- **Training:** 2,000 steps from run82_final, SELF (25% of rows its own self-labelled documents, 1.7M tokens) vs CONTROL
+  (plain text). Powered lookup test, held out (different syllables, wording and question form; hard distractors; 500 questions
+  per cell, 95% intervals):
+  | Facts in context | 10 | 30 | 60 | 120 |
+  |---|---|---|---|---|
+  | before | 54.8 +-4.4 | 53.8 | 58.2 | 44.4 |
+  | **SELF** | **65.8 +-4.2** | **68.6** | **68.0** | 47.8 |
+  | CONTROL | 54.8 | 53.6 | 59.0 | 44.6 |
+  **+9 to +15 points** at 10-60 facts, from labels the model made itself. General held-out unchanged (1.0712 vs 1.0711).
+  At 120 facts the gain is small (+3), limited by the 1,024-token attention window (the earliest facts stay at 12-20%).
+- Next for goal 3: iterate (round 2 labels with the improved model) to show the loop compounds.
+- 2026-10-03 15:18 UTC Round 2 of self-improvement queued behind eval/onelong.sh: the improved model (si_self) self-labels FRESH documents (seed per round; round 1's documents are excluded), then SELF vs CONTROL from it, the same test.
+- `2026-10-03 15:40:25 UTC` **train** (23.4 min) ok
+  d512 L12 mlp4 ctx8192 B2 244000 steps -> /mnt/kv_cache/ol_long7
+  (log `logs/20261003-151658-train.log`, seed 11)
+- `2026-10-03 16:03:24 UTC` **train** (22.9 min) ok
+  d512 L12 mlp4 ctx8192 B2 244000 steps -> /mnt/kv_cache/ol_ctrl
+  (log `logs/20261003-154031-train.log`, seed 11)
+- 2026-10-03 16:30 UTC **One long-range layer (eval/onelong.txt), 6,000 steps from run82_final:** layer 7 at 8,192 (3 and 11 at 1,024) vs control.
+  - Past 8k: +0.0003 +- 0.0023 (ctrl -0.0011 +- 0.0011): no context rot.
+  - Retrieval NOT restored: needles 100 / 25 / 0 / 0% at 256 / 1k / 4k / 7k (ctrl 100 / 25 / 0 / 4%); passkey at 2,048 25% (ctrl 30%).
+  - Held-out 1.0699 vs ctrl 1.0695.
+  One long layer neither costs nor buys anything in 6,000 steps. (All three at 8,192 from r98r gave needles 50% at 1k and
+  33% at 7k in the same time.) Checking long generation on both now.
+- 2026-10-03 16:36 UTC **Long generation (nine.py, 32k at t=0.9):** both one-long-layer arms stay in band for 8,192 tokens (run82_final: 0),
+  then collapse into one repeated token ("Man", "money") from 8-12k. Position-restart hypothesis TESTED and NOT supported:
+  ol_ctrl generating 12,288 tokens from another prompt with positions restarting at 8,192 or at 4,096 shows no collapse
+  in any 2k block (top token 5-13%). The loops are stochastic (prompt and sample dependent), not tied to the boundary.
+  Recorded as open; not pursued further now.
+- 2026-10-03 16:37 UTC **Far-needle curriculum queued (eval/farneedle.sh):** 100M tokens of documents (2-8k tokens) whose every needle is >= 1,500 tokens before its question (NEEDLE_MIN_DIST; checked: min 1,595, median 2,575 over 65 needles), so only the carrier can answer past run82's 1,024 window. run82_final + 6,000 steps vs ol_ctrl (same, ordinary needle data).
+- `2026-10-03 16:54:12 UTC` **train** (0.0 min) FAILED: FileNotFoundError(2, 'No such file or directory')
+  d512 L12 mlp4 ctx8192 B2 242000 steps -> /mnt/kv_cache/si84.8_self
+  (log `logs/20261003-165412-train.log`, seed 9)
+- 2026-10-03 17:08 UTC **Self-improvement round 2, labels:** the round-1 model (si_self) self-labelled 2,000 FRESH documents. 14,827 of 16,000
+  (93%) labelled; **84.8% right** (round 1: 89%, 78.9%). The improved model makes better labels for itself.
+  MY BUG: the script then stored the gate's percentage in R, the round tag, so the training arms looked for "tokself84.8"
+  and the round stopped before training. Fixed (GATE variable; existing labels reused). Round 2's training and test re-queued
+  behind the far-needle run.
+- `2026-10-03 17:17:33 UTC` **train** (22.8 min) ok
+  d512 L12 mlp4 ctx8192 B2 244000 steps -> /mnt/kv_cache/fn_far
+  (log `logs/20261003-165444-train.log`, seed 11)
+- 2026-10-03 17:22 UTC **Far-needle curriculum (eval/farneedle.txt): NO EFFECT.** 6,000 steps with 25% of rows documents whose every needle
+  is >= 1,500 tokens before its question:
+  | Arm | 512 | 1k | 2k | 4k | 7k |
+  |---|---|---|---|---|---|
+  | far-needle | 97.9% | 20.8% | 4.2% | 0% | 0% |
+  | control | 100% | 25.0% | 8.3% | 2.1% | 0% |
+  Passkey at 2,048: 30% both. Past 8k: -0.0002 / -0.0008 (flat both). Held-out 1.0696 / 1.0695.
+  The carrier does not learn exact retrieval past the attention window from a 6,000-step continuation, even under direct
+  pressure. Together with the one-long-layer arm, retrieval past the model's chosen window remains OPEN (architecture
+  research: e.g. a short convolution trained from scratch, a larger state). Not pursued further before the deadline.
+- 2026-10-03 17:23 UTC **run83 queued (eval/run83.sh)** behind self-improvement round 2: run82 + 100,000 steps (~6.5B tokens), size held at 98M, reach still its own (trials on 32k carried streams), then the full pipeline. Target: facts and knowledge, the gaps that come from data (run82 has seen ~16B tokens).
+- `2026-10-03 17:30:52 UTC` **train** (8.0 min) ok
+  d512 L12 mlp4 ctx8192 B2 242000 steps -> /mnt/kv_cache/si2_self
+  (log `logs/20261003-172253-train.log`, seed 9)
+- `2026-10-03 17:38:55 UTC` **train** (8.0 min) ok
+  d512 L12 mlp4 ctx8192 B2 242000 steps -> /mnt/kv_cache/si2_ctrl
+  (log `logs/20261003-173057-train.log`, seed 9)
+- 2026-10-03 17:59 UTC **Self-improvement round 2 (eval/selfimprove_lookup2.txt), with a correction of what I first told the user.**
+  Powered lookup at 10 / 30 / 60 / 120 facts:
+  | Model | 10 | 30 | 60 | 120 |
+  |---|---|---|---|---|
+  | si_self (round 1) | 65.8 | 68.6 | 68.0 | 47.8 |
+  | si2_self (+2,000 steps with the round-2 labels) | 71.2 | 75.0 | 71.2 | 48.0 |
+  | **si2_ctrl** (+2,000 steps of plain text, from si_self) | **72.0** | **77.8** | **73.0** | 49.0 |
+  I reported "round 2 compounds" from the si2_self row before the control finished: **RETRACTED.** The round-2 labels
+  add nothing over plain continued training. Round 1's effect kept growing after its labels were removed, most likely
+  because the schedule-free average lags the training weights. What stands: round-1 self-improvement, measured as
+  run82 -> si_self -> si2_ctrl: **54.8 / 53.8 / 58.2 / 44.4% -> 72.0 / 77.8 / 73.0 / 49.0%**, with run82 + plain text
+  (ctrl, round 1) at 54.8 / 53.6 / 59.0 / 44.6%. A second round of self-labels (84.8% right) gave no further gain.
+- `2026-10-04 00:13:24 UTC` **train** (374.1 min) ok
+  d512 L12 mlp4 ctx8192 B2 338000 steps -> /mnt/kv_cache/run83
+  (log `logs/20261003-175920-train.log`, seed 12)
+- `2026-10-04 06:58:52 UTC` **train** (0.5 min) ok
+  d256 L4 mlp4 ctx1024 B8 600 steps -> /mnt/kv_cache/sd_smoke
+  (log `logs/20261004-065824-train.log`, seed 3)
+
+## 2026-10-04 06:59 UTC: run83 (eval/scorecard_r83.txt): more knowledge, but the carrier drifted. Cause: the spectral step-size ratchet
+run83 = run82 + 100,000 steps (6.5B tokens) at 98M; training finished 00:13 UTC, scorecard 01:31 UTC. The card then
+idled ~5 h: my hourly wakeups did not fire overnight.
+- **Gains vs run82:**
+  - **Q&A everyday 35.4% (abstaining 37.5%)**, SciQ 7.4, ARC 39.6 (run82 25.0 / 6.8 / 38.7; GPT-2 16.7 / 2.2 / 33.8);
+  - **facts 31/48** (GPT-2 33);
+  - **induction 99.0% (GPT-2 98.5)**;
+  - calibration +0.215;
+  - context rot within 8k 1.1256 -> 1.0587 (GPT-2 1.2167 / 1.2249);
+  - held-out 1.0712 -> 1.0425;
+  - short generation level with GPT-2;
+  - decode 404 tok/s, 1.15 GiB;
+  - continual learning: new 26.7 -> 94.2%, old 79.2 -> 64.6%.
+  The model rejected a 2,048 window twice more (252k, 288k).
+- **Loss:**
+  - **long arXiv passages read window by window: 1.0403 -> 1.2618 bits/byte at 8k** (reproduced exactly);
+  - 1M-token stream 1.14 -> 1.24, still flat in length;
+  - needles at 1,024: 17% -> 0%;
+  - long generation horizon still 0.
+- **Cause:** the spectral group (carrier decay rates A, rotation frequencies theta, output gates) has its own Prodigy step
+  size, which only rises. It went 6.1e-3 -> 7.3e-3 (258k) -> 1.74e-2 (293k on). Over the run, the carrier's forgetting rates rose
+  in every layer (exp(A) median, e.g. layer 9: 0.078 -> 0.209) and layer 2's frequencies moved 6x. Fresh 8k windows (the
+  held-out) improved; a window that STARTS with a carried state is never trained, so nothing held it once the carrier
+  drifted. The last reach trial (288k), which judges on carried streams, came before the jump.
+- **FIX under test (eval/sharedd.sh):** optim.py share_d / train.py --share-d: ONE Prodigy step size for the whole model (as
+  published), from the summed statistics of all groups; the per-group step size is prodigyplus's extension. Smoke-tested
+  (both groups 1.32e-3; trains). Arms from run83_final, 6,000 steps: A shared + carried windows (half), B shared only.

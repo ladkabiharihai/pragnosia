@@ -7,7 +7,7 @@ Each document lists 10-150 invented facts of six kinds in varied wording, then a
 DIFFERENT wording, answers given. Documents run from a few hundred to several thousand tokens, so most answers sit
 beyond the 512-token attention window and the carrier's state has to carry them. The syllables differ from the
 ones eval/incontext.py builds its names from, so no test fact can occur here.
-usage: eval/build_recall.py <out_dir> <million_tokens>"""
+usage: eval/build_recall.py <out_dir> <million_tokens> [needle]"""
 import os, sys, random
 import numpy as np
 from tokenizers import Tokenizer
@@ -62,6 +62,58 @@ def document():
 
 os.makedirs(OUT, exist_ok=True)
 target = int(MTOK * 1e6); out = []; total = 0
+if len(sys.argv) > 3 and sys.argv[3] == "needle":
+    # NEEDLES IN REAL TEXT (2026-10-01). Passkey retrieval measured 55% at 512 tokens and 0% from 2,048 on: the
+    # carrier keeps nothing exact past the attention window, and nothing in training asks it to. Each document is REAL
+    # prose (random spans of Wikipedia / FineWeb-Edu, end-of-document tokens removed) of 256-16,384 tokens with 1-4
+    # needles (a number or a word bound to a name) at random depths, then questions about some of them, answers given.
+    # Kept OUT of the passkey test's distribution on purpose: the test uses repeated filler ("The grass is green...")
+    # and the words "pass key"; neither occurs here. Writes needle.bin.
+    import numpy as np
+    src = [np.memmap(f"/mnt/kv_cache/tokfull_v8192/{k}.bin", dtype=np.uint16, mode="r") for k in ("wikipedia", "fineweb-edu")]
+    NAMES = ["Alice", "Omar", "Priya", "Lukas", "Mei", "Tomas", "Aisha", "Diego", "Hana", "Ivan", "Zara", "Kofi",
+             "Nadia", "Pavel", "Sofia", "Ravi", "Elena", "Jonas", "Leila", "Marco", "orange", "harbour", "north",
+             "copper", "willow", "falcon", "maple", "granite", "river", "summit"]
+    WORDS = ["lantern", "pepper", "violet", "anchor", "thunder", "meadow", "cobalt", "saffron", "glacier", "ember",
+             "quartz", "juniper", "velvet", "comet", "tundra", "marble", "nectar", "orchid", "basalt", "cinder"]
+    NEED = [  # (statement, question) over N (a name) and V (the value)
+        ("The secret code is {V}.", "What is the secret code?"),
+        ("Remember this number: {V}.", "What number were you asked to remember?"),
+        ("The combination for the {N} lock is {V}.", "What is the combination for the {N} lock?"),
+        ("{N}'s favourite number is {V}.", "What is {N}'s favourite number?"),
+        ("The {N} team meets in room {V}.", "Which room does the {N} team meet in?"),
+        ("The password for the {N} account is {V}.", "What is the password for the {N} account?"),
+        ("The {N} shipment carries tracking number {V}.", "What is the tracking number of the {N} shipment?"),
+        ("Write down the word {V}; you will need it later.", "Which word were you told to write down?")]
+    rn = np.random.default_rng(20261001)
+    def value(j):
+        if j == 5 or j == 7: return r.choice(WORDS) + (str(r.randint(10, 99)) if j == 5 else "")
+        return str(r.randint(100, 999999))
+    while total < target:
+        # NEEDLE_MIN_DIST (2026-10-03): every needle at least this many tokens before the end, documents 2k-8k tokens
+        # (inside one training window): past a 1,024-token attention window, only the carrier can answer
+        MD = int(os.environ.get("NEEDLE_MIN_DIST", "0"))
+        L = int(np.exp(rn.uniform(np.log(2048 if MD else 256), np.log(8192 if MD else 16384))))
+        k = r.choice([1, 1, 2, 3, 4]); used_t = set(); facts = []
+        while len(facts) < k:
+            j = r.randrange(len(NEED))
+            if j in (0, 1, 7) and j in used_t: continue          # nameless templates at most once per document
+            used_t.add(j); facts.append((j, r.choice(NAMES), value(j)))
+        stmts = [tok.encode(" " + NEED[j][0].format(N=n, V=v) + " ").ids for j, n, v in facts]
+        asked = r.sample(facts, r.randint(1, k))
+        qa = tok.encode("\n\n" + "\n".join(r.choice(QA).format(q=NEED[j][1].format(N=n), a=v) for j, n, v in asked)).ids
+        n_fill = max(64, L - sum(map(len, stmts)) - len(qa))
+        sb = src[r.randrange(2)]; o = int(rn.integers(0, len(sb) - 2 * n_fill))
+        fill = np.asarray(sb[o:o + 2 * n_fill]); fill = fill[fill != EOD][:n_fill].tolist()
+        cuts = sorted(r.randrange(max(1, len(fill) + 1 - MD)) for _ in stmts)
+        doc, prev = [], 0
+        for c, st in zip(cuts, stmts): doc += fill[prev:c] + st; prev = c
+        doc += fill[prev:] + qa + [EOD]
+        out.append(np.array(doc, dtype=np.uint16)); total += len(doc)
+        if len(out) % 2000 == 0: print(f"  {total/1e6:.1f}M tokens", flush=True)
+    arr = np.concatenate(out)[:target]; arr.tofile(f"{OUT}/needle.bin")
+    print(f"done: {len(arr):,} tokens -> {OUT}/needle.bin; {len(out):,} documents, mean {len(arr)/len(out):.0f} tokens")
+    sys.exit(0)
 while total < target:
     docs = [document() for _ in range(2000)]
     for e in tok.encode_batch(docs):

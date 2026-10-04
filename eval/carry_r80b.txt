@@ -1,0 +1,18 @@
+CARRIED-STATE TRAINING vs control, 2026-10-03 08:47 UTC
+== carry80b (half fresh, 16 rotating groups): [    17.1s] CARRIED-STATE training: 16 stream groups x 2 streams in rotation, each restarted every 16 windows (up to 131,072 tokens of history); every other micro-step a fresh window; 13.2 GiB reserved [   573.5s]   eval step 240000: BPB 1.0712  (952k bytes) [  1403.3s]   eval step 243000: BPB 1.0783  (952k bytes) 
+      8,192 tokens of context: 0.9907 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.0038 bits/byte over 24 passages; vs 8,192: +0.0131 +- 0.0059
+    131,072 tokens of context: 1.0038 bits/byte over 24 passages; vs 8,192: +0.0131 +- 0.0059
+  distance   1024 tokens: 100.0% (24/24)
+  distance   4096 tokens:  95.8% (23/24)
+  distance   7000 tokens:  58.3% (14/24)
+  distance  16384 tokens:   0.0% (0/24)
+== control (lc80_ctrl, eval/longctx_r80.txt):
+== ctrl: [     4.5s] attention from the checkpoint: window 8192, sliding [   514.3s]   eval step 240000: BPB 1.0676  (952k bytes) [  1225.6s]   eval step 243000: BPB 1.0660  (952k bytes) 
+      8,192 tokens of context: 1.0384 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.0714 bits/byte over 24 passages; vs 8,192: +0.0330 +- 0.0152
+    131,072 tokens of context: 1.0710 bits/byte over 24 passages; vs 8,192: +0.0326 +- 0.0150
+  distance   1024 tokens: 100.0% (24/24)
+  distance   4096 tokens: 100.0% (24/24)
+  distance   7000 tokens:  66.7% (16/24)
+CARRY_R80B_DONE 2026-10-03 08:49 UTC

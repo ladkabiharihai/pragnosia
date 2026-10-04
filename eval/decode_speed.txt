@@ -1,0 +1,6 @@
+[gpu] capped at 10.0 GiB of 93 GiB; 46.3 GiB free on the card
+DECODE SPEED on a free card (prod aside), 900 tokens after a short prompt, sampled at t=1, after a warm-up call
+  run80_final (sliding 8,192)         382 tok/s   peak 766 MiB
+  r98r (block-local 512)              428 tok/s   peak 534 MiB
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 7870.24it/s]
+  GPT-2 124M                          249 tok/s   peak 640 MiB

@@ -21,6 +21,9 @@ CK = sys.argv[1] if len(sys.argv) > 1 else "/mnt/kv_cache/run45_prose/ckpt.pt"
 # MODES (argv[2]): "compare" (default) -- ours and GPT-2, the whole model trained at LR, as first published;
 # "grow" -- ours only, at each rate in RATES both ways: the WHOLE model trained, or GROW_K new zero-output layers
 # added on top and ONLY THEY trained (every old weight frozen). Same data, steps and optimiser for every row.
+# "intrinsic" -- ours only, NO RATE: schedule-free Prodigy at its published defaults, the optimizer the model is trained
+# with everywhere else (goal 8; the rate sweep below was the one hand-set rate left in the scorecard, 2026-10-01), all
+# three ways: whole model, whole + self-rehearsal, new layers only.
 MODE = sys.argv[2] if len(sys.argv) > 2 else "compare"
 STEPS, LR, BATCH, SEQ = 150, 5e-5, 8, 256
 RATES, GROW_K = (1e-4, 3e-4, 1e-3), 4
@@ -84,7 +87,11 @@ def train(params, fwd, enc, lr=LR, own=None):
     """The same loop for both models: fixed steps, fixed rate, sequences packed from the shuffled sentences.
     own: sequences the model WROTE ITSELF before learning; when given, half of every batch is its own text
     (self-rehearsal, Robins 1995), so it keeps practising what it knew while it learns the new facts."""
-    opt = torch.optim.AdamW(params, lr=lr, weight_decay=0.0)
+    if lr is None:
+        from prodigyplus import ProdigyPlusScheduleFree
+        opt = ProdigyPlusScheduleFree(params); opt.train()
+    else:
+        opt = torch.optim.AdamW(params, lr=lr, weight_decay=0.0)
     r = random.Random(7)
     for step in range(STEPS):
         batch = []
@@ -100,14 +107,18 @@ def train(params, fwd, enc, lr=LR, own=None):
             lg = fwd(x[:, :-1])
         loss = F.cross_entropy(lg.float().reshape(-1, lg.shape[-1]), x[:, 1:].reshape(-1))
         opt.zero_grad(set_to_none=True); loss.backward(); opt.step()
+    if lr is None: opt.eval()                  # schedule-free: the averaged weights are the model
     return float(loss)
 
 
-if MODE in ("grow", "rehearse"):
-    print(f"{len(TEST)} invented facts, {len(TRAIN)} training sentences, {STEPS} steps, AdamW; {CK}\n")
+if MODE in ("grow", "rehearse", "intrinsic"):
+    print(f"{len(TEST)} invented facts, {len(TRAIN)} training sentences, {STEPS} steps, "
+          f"{'schedule-free Prodigy, no rate' if MODE == 'intrinsic' else 'AdamW'}; {CK}\n")
     print(f"{'':<24s} {'NEW before':>11s} {'NEW after':>10s} {'OLD before':>11s} {'OLD after':>10s} {'TEXT before':>12s} {'TEXT after':>11s}")
-    for lr in RATES:
-        for how in (("whole model", f"+{GROW_K} layers only") if MODE == "grow" else ("whole model", "whole + self-rehearsal")):
+    for lr in ((None,) if MODE == "intrinsic" else RATES):
+        for how in (("whole model", f"+{GROW_K} layers only") if MODE == "grow" else
+                    ("whole model", "whole + self-rehearsal", f"+{GROW_K} layers only") if MODE == "intrinsic" else
+                    ("whole model", "whole + self-rehearsal")):
             m = Ours(CK, "/mnt/kv_cache/tok_v8192.json"); enc = m.encode; m.graphable = False
             fwd = lambda x: m.m(x)
             torch.manual_seed(0)
@@ -131,7 +142,7 @@ if MODE in ("grow", "rehearse"):
                 assert abs(mc(m, FACTS, enc) - ob) < 1e-9, "adding zero-output layers changed the model"
             m.m.train(); last = train(params, fwd, enc, lr, own); m.m.eval()
             na, oa, ta = mc(m, TEST, enc), mc(m, FACTS, enc), text_bpb(m, enc, fwd)
-            print(f"{how + f' lr {lr:g}':<24s} {nb:>10.1%} {na:>10.1%} {ob:>10.1%} {oa:>10.1%} {tb:>12.4f} {ta:>11.4f}   (train loss {last:.3f})", flush=True)
+            print(f"{how + (f' lr {lr:g}' if lr else ', no rate'):<24s} {nb:>10.1%} {na:>10.1%} {ob:>10.1%} {oa:>10.1%} {tb:>12.4f} {ta:>11.4f}   (train loss {last:.3f})", flush=True)
             del m; torch.cuda.empty_cache()
     print("\nLearning without forgetting: NEW rises, OLD and TEXT hold. Chance on NEW is 25%.")
     sys.exit(0)

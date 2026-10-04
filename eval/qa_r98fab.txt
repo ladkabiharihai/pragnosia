@@ -1,0 +1,37 @@
+model                       EVERYDAY      SCIQ ARC(4-way)   (48 / 1,000 / 3530 questions; greedy)
+ours-98M-run46recipe           20.8%      2.9%      36.9%
+                           EVERYDAY right  20.8%  WRONG  79.2%  declined   0.0%  -> accuracy when it answers  20.8%
+                           SCIQ     right   2.9%  WRONG  97.1%  declined   0.0%  -> accuracy when it answers   2.9%
+
+THE ANSWERS THEMSELVES (greedy, first 160 characters):
+
+  Q: What is the capital of France?
+     ours-98M-run46recipe     'The capital of France is Lyon, which is the capital of France.'
+
+  Q: Who wrote Romeo and Juliet?
+     ours-98M-run46recipe     'Romeo is a fictional character in the Romeo and Juliet story "The Witch\'s Tale" by F.'
+
+  Q: Why is the sky blue?
+     ours-98M-run46recipe     'The sky is blue.'
+
+  Q: What causes the seasons on Earth?
+     ours-98M-run46recipe     "The Earth's climate is characterized by a temperature of about 10°C (10°C) and a temperature of about 2.5°C (10°C) for the Earth's climate."
+
+  Q: How do plants make their food?
+     ours-98M-run46recipe     'Plants have developed various strategies to increase their nutrient content and maintain plant growth.'
+
+  Q: What is the largest planet in our solar system?
+     ours-98M-run46recipe     'The planet is the largest planet in the solar system, with an estimated mass of approximately 3.2 billion solar masses.'
+
+  Q: Explain what gravity is in one sentence.
+     ours-98M-run46recipe     'Gravity is a fundamental force in the universe, and it is a fundamental force that constantly needs to be overcome.'
+
+  Q: What is photosynthesis?
+     ours-98M-run46recipe     'Photosynthesis.'
+
+  Q: Who was the first president of the United States?
+     ours-98M-run46recipe     'The United States is the second-most populous democracy in the world, and it is the only democracy in the world.'
+
+  Q: What is two plus two?
+     ours-98M-run46recipe     'The formula for the rate of a chemical reaction is:\n\nCa2+ + 2e- → Ca2+ + 2e-\n\nThe rate of the reaction can be determined by the rate of the reaction:'
+QA_R98FAB_DONE 2026-10-01 11:50 UTC

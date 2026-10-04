@@ -1,0 +1,165 @@
+SLIDING-WINDOW ATTENTION A/B, 2026-10-02 13:49 UTC
+######## window 512: [    34.4s] micro-step captured as a CUDA graph; 16.0 GiB reserved after capture [   703.3s]   eval step 195000: BPB 1.1113  (975k bytes) [  1370.6s]   eval step 198000: BPB 1.1062  (975k bytes) 
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact; /mnt/kv_cache/swa_512/ckpt.pt
+   D=64 miss: wanted 29933, wrote ' The Priya team meets in room'
+  distance     64 tokens:  45.8% (11/24)
+   D=256 miss: wanted 914286, wrote ' WWVH\n\nWW'
+  distance    256 tokens:  70.8% (17/24)
+   D=1024 miss: wanted 27242, wrote ' 84\n\nLloyd was'
+  distance   1024 tokens:   0.0% (0/24)
+   D=4096 miss: wanted 341127, wrote '\n\nQuestion: What is the'
+  distance   4096 tokens:   0.0% (0/24)
+   D=7000 miss: wanted 285043, wrote ' The secret code is the name of the'
+  distance   7000 tokens:   0.0% (0/24)
+   D=16384 miss: wanted 513166, wrote ' The Duncans.\n\nQu'
+  distance  16384 tokens:   0.0% (0/24)
+PASSKEY: five digits in filler, greedy exact match, 5 depths x 4 keys per length; /mnt/kv_cache/swa_512/ckpt.pt
+tokens             Carrier   (ours by depth 0 / 25 / 50 / 75 / 100%)
+512            80% (16/20)   0/4 / 4/4 / 4/4 / 4/4 / 4/4
+2048             5% (1/20)   0/4 / 0/4 / 0/4 / 0/4 / 1/4
+8192             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+32768            0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/swa_512/ckpt.pt
+facts in context                         Carrier
+10                          46.8% +- 4.4 (n=500)
+30                          46.6% +- 4.4 (n=500)
+60                          31.0% +- 4.1 (n=500)
+120                         28.8% +- 4.0 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  25.4% +- 7.9   early-mid  13.3% +- 5.7   late-mid  17.6% +- 6.7   latest  60.7% +- 8.7
+######## window 8192: [    33.4s] micro-step captured as a CUDA graph; 16.0 GiB reserved after capture 
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/incontext.py", line 65, in <module>
+    models = [("Carrier", Ours(CK, "/mnt/kv_cache/tok_v8192.json"), None)] + \
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/src/bench.py", line 42, in __init__
+    sd = torch.load(path, map_location=device)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 1565, in load
+    with _open_file_like(f, "rb") as opened_file:
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 795, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 776, in __init__
+    super().__init__(open(name, mode))  # noqa: SIM115
+                     ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/mnt/kv_cache/swa_8192/ckpt.pt'
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/incontext.py", line 65, in <module>
+    models = [("Carrier", Ours(CK, "/mnt/kv_cache/tok_v8192.json"), None)] + \
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/src/bench.py", line 42, in __init__
+    sd = torch.load(path, map_location=device)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 1565, in load
+    with _open_file_like(f, "rb") as opened_file:
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 795, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 776, in __init__
+    super().__init__(open(name, mode))  # noqa: SIM115
+                     ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/mnt/kv_cache/swa_8192/ckpt.pt'
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/incontext.py", line 65, in <module>
+    models = [("Carrier", Ours(CK, "/mnt/kv_cache/tok_v8192.json"), None)] + \
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/src/bench.py", line 42, in __init__
+    sd = torch.load(path, map_location=device)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 1565, in load
+    with _open_file_like(f, "rb") as opened_file:
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 795, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 776, in __init__
+    super().__init__(open(name, mode))  # noqa: SIM115
+                     ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/mnt/kv_cache/swa_8192/ckpt.pt'
+SWA_AB_DONE 2026-10-02 14:26 UTC
+######## window 8192 (rerun, --spike-adapt 1): [    20.3s] micro-step captured as a CUDA graph; 15.9 GiB reserved after capture 
+[   165.9s]     45 spike(s) skipped in the last 200 steps (median |g| 0.75, total 69)
+[   213.7s]     85 spike(s) skipped in the last 200 steps (median |g| 0.83, total 154)
+[   261.3s]     183 spike(s) skipped in the last 200 steps (median |g| 1.13, total 337)
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/incontext.py", line 65, in <module>
+    models = [("Carrier", Ours(CK, "/mnt/kv_cache/tok_v8192.json"), None)] + \
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/src/bench.py", line 42, in __init__
+    sd = torch.load(path, map_location=device)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 1565, in load
+    with _open_file_like(f, "rb") as opened_file:
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 795, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 776, in __init__
+    super().__init__(open(name, mode))  # noqa: SIM115
+                     ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/mnt/kv_cache/swa_8192/ckpt.pt'
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/incontext.py", line 65, in <module>
+    models = [("Carrier", Ours(CK, "/mnt/kv_cache/tok_v8192.json"), None)] + \
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/src/bench.py", line 42, in __init__
+    sd = torch.load(path, map_location=device)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 1565, in load
+    with _open_file_like(f, "rb") as opened_file:
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 795, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 776, in __init__
+    super().__init__(open(name, mode))  # noqa: SIM115
+                     ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/mnt/kv_cache/swa_8192/ckpt.pt'
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/incontext.py", line 65, in <module>
+    models = [("Carrier", Ours(CK, "/mnt/kv_cache/tok_v8192.json"), None)] + \
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/src/bench.py", line 42, in __init__
+    sd = torch.load(path, map_location=device)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 1565, in load
+    with _open_file_like(f, "rb") as opened_file:
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 795, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 776, in __init__
+    super().__init__(open(name, mode))  # noqa: SIM115
+                     ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/mnt/kv_cache/swa_8192/ckpt.pt'
+SWA8K_DONE 2026-10-02 14:30 UTC
+######## window 8192 (rerun, --spike 1e9): [    20.3s] micro-step captured as a CUDA graph; 15.9 GiB reserved after capture [   748.2s]   eval step 195000: BPB 1.1204  (975k bytes) [  1475.6s]   eval step 198000: BPB 1.1090  (975k bytes) 
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact; /mnt/kv_cache/swa_8192/ckpt.pt
+   D=64 miss: wanted 29933, wrote ' The Priya team meets in room'
+  distance     64 tokens:  45.8% (11/24)
+   D=256 miss: wanted 914286, wrote ' \nQ: What is the Lu'
+  distance    256 tokens:  62.5% (15/24)
+   D=1024 miss: wanted 27242, wrote ' 1,560\n\nLlo'
+  distance   1024 tokens:  50.0% (12/24)
+   D=4096 miss: wanted 341127, wrote '\n\nQuestion: What is the'
+  distance   4096 tokens:  12.5% (3/24)
+   D=7000 miss: wanted 726725, wrote ' 88\n\nQuestion: What'
+  distance   7000 tokens:  33.3% (8/24)
+   D=16384 miss: wanted 513166, wrote " Dot's wife, Cecil"
+  distance  16384 tokens:   0.0% (0/24)
+PASSKEY: five digits in filler, greedy exact match, 5 depths x 4 keys per length; /mnt/kv_cache/swa_8192/ckpt.pt
+tokens             Carrier   (ours by depth 0 / 25 / 50 / 75 / 100%)
+512            75% (15/20)   0/4 / 4/4 / 4/4 / 4/4 / 3/4
+2048            40% (8/20)   0/4 / 4/4 / 3/4 / 0/4 / 1/4
+8192             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+32768            0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/swa_8192/ckpt.pt
+facts in context                         Carrier
+10                          46.4% +- 4.4 (n=500)
+30                          48.8% +- 4.4 (n=500)
+60                          43.2% +- 4.3 (n=500)
+120                         34.8% +- 4.2 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  60.2% +- 8.8   early-mid  32.6% +- 7.9   late-mid  28.8% +- 7.9   latest  18.9% +- 6.9
+SWA8K_DONE 2026-10-02 16:01 UTC

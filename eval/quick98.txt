@@ -1,0 +1,70 @@
+QUICK TESTS of the 98M base model (run70 step 184,000, before lookup training), 2026-10-01 08:38 UTC; run beside the lookup-training stage, so SPEEDS here are under contention
+################ GENERATION QUALITY (genqual2)
+                         words     bpb  variety   (1,024 generated tokens, mean of 5 prompts)
+REAL HELD-OUT TEXT        0.79    1.15     0.99
+ours (run44) t=0.8        0.83    0.99     0.97
+ours (run44) t=0.85       0.80    1.15     0.95
+ours (run44) t=0.9        0.83    1.31     1.00
+GPT-2 124M t=0.8          0.84    0.73     0.98
+GPT-2 124M t=0.9          0.87    0.94     0.95
+GPT-2 124M t=1.0          0.86    1.37     1.00
+
+  a sample from each at its best setting:
+  ours : ' with the death of the second wife of Tolstoy. After the second marriage was ended, Tolstoy\'s party was moved from the city to the palace. He had the support of a few thousand watchtowers.\nThe first "dawn" was destroyed by a demonstration of humanistic will, and was reborn only after the Regent\'s declaration of'
+  GPT-2: " with 1913, when the city government passed a law restricting the area to horse owners. It was followed by the 1980s when Michigan and Ohio passed laws specifically barring their horse-rights owners from owning horses for any reason other than their own personal amusement.\n\nWe're looking to add more interesting opportunities in 2018!\n\nWhen: Tuesday, September 14, 2018 From: Dearborn County, MI"
+################ CONTEXT ROT, FACTS, CALIBRATION, INDUCTION, LONG GENERATION (nine)
+
+============================================================================================
+1. CONTEXT ROT: bits per byte on held-out text as the window grows
+============================================================================================
+  window        final        GPT-2
+     512       1.1977       1.2167
+    1024       1.1665       1.2249
+    2048       1.1683   (max 1024)
+    4096       1.1584   (max 1024)
+    8192       1.1448   (max 1024)
+
+============================================================================================
+3. INFERENCE EFFICIENCY: decode rate and the memory held while decoding
+============================================================================================
+  final              227 tok/s   peak   1141.5 MiB
+  GPT-2 124M         126 tok/s   peak   1193.6 MiB
+
+============================================================================================
+6. FACTS and CALIBRATION: four-way, scored by total log-probability
+============================================================================================
+  final          30/48   confidence when right 0.742, when wrong 0.529, separation +0.214
+  GPT-2 124M     33/48   confidence when right 0.737, when wrong 0.550, separation +0.186
+
+============================================================================================
+9. INDUCTION on material no model can have memorised (random consonant-vowel pairs), no prompt cue
+============================================================================================
+  final           96.0%   (n=400, chance 25%)
+  GPT-2 124M      98.5%   (n=400, chance 25%)
+
+============================================================================================
+78. GENERATION QUALITY and LONG-GENERATION HORIZON, judged by the other model
+============================================================================================
+  the band: real held-out text scores 1.072 under GPT-2 (10-90%: 0.954-1.188)
+  final at temperature 0.9: 1.294
+  final at temperature 1.0: 1.670
+  final at temperature 1.1: 2.386
+  -> best temperature 0.9, scoring 1.294
+
+  32,768 tokens at temperature 0.9, in band while:
+          0-4,096     1.274          commonest token  7.6% ' the'
+      4,096-8,192     1.350          commonest token  7.0% ','
+      8,192-12,288    0.471          commonest token 14.4% ','
+     12,288-16,384    0.380          commonest token 14.8% ' ('
+     16,384-20,480    0.976 in band  commonest token  5.2% '\n'
+     20,480-24,576    1.296          commonest token  7.5% '\n'
+     24,576-28,672    1.414          commonest token  9.1% '\n'
+     28,672-32,768    0.039          commonest token 16.7% ' Be'
+  HORIZON: 0 tokens in band
+
+  START: ' with Baron de Laerts and is the name of several Arcadia casino establishments and events. The first Comic book adaptation of the novel.\n\nSee also\n List of Irish-produced films\n List of Irish animation and animation studios\n\nReferences\n\n191'
+
+  MIDDLE: 'own your wipe-up wipe-up wipe clean binoculars?\n\n  • How is repairing wiping down your binoculars?\n\n  • How do you prevent wipe-up wipe downs?\n\n  • What is the best way to heal a wipe-up wipe?\n\n  • Houghton Mifflin Concerns | Bloomberg News'
+
+wrote /mnt/kv_cache/nine_axes.json
+QUICK98_DONE 2026-10-01 08:50 UTC

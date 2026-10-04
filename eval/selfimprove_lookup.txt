@@ -1,0 +1,32 @@
+SELF-IMPROVEMENT ON IN-CONTEXT LOOKUP, from /mnt/kv_cache/run82_final.pt, 2026-10-03 14:00 UTC
+  1800/2000 documents: 12792/14400 questions self-labelled (89%), labels right 79.0%  (0.81 doc/s)
+  1900/2000 documents: 13495/15200 questions self-labelled (89%), labels right 79.0%  (0.83 doc/s)
+  2000/2000 documents: 14208/16000 questions self-labelled (89%), labels right 78.9%  (0.84 doc/s)
+done: 2,000 documents, 14,208 of 16,000 questions self-labelled by >= 2 of 3 orderings; checked afterwards against gold, 78.9% right; 1,683,636 tokens -> /mnt/kv_cache/tokself/selflabel.bin
+== /mnt/kv_cache/run82_final.pt 
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/run82_final.pt
+facts in context                         Carrier
+10                          54.8% +- 4.4 (n=500)
+30                          53.8% +- 4.4 (n=500)
+60                          58.2% +- 4.3 (n=500)
+120                         44.4% +- 4.4 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  14.4% +- 6.3   early-mid  19.3% +- 6.7   late-mid  74.4% +- 7.7   latest  70.5% +- 8.1
+== /mnt/kv_cache/si_self/ckpt.pt 
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/si_self/ckpt.pt
+facts in context                         Carrier
+10                          65.8% +- 4.2 (n=500)
+30                          68.6% +- 4.1 (n=500)
+60                          68.0% +- 4.1 (n=500)
+120                         47.8% +- 4.4 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  11.9% +- 5.8   early-mid  20.0% +- 6.7   late-mid  83.2% +- 6.6   latest  77.0% +- 7.5
+== /mnt/kv_cache/si_ctrl/ckpt.pt 
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/si_ctrl/ckpt.pt
+facts in context                         Carrier
+10                          54.8% +- 4.4 (n=500)
+30                          53.6% +- 4.4 (n=500)
+60                          59.0% +- 4.3 (n=500)
+120                         44.6% +- 4.4 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  13.6% +- 6.2   early-mid  17.8% +- 6.4   late-mid  76.0% +- 7.5   latest  72.1% +- 8.0
+[   484.2s]   eval step 240000: BPB 1.0712  (952k bytes)
+[   477.7s]   eval step 240000: BPB 1.0711  (952k bytes)
+SELFIMPROVE_LOOKUP_DONE 2026-10-03 15:16 UTC

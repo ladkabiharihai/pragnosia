@@ -1,0 +1,14 @@
+MQAR A/B (20,000 steps, spike guard off: it misfires on this task), 2026-10-02 13:41 UTC
+[     0.3s] 5.8M params, carrier 18.3%, 0.66B tokens = 113.4 tok/param
+[   265.8s] final loss 0.5068 ppl 1.7, 0 spike-skips
+MQAR, 32 pairs among random filler, 2048 tokens, 200 fresh sequences; /mnt/kv_cache/mq_noconv/ckpt.pt
+  key      <512 tokens back:   0.1%  (1/1509)   chance 0.10%
+  key  512-1023 tokens back:   0.1%  (2/1685)   chance 0.10%
+  key     1024+ tokens back:   0.1%  (2/3206)   chance 0.10%
+[     0.3s] 5.8M params, carrier 18.4%, 0.66B tokens = 113.2 tok/param
+[   192.8s] final loss 0.5180 ppl 1.7, 175 spike-skips
+MQAR, 32 pairs among random filler, 2048 tokens, 200 fresh sequences; /mnt/kv_cache/mq_conv/ckpt.pt
+  key      <512 tokens back:   0.1%  (2/1509)   chance 0.10%
+  key  512-1023 tokens back:   0.1%  (2/1685)   chance 0.10%
+  key     1024+ tokens back:   0.2%  (5/3206)   chance 0.10%
+MQAR_DONE 2026-10-02 13:49 UTC

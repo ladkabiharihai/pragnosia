@@ -1,0 +1,16 @@
+PAST THE TRAINING WINDOW, sliding-8k model, 2026-10-03 06:49 UTC
+== ctrl: [     4.5s] attention from the checkpoint: window 8192, sliding [   514.3s]   eval step 240000: BPB 1.0676  (952k bytes) [  1225.6s]   eval step 243000: BPB 1.0660  (952k bytes) 
+      8,192 tokens of context: 1.0384 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.0714 bits/byte over 24 passages; vs 8,192: +0.0330 +- 0.0152
+    131,072 tokens of context: 1.0710 bits/byte over 24 passages; vs 8,192: +0.0326 +- 0.0150
+  distance   1024 tokens: 100.0% (24/24)
+  distance   4096 tokens: 100.0% (24/24)
+  distance   7000 tokens:  66.7% (16/24)
+== long: [     1.7s] attention from the checkpoint: window 8192, sliding [   779.6s]   eval step 240000: BPB 1.0707  (952k bytes) [  1855.4s]   eval step 243000: BPB 1.0767  (952k bytes) 
+      8,192 tokens of context: 0.9694 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 0.9903 bits/byte over 24 passages; vs 8,192: +0.0209 +- 0.0096
+    131,072 tokens of context: 0.9904 bits/byte over 24 passages; vs 8,192: +0.0210 +- 0.0097
+  distance   1024 tokens: 100.0% (24/24)
+  distance   4096 tokens:  95.8% (23/24)
+  distance   7000 tokens:  58.3% (14/24)
+LONGCTX_R80_DONE 2026-10-03 06:51 UTC

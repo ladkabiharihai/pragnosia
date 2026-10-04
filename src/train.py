@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 
 from .common import Run, cap_gpu, seed_all, require_prod, eval_bpb
-from .model import LM
+from .model import LM, Attn
 from .optim import Fabric
 
 MIX = {"dclm": .413, "fineweb-edu": .322, "starcoderdata": .130, "finemath": .036,
@@ -94,6 +94,31 @@ def batch(bins, ks, ps, rng, B, T, extra=None, extra_p=0.0):
     return torch.from_numpy(o).pin_memory().cuda(non_blocking=True)
 
 
+class Streams:
+    """CARRIED-STATE TRAINING DATA (--carry N). `groups` groups of B rows; each row reads one corpus onward from a random
+    start, one window (T inputs + 1 target) per advance, and a group restarts its rows every N advances (groups staggered),
+    so a model trained on it sees what inference sees: window after window of one stream with its state carried."""
+    def __init__(self, bins, ks, ps, extra, extra_p, B, T, groups, N, rng):
+        self.src, self.extra, self.extra_p = (bins, ks, ps), extra, extra_p
+        self.B, self.T, self.N, self.rng = B, T, N, rng
+        self.k = [(g * N) // groups for g in range(groups)]; self.rows = [None] * groups
+    def _start(self, g):
+        rows = []
+        for _ in range(self.B):
+            bn, kn, pn = self.extra if (self.extra is not None and self.rng.random() < self.extra_p) else self.src
+            arr = bn[kn[self.rng.choice(len(kn), p=pn)]]
+            rows.append([arr, int(self.rng.integers(0, len(arr) - self.N * self.T - 2))])
+        self.rows[g] = rows
+    def next(self, g):
+        fresh = self.rows[g] is None or self.k[g] % self.N == 0
+        if fresh: self._start(g)
+        o = np.empty((self.B, self.T + 1), dtype=np.int64)
+        for b, row in enumerate(self.rows[g]):
+            o[b] = row[0][row[1]:row[1] + self.T + 1]; row[1] += self.T
+        self.k[g] += 1
+        return torch.from_numpy(o).pin_memory().cuda(non_blocking=True), fresh
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=120000)
@@ -170,8 +195,48 @@ def main():
     ap.add_argument("--graph-step", type=int, default=1,
                     help="capture forward+loss+backward as ONE CUDA graph and replay it per micro-batch")
     ap.add_argument("--resume", default="")
+    ap.add_argument("--pos-table", type=int, default=0,
+                    help="keep the learned position table at N entries while windows run longer; positions wrap modulo N "
+                         "inside a window, the condition inference meets at every window boundary (0: table = window)")
+    ap.add_argument("--attn-window", type=int, default=512, help="the windowed attention layers' window")
+    ap.add_argument("--set-window", default="",
+                    help="layer:window[,layer:window] -- set individual attention layers' windows after load (an experiment "
+                         "on one long-range layer); saved in the checkpoint as attn_windows")
+    ap.add_argument("--attn-sliding", type=int, default=0,
+                    help="1: a TRUE sliding window in training and inference alike (model.py _swa); 0: the block-local "
+                         "training of every checkpoint before 2026-10-02")
+    ap.add_argument("--short-conv", type=int, default=0,
+                    help="short causal convolution over K tokens on every carrier's q, k, v (identity at birth; added "
+                         "exactly to a resumed checkpoint that has none, with a cold optimizer)")
     ap.add_argument("--mixer", default="spin", choices=["spin", "gspin", "fspin", "aspin", "dspin", "wspin", "xspin", "w2spin", "hspin", "hdspin", "sdspin", "altspin", "alt4spin", "rspin", "tspin", "trspin", "aspin1", "hspin1", "r6spin", "grspin", "attn"])
     ap.add_argument("--spike", type=float, default=4.0)
+    ap.add_argument("--carry-groups", type=int, default=0,
+                    help="carried stream groups used in rotation (default: one per micro-step). With more groups than "
+                         "carried micro-steps, consecutive steps continue DIFFERENT streams")
+    ap.add_argument("--carry-half", type=int, default=0,
+                    help="1: every other micro-step is an ordinary fresh window (as without --carry), the rest continue "
+                         "streams -- training on short contexts as before and long ones besides")
+    ap.add_argument("--share-d", type=int, default=0,
+                    help="1: ONE schedule-free Prodigy step size for the whole model (Prodigy as published) instead of one per "
+                         "group. The small group of carrier timescales and frequencies estimated its own, which only rises: "
+                         "it ratcheted 6.1e-3 -> 1.7e-2 in run83 and its long memory drifted (2026-10-04)")
+    ap.add_argument("--freeze-d", type=int, default=0,
+                    help="DIAGNOSTIC: hold schedule-free Prodigy's step size where the resumed run left it (no growth)")
+    ap.add_argument("--carry", type=int, default=0,
+                    help="N > 0: CARRIED-STATE training. Each micro-step continues its own streams from the previous step's "
+                         "window, with every layer's state (carrier memory, attention cache) carried in, detached; streams "
+                         "restart every N steps. Trains exactly as inference runs past the window (2026-10-03)")
+    ap.add_argument("--heldout-T", type=int, default=2048, help="token length of the growth trials' held-out rows")
+    ap.add_argument("--heldout-data2", type=int, default=0,
+                    help="1: the trials' held-out sample mirrors the TRAINING mix, second corpus included at its share, "
+                         "so a growth that buys what that corpus teaches (long-range retrieval) can show it")
+    ap.add_argument("--heldout-long", type=int, default=0,
+                    help="N > 0: the trials' held-out is N-token streams (training mix, second corpus at its share) read "
+                         "window by window with every state carried -- how the model is used -- so a growth that helps "
+                         "inside a window but hurts past it (a longer attention reach) is judged on both")
+    ap.add_argument("--spike-adapt", type=int, default=0,
+                    help="1: every finite gradient norm enters the guard's history, skipped or not, so a LASTING shift "
+                         "in scale (an architecture change) moves the median instead of locking the guard out")
     ap.add_argument("--eval-every", type=int, default=2000)
     a = ap.parse_args()
     # the positional table is sized to the model's context, so a mix must build the model at its LONGEST:
@@ -187,12 +252,13 @@ def main():
         _A0.FUSED_PROJ = True
     # THE GROWTH SCHEDULE: step -> widen to N, and steps at which to double the depth. The older single-event
     # flags fold into it.
-    grow_w, grow_d, grow_a = {}, set(), {}
+    grow_w, grow_d, grow_a, grow_r = {}, set(), {}, set()
     for ev in [e for e in a.grow_schedule.split(",") if e]:
         st_, op_ = ev.split(":")
         if op_ == "d": grow_d.add(int(st_))
         elif op_.startswith("a"): grow_a[int(st_)] = int(op_[1:])
         elif op_.startswith("w"): grow_w[int(st_)] = int(op_[1:])
+        elif op_ == "R": grow_r.add(int(st_))                    # reach: double the attention window
         else: raise ValueError(f"unknown growth op {op_!r} in --grow-schedule")
     # sfp: the same schedule-free Prodigy as psf, fused into Fabric's compiled, CUDA-graphed step (goal: training
     # efficiency; psf's per-tensor Python update cost 15% of step time at 46M). SF marks behaviour shared by both.
@@ -220,7 +286,9 @@ def main():
         if a.data2:
             extra = loaders(a.data2)
             r.log(f"second corpus {a.data2} at {a.data2_frac:.0%}: {extra[1]}")
-        m = LM(vocab=a.vocab, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer, norm=a.norm).cuda()
+        PT = a.pos_table or a.ctx                     # position table size; a.ctx stays the longest window
+        m = LM(vocab=a.vocab, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=PT, mixer=a.mixer, norm=a.norm,
+               short_conv=a.short_conv, attn_window=a.attn_window, attn_sliding=bool(a.attn_sliding)).cuda()
         if a.fused_scan:
             import src.assoc as _A
             _A.FUSED_SCAN = True
@@ -395,6 +463,44 @@ def main():
                 micro()
             for p_ in m.parameters(): p_.grad.zero_()
             return g, xs, out["loss"]
+        def capture_carry():
+            """two graphs over one buffer of layer states: FRESH (a stream's first window: no state in) and CONTINUED (the
+            state in); both write the window's final states back into the buffer after the backward pass, which may
+            still read the incoming state (the scan recomputes chunk states from it)"""
+            T, B = a.ctx, a.batch
+            xs = torch.empty((B, T + 1), dtype=torch.long, device="cuda")
+            xs.copy_(batch(bins, ks, ps, np.random.default_rng(11), B, T, extra, a.data2_frac))
+            for p_ in m.parameters():
+                if p_.grad is None: p_.grad = torch.zeros_like(p_)
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                _, st0 = trunk(xs[:, :T], None, True)
+            buf = [tuple((t.detach().clone() if torch.is_tensor(t) else torch.tensor(t, device="cuda")) for t in st_)
+                   for st_ in st0]
+            del st0
+            out = {}
+            def micro(fresh):
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    h, new = trunk(xs[:, :T], None if fresh else buf, True)
+                l_ = m.loss(h, xs[:, 1:T + 1], chunks=max(1, a.chunks), ul_alpha=a.ul, ul_window=a.ul_window)
+                (l_ / a.accum).backward()
+                with torch.no_grad():
+                    for b_, n_ in zip(buf, new):
+                        for bt, nt in zip(b_, n_):
+                            if torch.is_tensor(nt): bt.copy_(nt.detach())
+                            else: bt.fill_(nt)
+                out["f" if fresh else "c"] = l_.detach()
+            s_ = torch.cuda.Stream(); s_.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(s_):
+                for fr in (True, True, False, False, False): micro(fr)
+            torch.cuda.current_stream().wait_stream(s_)
+            for p_ in m.parameters(): p_.grad.zero_()
+            gf = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(gf): micro(True)
+            gc_ = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(gc_, pool=gf.pool()): micro(False)
+            for p_ in m.parameters(): p_.grad.zero_()
+            return dict(gf=gf, gc=gc_, xs=xs, buf=buf, lf=out["f"], lc=out["c"],
+                        saved=[[tuple(t.clone() for t in b_) for b_ in buf] for _ in range(NG)])
         tok_total = a.steps * a.batch * a.ctx * a.accum
         r.log(f"{P/1e6:.1f}M params, carrier {100*car/P:.1f}%, "
               f"{tok_total/1e9:.2f}B tokens = {tok_total/P:.1f} tok/param")
@@ -404,22 +510,23 @@ def main():
         start = 0; grew_ctx = None
         if a.resume and os.path.exists(a.resume):
             sd = torch.load(a.resume, map_location="cuda")
-            if sd["cfg"].get("ctx", a.ctx) != a.ctx:
+            if sd["cfg"].get("ctx", PT) != PT:
                 # A LONG-CONTEXT PHASE. The positional table is sized to the old window; tile the trained
                 # pattern to fill the new one. That is exactly what inference already does when it processes a
                 # long input as consecutive windows with the state carried, so training this way teaches the
                 # model to use the state ACROSS a window boundary rather than only within one.
                 old_ctx = sd["cfg"]["ctx"]
-                reps = -(-a.ctx // old_ctx)
+                reps = -(-PT // old_ctx)
                 w = sd["model"]["p.weight"]
-                sd["model"]["p.weight"] = w.repeat(reps, 1)[: a.ctx]
-                r.log(f"extended the positional table {old_ctx} -> {a.ctx} by tiling the trained pattern {reps}x")
-                sd["cfg"]["ctx"] = a.ctx
+                sd["model"]["p.weight"] = w.repeat(reps, 1)[: PT]
+                r.log(f"extended the positional table {old_ctx} -> {PT} by tiling the trained pattern {reps}x")
+                sd["cfg"]["ctx"] = PT
                 grew_ctx = (old_ctx, sd["cfg"]["d"])
             if sd["cfg"]["d"] != m.d or sd["cfg"].get("layers", m.layers) != m.layers:
                 # a grown run: rebuild at the checkpoint's own width AND depth
                 m = LM(vocab=a.vocab, d=sd["cfg"]["d"], layers=sd["cfg"].get("layers", a.layers), mlp_mult=a.mlp,
-                       ctx=a.ctx, mixer=a.mixer, norm=a.norm).cuda()
+                       ctx=PT, mixer=a.mixer, norm=a.norm, short_conv=a.short_conv,
+                       attn_window=a.attn_window, attn_sliding=bool(a.attn_sliding)).cuda()
                 if a.fused_scan:
                     import src.assoc as _A
                     _A.FUSED_SCAN = True
@@ -428,7 +535,27 @@ def main():
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
                 opt = make_opt(m)
-            m.load_state_dict(sd["model"]); start = sd["step"]
+            # the attention window and its kind are the checkpoint's (a model that grew its own REACH keeps it); they
+            # carry no parameters, so they are set on the modules rather than rebuilt
+            if "attn_window" in sd["cfg"] or "attn_sliding" in sd["cfg"]:
+                for mx_ in m.mix:
+                    if isinstance(mx_, Attn) and mx_.window:
+                        mx_.window = sd["cfg"].get("attn_window", mx_.window); mx_.sliding = sd["cfg"].get("attn_sliding", mx_.sliding)
+                m.attn_window = sd["cfg"].get("attn_window", m.attn_window); m.attn_sliding = sd["cfg"].get("attn_sliding", m.attn_sliding)
+                r.log(f"attention from the checkpoint: window {m.attn_window}, {'sliding' if m.attn_sliding else 'block-local'}")
+            if sd["cfg"].get("attn_windows"):
+                for k_, v_ in sd["cfg"]["attn_windows"].items(): m.mix[int(k_)].window = int(v_)
+                m.attn_windows = {int(k_): int(v_) for k_, v_ in sd["cfg"]["attn_windows"].items()}
+            conv_added = bool(a.short_conv) and not any(k_.endswith(".sconv") for k_ in sd["model"])
+            if conv_added:
+                # the checkpoint has no short convolutions: they are added here as the identity, so the function is
+                # unchanged; every other key must load exactly
+                miss, unexp = m.load_state_dict(sd["model"], strict=False)
+                assert not unexp and miss and all(k_.endswith(".sconv") for k_ in miss), (miss, unexp)
+                r.log(f"ADDED short causal convolutions (K={a.short_conv}, identity) to {len(miss)} carrier layers")
+            else:
+                m.load_state_dict(sd["model"])
+            start = sd["step"]
             if sd.get("new_layers"):
                 # a checkpoint written by eval/deepen.py: its added layers train with absolute steps (see
                 # LM.param_groups), and it carries no optimizer state, so this is a cold start by design
@@ -441,7 +568,10 @@ def main():
             # converged to that point. This project measured the same failure at growth events: a rebuilt
             # optimizer takes a 1.5x larger first step and costs about a nat of shock. A resume is the same
             # event. Recorded because the first version of this resume shipped without it.
-            if "opt" in sd:
+            if conv_added:
+                r.log("optimizer starts COLD: the added convolutions have no state, and the saved state's parameter order "
+                      "no longer matches")
+            elif "opt" in sd:
                 try:
                     opt.load_state_dict(sd["opt"])
                     if SF: opt.train()   # checkpoints hold the averaged weights; back to training ones
@@ -451,7 +581,7 @@ def main():
                         # this the fused update tried to add a 2048-vector to an 8192-vector and the compile
                         # failed rather than silently doing something wrong.
                         opt.grew(m.p.weight, grew_ctx)
-                        r.log(f"extended the optimizer's statistics for the positional table to {a.ctx} rows")
+                        r.log(f"extended the optimizer's statistics for the positional table to {PT} rows")
                     r.log(f"resumed optimizer state ({len(sd['opt'].get('state', {}))} tensors)")
                 except Exception as e:
                     r.log(f"optimizer state present but not loadable ({type(e).__name__}: {str(e)[:300]}); starting cold")
@@ -466,7 +596,55 @@ def main():
             if st_ < start: shapes = [(t, max(1, B_ // f_)) for t, B_ in shapes]; a.accum *= f_
         _pw = mix_p if mix_p is not None else [1.0 / len(shapes)] * len(shapes)
         tok_per_step = a.accum * sum(q * B_ * T_ for q, (T_, B_) in zip(_pw, shapes))
-        graphs = {(B_, T_): capture(T_, B_) for T_, B_ in shapes}          # one captured graph per length
+        # one captured graph per length. The FIRST capture splits under the cap too: only captures after a growth
+        # went through capture_all()'s split, and a 32,768-token window died here at startup (2026-10-01).
+        if a.set_window:
+            for ent in a.set_window.split(","):
+                l_, w_ = (int(v) for v in ent.split(":"))
+                assert isinstance(m.mix[l_], Attn), f"layer {l_} is not attention"
+                m.mix[l_].window = w_; m.attn_windows[l_] = w_
+            r.log(f"attention windows set per layer: {m.attn_windows}")
+        if a.share_d:
+            assert a.optim == "sfp", "--share-d is implemented for the fused optimizer (--optim sfp)"
+            opt.share_d = True
+            r.log("ONE shared step size for every parameter group (Prodigy as published)")
+        if a.freeze_d:
+            for g_f in opt.param_groups: g_f["freeze_d"] = True
+            r.log("DIAGNOSTIC: the optimizer's step size is frozen at its resumed value")
+        carry_g = None
+        # (2026-10-03) carrying in EVERY micro-step with streams restarted every 16 steps left 1 window in 16 starting
+        # empty: retrieval inside a fresh window fell (needles at 4,096 tokens 100% -> 46%) and 8k-context prediction
+        # worsened, and every step continued the same 8 streams. --carry-half keeps ordinary fresh windows in every
+        # step; --carry-groups rotates many stream groups so consecutive steps continue different streams.
+        NG = a.carry_groups or a.accum
+        cursor = [0]
+        def carry_batches():
+            out_ = []
+            for j_ in range(a.accum):
+                if a.carry_half and j_ % 2 == 0:
+                    out_.append((batch(bins, ks, ps, rng, a.batch, a.ctx, extra, a.data2_frac), True, None))
+                else:
+                    g_c = cursor[0] % NG; cursor[0] += 1
+                    x_c, f_c = streams.next(g_c); out_.append((x_c, f_c, g_c))
+            return out_
+        if a.carry:
+            assert len(shapes) == 1 and a.graph_step and a.compile and not a.grow_auto and not a.grow_schedule, \
+                "--carry needs one window length, captured graphs, and no growth events"
+            carry_g = capture_carry(); graphs = {(a.batch, a.ctx): None}; set_none = False
+            r.log(f"CARRIED-STATE training: {NG} stream groups x {a.batch} streams in rotation, each restarted every "
+                  f"{a.carry} windows (up to {a.carry * a.ctx:,} tokens of history)"
+                  f"{'; every other micro-step a fresh window' if a.carry_half else ''}; "
+                  f"{torch.cuda.memory_reserved()/2**30:.1f} GiB reserved")
+        while not a.carry:
+            try:
+                graphs = {(B_, T_): capture(T_, B_) for T_, B_ in shapes}
+                break
+            except torch.OutOfMemoryError:
+                graphs = {}; gc.collect(); torch.cuda.empty_cache()
+                if all(B_ == 1 for _, B_ in shapes): raise
+                shapes = [(t, max(1, B_ // 2)) for t, B_ in shapes]; a.accum *= 2
+                a.batch = shapes[-1][1] if len(shapes) > 1 else max(1, a.batch // 2)
+                r.log(f"did not fit under the cap at startup: micro-steps split to {shapes}, accumulation {a.accum}")
         gs = graphs[(shapes[0][1], shapes[0][0])]
         if gs is not None:
             set_none = False
@@ -517,9 +695,12 @@ def main():
         hist = torch.full((1000,), float("nan"), device="cuda"); g0 = start; grown_at = -10**9
         skips_t = torch.zeros((), device="cuda"); skips_t = torch.zeros((), device="cuda"); ema_t = None
         nonfin = torch.zeros((), device="cuda"); nf_prev = 0
-        marks = []; bpbs = []; skipped = 0
+        marks = []; bpbs = []; skipped = 0; stopped_early = None
         T_n, B_n = shapes[0]
         nxt = [batch(bins, ks, ps, rng, B_n, T_n, extra, a.data2_frac) for _ in range(a.accum)]
+        if a.carry:
+            streams = Streams(bins, ks, ps, extra, a.data2_frac, a.batch, a.ctx, NG, a.carry, rng)
+            nxt = carry_batches()
 
         # ---- GROWTH TRIALS (goals 7 + 8): the model decides to grow by trying it ----------------------------------
         # When its rate has annealed an e-fold (time to RECONSIDER, nothing more), the model snapshots itself, trains a
@@ -529,25 +710,50 @@ def main():
         # parameter in its first stages, 2026-09-24) and a one-step gradient comparison (break-even at 1/3 token per
         # parameter: a gradient says what new capacity COULD do now, not whether the old has run out).
         import copy as _copy
-        xs_eval = batch(bins, ks, ps, np.random.default_rng(424242), 4, 2048)
+        # THE TRIALS' HELD-OUT SAMPLE. 4 x 2,048 tokens of the main mix by default; with --heldout-data2 it mirrors the
+        # training mix exactly (8 rows, the second corpus's share of them drawn from it, deterministic), and
+        # --heldout-T 8192 lets a growth of REACH show what it buys: at 2,048 tokens a window past 2,048 can buy nothing
+        HT = a.heldout_T
+        if a.heldout_long:
+            # (2026-10-03) the 8k-window held-out could not see what a longer reach costs past the window: the model chose
+            # 8,192 and paid +0.033 bits/byte at 32k of context, while a 512 reach is flat (-0.0003 +- 0.0005)
+            HT = a.heldout_long
+            r_h = np.random.default_rng(424242); n2 = int(round(8 * a.data2_frac)) if extra is not None else 0
+            xs_eval = torch.cat([batch(bins, ks, ps, r_h, 8 - n2, HT)] + ([batch(bins, ks, ps, r_h, n2, HT, extra, 1.0)] if n2 else []))
+        elif a.heldout_data2 and extra is not None:
+            r_h = np.random.default_rng(424242); n2 = int(round(8 * a.data2_frac))
+            xs_eval = torch.cat([batch(bins, ks, ps, r_h, 8 - n2, HT), batch(bins, ks, ps, r_h, n2, HT, extra, 1.0)])
+        else:
+            xs_eval = batch(bins, ks, ps, np.random.default_rng(424242), 4, HT)
         trial = None
         def heldout():
-            if SF: opt.eval()
-            m.eval()
-            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                # through the trunk and the chunked loss: the full logits of a large model were what ran a trial out of
-                # memory at the cap (run70, 2026-09-30)
-                l_ = m.loss(m.trunk(xs_eval[:, :2048]), xs_eval[:, 1:2049], chunks=4).item()
-            m.train()
-            if SF: opt.train()
-            return l_
+            def run_():
+                if SF: opt.eval()
+                m.eval()
+                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    # through the trunk and the chunked loss: the full logits of a large model were what ran a trial out
+                    # of memory at the cap (run70, 2026-09-30)
+                    if a.heldout_long:
+                        # every token of the streams, window by window, the states carried: the loss as the model is used
+                        st_, tot_ = None, 0.0
+                        for w0 in range(0, HT, a.ctx):
+                            h_, st_ = m.trunk(xs_eval[:, w0:w0 + a.ctx], st_, True)
+                            tot_ += m.loss(h_, xs_eval[:, w0 + 1:w0 + a.ctx + 1], chunks=4).item() * min(a.ctx, HT - w0)
+                        l_ = tot_ / HT
+                    else:
+                        l_ = m.loss(m.trunk(xs_eval[:, :HT]), xs_eval[:, 1:HT + 1], chunks=4).item()
+                m.train()
+                if SF: opt.train()
+                return l_
+            return roomy(run_)
         def to_dev(o, dev):
             if torch.is_tensor(o): return o.to(dev)
             if isinstance(o, dict): return {k: to_dev(v, dev) for k, v in o.items()}
             if isinstance(o, (list, tuple)): return type(o)(to_dev(v, dev) for v in o)
             return o
-        def snapshot():
-            mc = _copy.deepcopy(m).to("cpu")
+        def snapshot(): return roomy(snapshot_)
+        def snapshot_():
+            mc = _copy.deepcopy(m).to("cpu")       # deepcopy is made on the card first: out-of-graph memory
             for p_ in mc.parameters(): p_.grad = None
             return dict(m=mc, opt=to_dev(opt.state_dict(), "cpu"), rng=_copy.deepcopy(rng.bit_generator.state),
                         nxt=[x.clone() for x in nxt], shapes=list(shapes), accum=a.accum, batch=a.batch,
@@ -556,7 +762,13 @@ def main():
             """(Re)capture every window's graph. If the model does not fit under the cap -- a grown model can outgrow it
             -- split the micro-step (half the rows, twice the accumulation: the same tokens per update) and try again,
             so no split step is written into the growth plan by hand."""
-            nonlocal shapes, gs, nxt
+            nonlocal shapes, gs, nxt, carry_g
+            if a.carry:
+                saved_ = carry_g["saved"] if carry_g else None
+                carry_g = None; gc.collect(); torch.cuda.empty_cache()
+                carry_g = capture_carry()
+                if saved_: carry_g["saved"] = saved_
+                return
             while True:
                 try:
                     if len(shapes) > 1: graphs.update({(B_, T_): capture(T_, B_) for T_, B_ in shapes})
@@ -571,6 +783,28 @@ def main():
                     nxt = [batch(bins, ks, ps, rng, B_s, T_s, extra, a.data2_frac) for _ in range(a.accum)]
                     r.log(f"    did not fit under the cap at {sum(p_.numel() for p_ in m.parameters())/1e6:.1f}M: micro-steps "
                           f"split to {shapes}, accumulation {a.accum}")
+        roomy_calls = [0]
+        def roomy(fn):
+            """WORK OUTSIDE THE CAPTURED GRAPHS (held-out loss, bits-per-byte eval, growth exactness checks, snapshots)
+            runs beside the graphs' memory pool, and capture_all()'s automatic split only proves that the TRAINING
+            STEP fits under the cap. run70 died at the cap in a growth check right after a capture that fit with
+            ~0.3 GiB to spare (2026-09-30), as a run had at its first eval on 2026-09-22: each was patched at the call
+            site, never as a class. Now if such work does not fit, the graphs are released for it and recaptured
+            after (seconds, and only when needed): room is measured by trying, not set by hand."""
+            nonlocal gs, g_
+            try:
+                roomy_calls[0] += 1                 # test hook (eval/oom_test.sh): MEMBRAE_TEST_OOM=N fails the Nth call once
+                if roomy_calls[0] == int(os.environ.get("MEMBRAE_TEST_OOM", "0")):
+                    raise torch.OutOfMemoryError("MEMBRAE_TEST_OOM")
+                return fn()
+            except torch.OutOfMemoryError:
+                pass                               # leaving the except block frees the failed attempt's tensors
+            graphs.clear(); gs = None; g_ = None; gc.collect(); torch.cuda.empty_cache()
+            r.log(f"    out-of-graph work did not fit beside the captured graphs under the cap: released them for it")
+            out = fn()
+            with torch.enable_grad():              # a capture inside a caller's no_grad would record no backward
+                capture_all()
+            return out
         def install(S):
             """make snapshot S the live model: optimizer rebuilt from its state, graphs recaptured"""
             nonlocal m, opt, fwd, trunk, gs, g_, base, set_none, shapes, nxt
@@ -590,6 +824,11 @@ def main():
             trunk = torch.compile(m.trunk) if a.compile else m.trunk
             capture_all()
         def nparams(): return sum(p_.numel() for p_ in m.parameters())
+        def check_loss():
+            """the growth exactness check: the same light row before and after an event"""
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                return m.loss(m.trunk(xg[:, :2048]), xg[:, 1:2049], chunks=4).item()
+        xg = None
 
         for i in range(start, a.steps):
             if trial is not None and i == trial["end"] - trial["K"] // 2:
@@ -608,6 +847,7 @@ def main():
                         for op_ in trial["ev"]:
                             if op_ == "d": grow_d.add(i)
                             elif op_ == "W": grow_w[i] = m.d + 256
+                            elif op_ == "R": grow_r.add(i)
                             elif op_.startswith("w"): grow_w[i] = int(op_[1:])
                             elif op_.startswith("a"): grow_a[i] = int(op_[1:])
                         trial["end"] = i + trial["K"]
@@ -714,13 +954,36 @@ def main():
                 T_n, B_n = shapes[0]
                 nxt = [batch(bins, ks, ps, rng, B_n, T_n, extra, a.data2_frac) for _ in range(a.accum)]
                 r.log(f"    SPLIT micro-steps {grow_a[i]} ways at step {i}: shapes {shapes}, accumulation {a.accum}")
+            if i in grow_r:
+                # REACH (goals 7 + 9): double how far back the windowed attention sees exactly. Exact retrieval lives
+                # only inside this window (needles: 71% at 256 tokens, 0% from 1,024; 2026-10-02), so this is the growth
+                # that buys it, and the model decides by trial whether it pays. NOT exact: the same weights now attend
+                # over more keys, so the cost of the event is logged rather than assumed away.
+                ats = [mx for mx in m.mix if isinstance(mx, Attn) and mx.window]
+                if not ats or not all(mx.sliding for mx in ats) or ats[0].window >= a.ctx:
+                    r.log(f"    REACH not applied at step {i}: it needs sliding windowed attention shorter than the "
+                          f"training window ({ats[0].window if ats else 0} vs {a.ctx})")
+                else:
+                    if SF: opt.eval()
+                    xg = batch(bins, ks, ps, np.random.default_rng(7), 1, 2048)
+                    lb = roomy(check_loss)
+                    for mx in ats: mx.window *= 2
+                    m.attn_window = ats[0].window
+                    graphs.clear(); gs = None; g_ = None; gc.collect()
+                    fwd = trunk = None; torch._dynamo.reset(); torch.cuda.empty_cache()
+                    fwd = torch.compile(m) if a.compile else m
+                    trunk = torch.compile(m.trunk) if a.compile else m.trunk
+                    capture_all()
+                    la = roomy(check_loss)
+                    r.log(f"    REACH doubled to a {m.attn_window}-token window at step {i}: same-row loss {lb:.4f} -> {la:.4f}")
+                    if SF: opt.train()
+                    hist.fill_(float("nan")); g0 = i
             if i in grow_w and m.d < grow_w[i]:
                 # GROWTH (vision goal 7): widen in place, function preserved, optimizer state carried. The
                 # loss right before and right after is logged so the cost of the event is a number.
                 if SF: opt.eval()          # measured and grown at the AVERAGED weights, the model
                 xg = batch(bins, ks, ps, np.random.default_rng(7), 1, 2048)   # the exactness check: one row, light
-                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    lb = m.loss(m.trunk(xg[:, :2048]), xg[:, 1:2049], chunks=4).item()
+                lb = roomy(check_loss)
                 # free the old CUDA graphs BEFORE growing: old and new together exceed the cap at the late stages
                 graphs.clear(); gs = None; g_ = None; gc.collect()
                 torch._dynamo.reset(); torch.cuda.empty_cache()
@@ -738,8 +1001,7 @@ def main():
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
                 # every window's graph, not only the first: a mixed-length run held stale graphs after widening
                 capture_all()
-                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    la = m.loss(m.trunk(xg[:, :2048]), xg[:, 1:2049], chunks=4).item()
+                la = roomy(check_loss)
                 P = sum(p.numel() for p in m.parameters())
                 r.log(f"    GREW to d={m.d} at step {i}: {P/1e6:.1f}M params, same batch loss {lb:.4f} -> {la:.4f}, "
                       f"optimizer state {opt.state_bytes()/2**20:.0f} MiB carried")
@@ -753,8 +1015,7 @@ def main():
                 # Growing a shallow model late in the run costs half the compute per token until then.
                 if SF: opt.eval()          # measured and deepened at the AVERAGED weights, the model
                 xg = batch(bins, ks, ps, np.random.default_rng(7), 1, 2048)   # the exactness check: one row, light
-                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    lb = m.loss(m.trunk(xg[:, :2048]), xg[:, 1:2049], chunks=4).item()
+                lb = roomy(check_loss)
                 old_m = m
                 big = old_m.deepen(init=a.deepen_init)
                 if a.fused_scan:
@@ -825,8 +1086,7 @@ def main():
                 fwd = torch.compile(m) if a.compile else m
                 trunk = torch.compile(m.trunk) if a.compile else m.trunk
                 capture_all()
-                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                    la = m.loss(m.trunk(xg[:, :2048]), xg[:, 1:2049], chunks=4).item()
+                la = roomy(check_loss)
                 P = sum(p.numel() for p in m.parameters())
                 r.log(f"    DEEPENED to {m.layers} layers at step {i}: {P/1e6:.1f}M params, same batch loss "
                       f"{lb:.4f} -> {la:.4f}, optimizer state carried for {carried} tensors, "
@@ -846,6 +1106,21 @@ def main():
             opt.zero_grad(set_to_none=set_none)
             loss = None
             for _acc in range(a.accum):
+                if carry_g is not None:
+                    # this group's streams continue: its saved states into the graphs' buffer, the window in, replay,
+                    # the new states back out
+                    x, fresh_, grp = nxt[_acc]; C_ = carry_g
+                    C_["xs"].copy_(x)
+                    if not fresh_:
+                        for b_, s_ in zip(C_["buf"], C_["saved"][grp]):
+                            for bt, st in zip(b_, s_): bt.copy_(st)
+                    (C_["gf"] if fresh_ else C_["gc"]).replay()
+                    if grp is not None:
+                        for b_, s_ in zip(C_["buf"], C_["saved"][grp]):
+                            for bt, st in zip(b_, s_): st.copy_(bt)
+                    l_ = (C_["lf"] if fresh_ else C_["lc"]).clone()
+                    loss = l_ if loss is None else loss + l_
+                    continue
                 x = nxt[_acc]
                 g_ = graphs.get((x.shape[0], x.shape[1] - 1)) if len(shapes) > 1 else gs
                 if g_ is not None:
@@ -863,7 +1138,8 @@ def main():
             # the next step's batches are sampled NOW, while the card is still busy with this one; the
             # gradient-norm read below is a sync and everything after it is a gap the card sits through
             T_n, B_n = shapes[rng.choice(len(shapes), p=mix_p)] if len(shapes) > 1 else shapes[0]
-            nxt = [batch(bins, ks, ps, rng, B_n, T_n, extra, a.data2_frac) for _ in range(a.accum)]
+            nxt = (carry_batches() if carry_g is not None else
+                   [batch(bins, ks, ps, rng, B_n, T_n, extra, a.data2_frac) for _ in range(a.accum)])
             # (schedule-free Prodigy must not be clipped: its step-size estimate reads the raw gradient)
             gn = torch.nn.utils.clip_grad_norm_(m.parameters(), float("inf") if SF else 1.0)
             # SPIKE GUARD. The previous run went from loss 4.0998 to NaN between step 14,200 and 14,400, a
@@ -874,11 +1150,17 @@ def main():
             j = i - g0; fin = torch.isfinite(gn)
             med = hist.nanmedian() if j else gn
             keep = fin & ((gn <= a.spike * med) if j >= 200 else torch.ones((), dtype=torch.bool, device="cuda"))
-            hist[j % 1000] = torch.where(keep, gn, hist[j % 1000])            # only kept steps enter the history
+            # only kept steps enter the history -- unless --spike-adapt: widening the attention window to 8,192 raised
+            # the gradient norm for good, every step after the first 200 read as a spike against the old median, none
+            # entered the history, and the run was stopped as DIVERGED at a healthy loss of 2.60 (2026-10-02). A real
+            # divergence is still caught by the weights' finiteness and the held-out eval.
+            hist[j % 1000] = torch.where(keep | (fin & bool(a.spike_adapt)), gn, hist[j % 1000])
             skips_t.add_(~keep)
             # zero the gradients of a skipped step; a non-finite one becomes NaN * 0 here and is zeroed for
             # good inside the fused update (nan_to_num), so the optimizer state never sees it
             torch._foreach_mul_([p_.grad for p_ in m.parameters() if p_.grad is not None], keep.float())
+            # and under schedule-free the skipped step must not move anything (optim._sfp_update, live)
+            if hasattr(opt, "set_live"): opt.set_live(keep)
             opt.step()
             # A NON-FINITE LOSS MUST NOT POISON THE AVERAGE. The first version of this device-side guard folded
             # every loss into the EMA, so one NaN batch made the average NaN for ever and the run stopped at the
@@ -944,6 +1226,7 @@ def main():
                         for op_ in ev:
                             if op_ == "d": grow_d.add(i + 1)
                             elif op_ == "W": grow_w[i + 1] = m.d + 256        # widen one step, no size written down
+                            elif op_ == "R": grow_r.add(i + 1)                # double the attention window's reach
                             elif op_.startswith("w"): grow_w[i + 1] = int(op_[1:])
                             elif op_.startswith("a"): grow_a[i + 1] = int(op_[1:])
                         why = (f"this stage's length has doubled to {i+1-stage_t0[0]} steps" if SF else
@@ -958,19 +1241,23 @@ def main():
                           f"weights {'still finite' if alive else 'NON-FINITE'}")
                     if not alive or recent_nf > 100:
                         r.log(f"    DIVERGED: the weights are not finite; stopping rather than burning the card")
-                        break
+                        stopped_early = "diverged"; break
                 if not math.isfinite(ema):
                     r.log(f"    NON-FINITE RUNNING LOSS with finite weights; stopping, this should not happen")
-                    break
+                    stopped_early = "non-finite loss"; break
                 if nsk > skipped:
                     r.log(f"    {nsk - skipped} spike(s) skipped in the last 200 steps (median |g| {medv:.2f}, total {nsk})")
-                marks.append((i + 1, nsk)); skipped = nsk
+                marks.append((i + 1, nsk, ema)); skipped = nsk
                 # DIVERGED, not spiking: the attention control blew up at step ~11,000 and the guard then
                 # skipped every one of the next 27,000 steps while the log showed a healthy-looking rate.
                 # A guard that skips everything is a frozen model burning the card; stop and say so.
-                if len(marks) >= 4 and nsk - marks[-4][1] >= 250:
-                    r.log(f"    DIVERGED: {nsk} skips, {nsk - marks[-4][1]} of them within the last 600 steps; stopping")
-                    break
+                # ...and NOT LEARNING: the 8,192-token attention window raised its gradient norm while the loss fell
+                # 2.6026 -> 2.5733, and this stop killed it twice as "diverged" (2026-10-02). Skipping and frozen is
+                # the failure; skipping while the running loss keeps falling is not.
+                if len(marks) >= 4 and nsk - marks[-4][1] >= 250 and not (ema < marks[-4][2] - 0.01):
+                    r.log(f"    DIVERGED: {nsk} skips, {nsk - marks[-4][1]} of them within the last 600 steps, and the loss "
+                          f"is not falling ({marks[-4][2]:.4f} -> {ema:.4f}); stopping")
+                    stopped_early = "diverged"; break
             if (i + 1) % a.eval_every == 0:
                 # BITS PER BYTE, not loss per token. Per-token loss depends on the vocabulary and is
                 # comparable to nothing; bits per byte removes the tokenizer and is the only number that can
@@ -980,10 +1267,13 @@ def main():
                 # the batch already halved to one (2026-09-22). A fixed 8,192 also makes the number
                 # comparable across runs, which evaluating at each run's own window never was.
                 torch.cuda.empty_cache()
-                if SF: opt.eval()          # measured at the averaged weights, which are the model
-                b, nb = eval_bpb(m, tok, bins, ks, ps, np.random.default_rng(1234),
-                                 n_batches=8, B=4, T=min(a.ctx, 8192), vocab=a.vocab)
-                if SF: opt.train()
+                def bpb_():
+                    if SF: opt.eval()      # measured at the averaged weights, which are the model
+                    b_ = eval_bpb(m, tok, bins, ks, ps, np.random.default_rng(1234),
+                                  n_batches=8, B=4, T=min(a.ctx, 8192), vocab=a.vocab)
+                    if SF: opt.train()
+                    return b_
+                b, nb = roomy(bpb_)
                 torch.cuda.empty_cache()
                 r.log(f"  eval step {i+1}: BPB {b:.4f}  ({nb/1e3:.0f}k bytes)")
                 # DEGRADING, not frozen: fspin at 6e-3 went 1.7075 -> 1.7534 -> 2.1130 over three evals while
@@ -992,14 +1282,14 @@ def main():
                 bpbs.append(b)
                 if len(bpbs) >= 4 and all(bpbs[-k] > bpbs[-k-1] + 0.01 for k in (1, 2, 3)):
                     r.log(f"    DEGRADING: BPB rose over the last three evals {bpbs[-4:]}; stopping")
-                    break
+                    stopped_early = "degrading"; break
             # never checkpoint a trial's GROWN branch: it is a temporary model (run70 saved one at step 136,000)
             if ((i + 1) % a.save_every == 0 or i + 1 == a.steps) and not (trial is not None and trial["phase"] == "grow"):
                 # NEVER OVERWRITE A GOOD CHECKPOINT WITH A BROKEN ONE. The previous run saved NaN weights over
                 # a healthy checkpoint and only a stray copy survived. Verify before writing, and keep the
                 # previous file as last-known-good.
                 if SF: opt.eval()          # the checkpoint holds the averaged weights
-                bad = sum(1 for v in m.state_dict().values() if not torch.isfinite(v).all())
+                bad = roomy(lambda: sum(1 for v in m.state_dict().values() if not torch.isfinite(v).all()))
                 if bad:
                     r.log(f"    refusing to checkpoint: {bad} non-finite tensors")
                 else:
@@ -1008,7 +1298,11 @@ def main():
                     torch.save({"model": m.state_dict(), "opt": opt.state_dict(),
                                 "step": i + 1, "loss": ema_t.item(),   # the current average, not the last log's
                                 "cfg": dict(vocab=a.vocab, d=m.d, layers=m.layers,
-                                            mlp_mult=a.mlp, ctx=a.ctx, mixer=a.mixer, norm=a.norm),
+                                            mlp_mult=a.mlp, ctx=m.ctx, mixer=a.mixer, norm=a.norm,
+                                            **({"short_conv": m.short_conv} if getattr(m, "short_conv", 0) else {}),
+                                            **({"attn_window": m.attn_window, "attn_sliding": m.attn_sliding}
+                                               if (m.attn_window, m.attn_sliding) != (512, False) else {}),
+                                            **({"attn_windows": dict(m.attn_windows)} if getattr(m, "attn_windows", None) else {})),
                                 "new_layers": list(getattr(m, "new_layers", [])),
                                 "stage": (stage_t0[0], stage_next[0]) if a.grow_auto else None},
                                f"{a.out}/ckpt.pt")
@@ -1019,6 +1313,10 @@ def main():
         else:
             ema = ema_t.item(); skipped = int(skips_t.item())
             r.log(f"final loss {ema:.4f} ppl {math.exp(min(20,ema)):.1f}, {skipped} spike-skips")
+        if stopped_early:
+            # NOT a success: run80's "DIVERGED" stop exited 0, so its wrapper wrote the done marker and the pipeline
+            # began fine-tuning a 2,000-step checkpoint (2026-10-02). Exit 3 lets keep_training.sh resume or give up.
+            raise SystemExit(f"stopped early: {stopped_early}")
 
 
 if __name__ == "__main__":

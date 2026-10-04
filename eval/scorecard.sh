@@ -26,12 +26,18 @@ sec "1, 4, 9  CONTEXT ROT, FACTS + CALIBRATION, INDUCTION, INFERENCE MEMORY ($BA
 $P eval/nine.py "$BASE" final 2>&1 | clean >> $OUT
 sec "9  IN-CONTEXT LOOKUP, HARD: every wrong option is another answer from the same context ($SFT)"
 $P eval/incontext.py "$SFT" hard 2>&1 | clean >> $OUT
+sec "9  RETRIEVAL: passkey (standard, out of distribution), needles by distance (real prose), lookup with error bars ($SFT / $BASE)"
+PASSKEY_LENS=512,2048,8192,32768 $P eval/incontext.py "$BASE" passkey 2>&1 | clean | grep -v wanted >> $OUT
+NEEDLE_DIST=64,256,1024,4096,7000,16384 INCONTEXT_GPT2=0 $P eval/incontext.py "$BASE" needle 2>&1 | clean | grep -v miss: >> $OUT
+$P eval/incontext.py "$SFT" powered 2>&1 | clean >> $OUT
+sec "9  CONTEXT PAST THE TRAINING WINDOW: the same passages after 8k vs 32k of context, 24 passages, paired ($BASE)"
+MILLION_SAMPLES=24 $P eval/million.py "$BASE" 8192,32768 2>&1 | clean | grep "tokens of context" >> $OUT
 sec "6  ONE MILLION TOKENS OF CONTEXT: memory and bits per byte ($BASE)"
 $P eval/million.py "$BASE" 2>&1 | clean >> $OUT
 sec "1  GENERATION QUALITY: words, surprise and variety together, against GPT-2 ($BASE)"
 $P eval/genqual2.py "$BASE" 2>&1 | clean >> $OUT
-sec "7  LEARNING WITHOUT FORGETTING: whole model vs whole model + self-rehearsal ($SFT)"
-$P eval/continual.py "$SFT" rehearse 2>&1 | clean >> $OUT
+sec "7  LEARNING WITHOUT FORGETTING, NO RATE: whole model, + self-rehearsal, new layers only ($SFT)"
+$P eval/continual.py "$SFT" intrinsic 2>&1 | clean >> $OUT
 sec "7, 8  GROWTH AND RATE DECIDED BY THE MODEL (from its training log)"
-grep -E "RECONSIDER|TRIAL|DECISION|GREW|DEEPENED|SPLIT|eval step" logs/train_grow70.out >> $OUT
+grep -E "RECONSIDER|TRIAL|DECISION|GREW|REACH|DEEPENED|SPLIT|eval step" logs/train83.out >> $OUT
 echo "SCORECARD_DONE $(date -u '+%Y-%m-%d %H:%M UTC')" >> $OUT

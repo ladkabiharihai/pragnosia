@@ -1,0 +1,22 @@
+LONG-WINDOW A/B (needle, second corpus /mnt/kv_cache/tokneedle_v8192), 2026-10-01 14:42 UTC
+[  2281.3s] 199400/200000 loss 2.5846 ppl 13.3 lr 1.00e+00 215 ktok/s (last 200: 216) eta 3m 29.4 GiB d 2.69e-05 1.64e-04
+[  2340.9s] 199600/200000 loss 2.5862 ppl 13.3 lr 1.00e+00 215 ktok/s (last 200: 220) eta 2m 29.4 GiB d 2.69e-05 1.64e-04
+[  2402.5s] 199800/200000 loss 2.5957 ppl 13.4 lr 1.00e+00 215 ktok/s (last 200: 213) eta 1m 29.4 GiB d 2.79e-05 1.64e-04
+[  2464.0s] 200000/200000 loss 2.5951 ppl 13.4 lr 1.00e+00 215 ktok/s (last 200: 213) eta 0m 29.4 GiB d 2.79e-05 1.64e-04
+[  2466.6s]   eval step 200000: BPB 1.1038  (952k bytes)
+== ctrl
+      8,192 tokens of context: 1.1169 bits/byte      4.5 s to ingest   peak 2.31 GiB
+     32,768 tokens of context: 1.1445 bits/byte      0.1 s to ingest   peak 2.31 GiB
+    131,072 tokens of context: 1.1450 bits/byte      0.2 s to ingest   peak 2.31 GiB
+== needle
+      8,192 tokens of context: 1.1079 bits/byte      4.5 s to ingest   peak 2.31 GiB
+     32,768 tokens of context: 1.1364 bits/byte      0.1 s to ingest   peak 2.31 GiB
+    131,072 tokens of context: 1.1368 bits/byte      0.2 s to ingest   peak 2.31 GiB
+LONGCTX_AB_DONE 2026-10-01 14:42 UTC
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/ab_needle/ckpt.pt
+facts in context                         Carrier
+10                          44.0% +- 4.4 (n=500)
+30                          47.8% +- 4.4 (n=500)
+60                          32.8% +- 4.1 (n=500)
+120                         29.8% +- 4.0 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  48.3% +- 9.0   early-mid  23.7% +- 7.2   late-mid  24.8% +- 7.6   latest  23.8% +- 7.6

@@ -29,6 +29,25 @@ W = sd["cfg"]["ctx"]
 print(f"model ctx {W}, state per layer {m.mix[0].h if hasattr(m.mix[0],'h') else '?'} heads", flush=True)
 
 TARGETS = (8192, 32768, 131072, 524288, 1048576)
+# POSITIONS PAST THE TRAINING WINDOW (2026-10-01). The learned position table has ctx entries and restarts at every
+# window, so from the second window on, position 0 arrives with a FULL state -- a pairing training never shows (there
+# position 0 always means an empty state). The same 256 tokens scored 1.1195 bits/byte after 8,192 tokens of context
+# and 1.1430 after 32,768: more context, worse prediction. MILLION_POS chooses what windows after the first are given:
+#   wrap  (default, as trained and as everything else here does): 0 .. W-1 again
+#   clamp: W-1 for every token (always "late in a window", which a full state is)
+#   half : the second half's positions W/2 .. W-1, twice (late, and local order kept within each half)
+import os
+POSMODE = os.environ.get("MILLION_POS", "wrap")
+if len(sys.argv) > 2: TARGETS = tuple(int(t) for t in sys.argv[2].split(","))
+def positions(wi, n):
+    if wi == 0 or POSMODE == "wrap": return torch.arange(n, device="cuda")
+    if POSMODE == "clamp": return torch.full((n,), W - 1, device="cuda")
+    return W // 2 + torch.arange(n, device="cuda") % (W // 2)
+print(f"positions after the first window: {POSMODE}", flush=True)
+if os.environ.get("MILLION_CARRIER_WRAP"):                 # carrier rotation positions modulo this (assoc.py pos_wrap)
+    for mx in m.mix:
+        if hasattr(mx, "theta"): mx.pos_wrap = int(os.environ["MILLION_CARRIER_WRAP"])
+    print(f"carrier rotation positions wrapped at {os.environ['MILLION_CARRIER_WRAP']}", flush=True)
 score = stream[-256:]
 torch.cuda.reset_peak_memory_stats()
 def measure(total):
@@ -39,7 +58,7 @@ def measure(total):
         for wi in range(nwin):
             xw = torch.tensor(ids[wi * W:(wi + 1) * W], device="cuda").unsqueeze(0)
             if xw.shape[1] < 2: break
-            h = m.e(xw) + m.p(torch.arange(xw.shape[1], device="cuda"))
+            h = m.e(xw) + m.p(positions(wi, xw.shape[1]))
             for i, (mx, mp) in enumerate(zip(m.mix, m.mlp)):
                 h, st[i] = mx(h, st[i]); h = mp(h)
             last = h
@@ -52,6 +71,31 @@ def measure(total):
 
 # For a full-attention model the cache grows with every token it reads, so it runs out of memory somewhere
 # on the way to a million. WHERE it runs out is the result, and is printed rather than hidden.
+# MANY PASSAGES (2026-10-02): the 8k-vs-32k comparison rested on ONE 256-token passage. MILLION_SAMPLES=K scores K
+# passages ending at evenly spaced points of the stream, each after every context length, paired, with a standard error.
+if int(os.environ.get("MILLION_SAMPLES", "0")):
+    K = int(os.environ["MILLION_SAMPLES"]); res = {t: [] for t in TARGETS}
+    for kk in range(K):
+        end = N - kk * (N - max(TARGETS) - 256) // max(1, K)
+        for total in TARGETS:
+            ids = stream[end - (total + 256):end]; st = [None] * m.layers
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                for wi in range((len(ids) + W - 1) // W):
+                    xw = torch.tensor(ids[wi * W:(wi + 1) * W], device="cuda").unsqueeze(0)
+                    if xw.shape[1] < 2: break
+                    h = m.e(xw) + m.p(positions(wi, xw.shape[1]))
+                    for i, (mx, mp) in enumerate(zip(m.mix, m.mlp)): h, st[i] = mx(h, st[i]); h = mp(h)
+                    last = h
+                lg = F.linear(m.n(last)[0, -256:], m.e.weight).float()[:-1]
+                nats = float(F.cross_entropy(lg, torch.tensor(ids[-255:], device="cuda"), reduction="sum"))
+            nb = len(tok.decode([int(t) for t in ids[-255:]]).encode("utf-8"))
+            res[total].append(nats / nb / np.log(2))
+    base = np.array(res[TARGETS[0]])
+    for total in TARGETS:
+        v = np.array(res[total]); dlt = v - base
+        print(f"  {total:>9,} tokens of context: {v.mean():.4f} bits/byte over {K} passages; vs {TARGETS[0]:,}: "
+              f"{dlt.mean():+.4f} +- {1.96 * dlt.std(ddof=1) / np.sqrt(K) if K > 1 else 0:.4f}", flush=True)
+    sys.exit(0)
 ran_out = False
 for total in TARGETS:
     try:
@@ -61,7 +105,7 @@ for total in TARGETS:
         print(f"  {total:>9,} tokens of context: OUT OF MEMORY at a 20 GiB cap -- this model's cache grows with every token", flush=True)
         ran_out = True
         break
-if ran_out:
+if ran_out or len(sys.argv) > 2:
     sys.exit(0)
 
 ids = stream[-(1_048_576 + 256):]

@@ -1,0 +1,22 @@
+SHORT-CONVOLUTION A/B, 2026-10-01 13:00 UTC
+[   892.6s]   eval step 196000: BPB 1.1050  (952k bytes)
+[  1756.2s]   eval step 200000: BPB 1.1039  (952k bytes)
+[     1.4s] ADDED short causal convolutions (K=4, identity) to 9 carrier layers
+[     1.4s] optimizer starts COLD: the added convolutions have no state, and the saved state's parameter order no longer matches
+[  1155.9s]   eval step 196000: BPB 1.1049  (952k bytes)
+[  2384.4s]   eval step 200000: BPB 1.1039  (952k bytes)
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/ab_ctrl/ckpt.pt
+facts in context                         Carrier
+10                          46.8% +- 4.4 (n=500)
+30                          47.2% +- 4.4 (n=500)
+60                          35.6% +- 4.2 (n=500)
+120                         31.0% +- 4.1 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  47.5% +- 9.0   early-mid  25.9% +- 7.4   late-mid  26.4% +- 7.7   latest  25.4% +- 7.7
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/ab_conv/ckpt.pt
+facts in context                         Carrier
+10                          46.6% +- 4.4 (n=500)
+30                          47.6% +- 4.4 (n=500)
+60                          35.8% +- 4.2 (n=500)
+120                         30.6% +- 4.0 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  45.8% +- 9.0   early-mid  25.9% +- 7.4   late-mid  27.2% +- 7.8   latest  24.6% +- 7.6
+CONV_AB_DONE 2026-10-01 13:13 UTC

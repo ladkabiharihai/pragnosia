@@ -1,0 +1,24 @@
+MQAR A/B, 2026-10-02 13:37 UTC
+[     0.3s] 5.8M params, carrier 18.3%, 0.13B tokens = 22.7 tok/param
+[    66.3s] final loss 0.5074 ppl 1.7, 26 spike-skips
+MQAR, 32 pairs among random filler, 2048 tokens, 200 fresh sequences; /mnt/kv_cache/mq_noconv/ckpt.pt
+  key      <512 tokens back:   0.1%  (1/1509)   chance 0.10%
+  key  512-1023 tokens back:   0.1%  (1/1685)   chance 0.10%
+  key     1024+ tokens back:   0.0%  (1/3206)   chance 0.10%
+[     0.3s] 5.8M params, carrier 18.4%, 0.13B tokens = 22.6 tok/param
+[    28.4s] final loss 1.2084 ppl 3.3, 423 spike-skips
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/mqar.py", line 53, in <module>
+    sd = torch.load(sys.argv[2], map_location="cuda", weights_only=False)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 1565, in load
+    with _open_file_like(f, "rb") as opened_file:
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 795, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 776, in __init__
+    super().__init__(open(name, mode))  # noqa: SIM115
+                     ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/mnt/kv_cache/mq_conv/ckpt.pt'
+MQAR_DONE 2026-10-02 13:38 UTC

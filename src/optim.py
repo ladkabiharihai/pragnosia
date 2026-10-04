@@ -103,7 +103,7 @@ def _update(p, g, vr, vc, v, m, lr, b1: float, b2: float, eps: float, wd: float,
 
 
 def _sfp_update(p, g, z, vr, vc, v, p0, s, d, dlr, ckp1, xy, du, acc, b2: float, b3: float, eps: float,
-                wsp=None, w=None, b1: float = 0.9):
+                wsp=None, w=None, b1: float = 0.9, live=None):
     """SCHEDULE-FREE PRODIGY, one parameter, fused (goal 8 + training efficiency). The same mathematics as
     prodigy-plus-schedule-free at its defaults (Adam-style Prodigy, Schedule-Free, StableAdamW rms clip, factored
     second moment), written so it compiles into one kernel group and replays inside the captured optimizer step:
@@ -111,13 +111,18 @@ def _sfp_update(p, g, z, vr, vc, v, p0, s, d, dlr, ckp1, xy, du, acc, b2: float,
       second moment  v <- b2 v + (1-b2) d^2 g^2 (factored for 2-D, Adafactor estimator); update = d g / (sqrt(v) + d eps)
       rms clip       update /= sqrt(max(1, rms(update)))
       Prodigy stats  on every 11th element, against z BEFORE this step: s <- b3 s + du g; numerator += du <g, p0 - z>
-      schedule-free  y <- y + ckp1 (z - y); z <- z - dlr u; y <- y - dlr xy u     (the parameter holds y)"""
+      schedule-free  y <- y + ckp1 (z - y); z <- z - dlr u; y <- y - dlr xy u     (the parameter holds y)
+    live: a 0-d 1.0 / 0.0 from the spike guard. 0 makes the step a TRUE no-op. A zeroed gradient is not one here: the
+    average still pulls y toward z, the moments decay and the clocks tick, so a burst of skipped steps drifted the
+    weights and inflated the next real updates, which raised the gradient norm, which skipped more steps. That loop
+    stopped run80 three times and swa_8192 twice (2026-10-02); with the guard off the same runs trained cleanly."""
+    L = live if live is not None else 1.0
     gf = torch.nan_to_num(g.float(), nan=0.0, posinf=0.0, neginf=0.0)
     d2 = d * d
     if vr is not None:
         sq = gf.square()
-        vr.mul_(b2).add_(sq.mean(dim=1) * ((1 - b2) * d2))
-        vc.mul_(b2).add_(sq.mean(dim=0) * ((1 - b2) * d2))
+        vr.mul_(1 - L * (1 - b2)).add_(sq.mean(dim=1) * ((1 - b2) * d2) * L)
+        vc.mul_(1 - L * (1 - b2)).add_(sq.mean(dim=0) * ((1 - b2) * d2) * L)
         if gf.shape[0] > gf.shape[1]:
             # AS THE PACKAGE DOES for a tall matrix (token embedding, position table): its row/column normaliser is a
             # mean over a size-1 axis, so the estimate reduces to the PER-ROW mean square. Found by stepping both
@@ -127,32 +132,32 @@ def _sfp_update(p, g, z, vr, vc, v, p0, s, d, dlr, ckp1, xy, du, acc, b2: float,
         else:
             denom = ((vr / vr.mean().clamp_min(1e-30)).unsqueeze(1) * vc.unsqueeze(0)).sqrt()
     else:
-        v.mul_(b2).add_(gf.square() * ((1 - b2) * d2))
+        v.mul_(1 - L * (1 - b2)).add_(gf.square() * ((1 - b2) * d2) * L)
         denom = v.sqrt()
     upd = (gf * d) / (denom + d * eps)
     rms = (upd.norm() / (upd.numel() ** 0.5)).clamp_min(1.0)
     upd = upd * torch.rsqrt(rms)
     zf = z.float()
     sg = gf.reshape(-1)[::11]; sz = zf.reshape(-1)[::11]
-    acc[0] += torch.dot(sg, p0.float() - sz) * du
-    s.mul_(b3).add_((sg * du).to(s.dtype))
-    acc[1] += s.float().abs().sum()
+    acc[0] += torch.dot(sg, p0.float() - sz) * du * L
+    s.mul_(1 - L * (1 - b3)).add_((sg * du * L).to(s.dtype))
+    acc[1] += s.float().abs().sum() * L
     y = p.float()
     if wsp is not None:
         # A CLOCK PER WEIGHT (2026-09-30). The schedule-free average weights step t by dlr_t^2 / (sum of those so far).
         # One sum per group is exact while every weight started together, but capacity added mid-run then enters the
         # average at ~1/t per step (1/30,000 at step 30k): invisible for thousands of steps, and growth never paid.
         # Each weight keeps its own sum: the old ones are untouched, a new one starts at zero and switches on at once.
-        tot = wsp + w
-        c = w / tot
+        tot = wsp + w * L
+        c = torch.where(tot > 0, w * L / tot.clamp_min(1e-38), torch.zeros_like(tot))
         y = y + c * (zf - y)
-        z.sub_((upd * dlr).to(z.dtype))
-        y = y - upd * (dlr * (1 - b1 * (1 - c)))
-        wsp.add_(w)
+        z.sub_((upd * dlr * L).to(z.dtype))
+        y = y - upd * (dlr * (1 - b1 * (1 - c))) * L
+        wsp.add_(w * L)
     else:
-        y = y + ckp1 * (zf - y)
-        z.sub_((upd * dlr).to(z.dtype))
-        y = y - upd * (dlr * xy)
+        y = y + ckp1 * L * (zf - y)
+        z.sub_((upd * dlr * L).to(z.dtype))
+        y = y - upd * (dlr * xy) * L
     p.copy_(y.to(p.dtype))
 
 
@@ -351,15 +356,54 @@ class Fabric(Optimizer):
                 st["wsp"] = torch.zeros_like(p, dtype=torch.float32) + f["ws"]   # a checkpoint without clocks keeps its average)
             fn(p.detach(), p.grad, st["z"], st.get("vr"), st.get("vc"), st.get("v"), st["p0"], st["s"],
                f["d"], f["dlr"], f["ckp1"], f["xy"], f["du"], f["acc"], b2, b3, 1e-8,
-               st["wsp"] if gp.get("sfp_clock", True) else None, f["w"], b1)
+               st["wsp"] if gp.get("sfp_clock", True) else None, f["w"], b1, self._live_t(dev))
         # end of step: the Prodigy estimate, exactly as the package (numerator decays by b3; a negative contribution is
         # kept only once d has left d0 or the contribution is positive; d_hat limited to 2^0.25 d; d only rises)
+        L = self._live_t(dev)                    # a skipped step moves none of these either
+        if getattr(self, "share_d", False):
+            # ONE step size for the whole model, as in Prodigy itself (Mishchenko & Defazio): this group's statistics go
+            # into the shared sums and the shared d is settled once all groups have stepped (_share_d_update)
+            sh = self._shared(dev); sh["num"] += f["acc"][0]; sh["den"] += f["acc"][1]
+            f["ws"].add_(f["w"] * L); f["acc"].zero_()
+            return
         num, den = f["acc"][0], f["acc"][1]
         keep = (f["d"] > d0) | (num > 0)
-        f["dnum"].copy_(f["dnum"] * b3 + torch.where(keep, num, torch.zeros_like(num)))
+        f["dnum"].copy_(f["dnum"] * (1 - L * (1 - b3)) + torch.where(keep, num, torch.zeros_like(num)))
         dhat = torch.minimum(f["d"] * 2 ** 0.25, f["dnum"] / den.clamp_min(1e-38))
-        f["d"].copy_(torch.where(den > 0, torch.maximum(f["d"], dhat), f["d"]))
-        f["ws"].add_(f["w"]); f["acc"].zero_()
+        if not gp.get("freeze_d"):              # (train.py --freeze-d: a diagnostic, the step size held where it stands)
+            f["d"].copy_(torch.where((den > 0) & (L > 0), torch.maximum(f["d"], dhat), f["d"]))
+        f["ws"].add_(f["w"] * L); f["acc"].zero_()
+
+    def _live_t(self, dev):
+        """the spike guard's keep flag as a persistent 0-d device tensor (1.0 unless set_live says otherwise), so the
+        captured optimizer step reads it at replay"""
+        if getattr(self, "_live", None) is None: self._live = torch.ones((), device=dev)
+        return self._live
+
+    def set_live(self, keep):
+        """called by the trainer before every step with the guard's decision (a 0-d bool tensor on the device)"""
+        self._live_t(keep.device).copy_(keep.float())
+
+    def _shared(self, dev):
+        if getattr(self, "_sh", None) is None:
+            g0 = self.param_groups[0]["sf"]
+            self._sh = dict(num=torch.zeros((), device=dev), den=torch.zeros((), device=dev),
+                            dnum=g0["dnum"].clone(), d=g0["d"].clone())
+        return self._sh
+
+    def _share_d_update(self):
+        """settle the shared step size from every group's statistics (exactly the per-group rule on the sums), then hand it
+        to every group, so the next step's per-group scalars all derive from one d"""
+        sfs = [gp["sf"] for gp in self.param_groups if gp.get("sfp") and gp.get("sf") is not None]
+        if not sfs: return
+        sh = self._shared(sfs[0]["d"].device); L = self._live_t(sfs[0]["d"].device)
+        b3 = self.param_groups[0]["betas"][1] ** 0.5; d0 = 1e-6
+        keep = (sh["d"] > d0) | (sh["num"] > 0)
+        sh["dnum"].copy_(sh["dnum"] * (1 - L * (1 - b3)) + torch.where(keep, sh["num"], torch.zeros_like(sh["num"])))
+        dhat = torch.minimum(sh["d"] * 2 ** 0.25, sh["dnum"] / sh["den"].clamp_min(1e-38))
+        sh["d"].copy_(torch.where((sh["den"] > 0) & (L > 0), torch.maximum(sh["d"], dhat), sh["d"]))
+        sh["num"].zero_(); sh["den"].zero_()
+        for f in sfs: f["d"].copy_(sh["d"]); f["dnum"].copy_(sh["dnum"])
 
     def _run(self, fill_lr=True):
         """One step over all groups, through _update (eager or fused).
@@ -385,6 +429,7 @@ class Fabric(Optimizer):
                 cos = a[0] / (a[1] * a[2]).sqrt().clamp_min(1e-30)
                 gp["lr_t"].mul_(torch.exp(self.hyper_beta * cos)).clamp_(1e-7, 1.0)
                 a.zero_()
+        if getattr(self, "share_d", False): self._share_d_update()
 
     def _addresses(self):
         out = []

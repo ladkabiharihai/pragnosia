@@ -1,0 +1,49 @@
+PASSKEY RETRIEVAL, 2026-10-01 13:15 UTC
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 8575.06it/s]
+PASSKEY: five digits in filler, greedy exact match, 5 depths x 4 keys per length; /mnt/kv_cache/r98r/ckpt.pt
+tokens             Carrier      GPT-2 124M   (ours by depth 0 / 25 / 50 / 75 / 100%)
+512            55% (11/20)     80% (16/20)   0/4 / 3/4 / 3/4 / 3/4 / 2/4
+2048             5% (1/20)    does not fit   0/4 / 0/4 / 0/4 / 0/4 / 1/4
+8192             0% (0/20)    does not fit   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+32768            0% (0/20)    does not fit   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+131072           0% (0/20)    does not fit   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+PASSKEY: five digits in filler, greedy exact match, 5 depths x 4 keys per length; /mnt/kv_cache/ab_ctrl/ckpt.pt
+tokens             Carrier   (ours by depth 0 / 25 / 50 / 75 / 100%)
+512             45% (9/20)   0/4 / 3/4 / 3/4 / 3/4 / 0/4
+2048             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+8192             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+32768            0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+131072           0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/incontext.py", line 65, in <module>
+    models = [("Carrier", Ours(CK, "/mnt/kv_cache/tok_v8192.json"), None)] + \
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/src/bench.py", line 42, in __init__
+    sd = torch.load(path, map_location=device)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 1565, in load
+    with _open_file_like(f, "rb") as opened_file:
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 795, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/serialization.py", line 776, in __init__
+    super().__init__(open(name, mode))  # noqa: SIM115
+                     ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/mnt/kv_cache/ab_long/ckpt.pt'
+PASSKEY_DONE 2026-10-01 13:16 UTC
+PASSKEY: five digits in filler, greedy exact match, 5 depths x 4 keys per length; /mnt/kv_cache/ab_long/ckpt.pt
+tokens             Carrier   (ours by depth 0 / 25 / 50 / 75 / 100%)
+512             45% (9/20)   0/4 / 3/4 / 3/4 / 3/4 / 0/4
+2048             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+8192             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+32768            0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+131072           0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+PASSKEY: five digits in filler, greedy exact match, 5 depths x 4 keys per length; /mnt/kv_cache/ab_needle/ckpt.pt
+tokens             Carrier   (ours by depth 0 / 25 / 50 / 75 / 100%)
+512            60% (12/20)   0/4 / 4/4 / 3/4 / 3/4 / 2/4
+2048             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+8192             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+32768            0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+131072           0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+NEEDLE_ALL_DONE 2026-10-01 14:49 UTC

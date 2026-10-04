@@ -1,0 +1,35 @@
+DIAGNOSTICS 2, 2026-10-02 12:57 UTC
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact; /mnt/kv_cache/ab_long/ckpt.pt
+   D=64 miss: wanted 29933, wrote ' "The Priya team is a very'
+  distance     64 tokens:   0.0% (0/24)
+   D=256 miss: wanted 914286, wrote ' The Lukas team meet in room'
+  distance    256 tokens:   0.0% (0/24)
+   D=1024 miss: wanted 27242, wrote ' "The Treasury\'s N'
+  distance   1024 tokens:   0.0% (0/24)
+   D=4096 miss: wanted 341127, wrote '\n\nThe wilderness is located'
+  distance   4096 tokens:   0.0% (0/24)
+   D=16384 miss: wanted 285043, wrote ' The secret code of the Christian faith is'
+  distance  16384 tokens:   0.0% (0/24)
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact; /mnt/kv_cache/ab_needle/ckpt.pt
+   D=64 miss: wanted 540686, wrote ' 440686\nWhat is the'
+  distance     64 tokens:  41.7% (10/24)
+   D=256 miss: wanted 748898, wrote ' 628578\nQ: What'
+  distance    256 tokens:  62.5% (15/24)
+   D=1024 miss: wanted 27242, wrote ' 99262\nQuestion:'
+  distance   1024 tokens:   4.2% (1/24)
+   D=4096 miss: wanted 341127, wrote ' 6786949\nQuestion'
+  distance   4096 tokens:   0.0% (0/24)
+   D=16384 miss: wanted 285043, wrote ' 525545\nQuestion:'
+  distance  16384 tokens:   0.0% (0/24)
+PASSKEY: five digits in filler, greedy exact match, 5 depths x 2 keys per length; /mnt/kv_cache/ab_needle/ckpt.pt
+tokens             Carrier   (ours by depth 0 / 25 / 50 / 75 / 100%)
+512             70% (7/10)   0/2 / 2/2 / 2/2 / 2/2 / 1/2
+   L=2048 depth 0.5: wanted 96654, wrote ' blue. The sun is blue. The'
+2048            10% (1/10)   0/2 / 0/2 / 0/2 / 0/2 / 1/2
+== same-context test over many passages: ab_ctrl
+      8,192 tokens of context: 1.0651 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.1182 bits/byte over 24 passages; vs 8,192: +0.0531 +- 0.0156
+== same-context test over many passages: ab_long
+      8,192 tokens of context: 1.0622 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.1150 bits/byte over 24 passages; vs 8,192: +0.0528 +- 0.0157
+DIAG2_DONE 2026-10-02 13:01 UTC

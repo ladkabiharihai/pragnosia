@@ -19,6 +19,30 @@ from .spin import SpinCarrier
 from .assoc import AssocCarrier
 
 
+_SWA_MASKS, _SWA_FLEX = {}, None
+def _swa(q, k, v, w):
+    """TRUE SLIDING-WINDOW causal attention: query i (the last len(q) of the len(k) positions) sees the w positions
+    ending at itself, in training and at inference alike. flex_attention with a block mask keeps it fused and linear
+    in length; one compiled kernel, one mask per (query length, key length, window)."""
+    global _SWA_FLEX
+    from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+    # INSIDE a compiled region call flex_attention itself (the compiler lowers it to the fused kernel); OUTSIDE, call a
+    # compiled copy made outside any trace. The first version created that copy lazily on the first call, which in
+    # training happened INSIDE the compiled trunk: the copy never became a compiled kernel, and the trials' eager
+    # held-out pass then ran flex's reference maths, a full 8 x 8,192 x 8,192 score matrix, 24 GiB (run80, 2026-10-02).
+    if torch.compiler.is_compiling():
+        fa = flex_attention
+    else:
+        if _SWA_FLEX is None: _SWA_FLEX = torch.compile(flex_attention)
+        fa = _SWA_FLEX
+    Lq, Lk = q.shape[2], k.shape[2]; off = Lk - Lq
+    key = (Lq, Lk, w, q.device)
+    if key not in _SWA_MASKS:
+        def mm(b, h, qi, ki): return (qi + off >= ki) & (qi + off - ki < w)
+        _SWA_MASKS[key] = create_block_mask(mm, B=None, H=None, Q_LEN=Lq, KV_LEN=Lk, device=q.device)
+    return fa(q, k, v, block_mask=_SWA_MASKS[key])
+
+
 class Attn(nn.Module):
     """Causal self-attention. BASELINE ONLY.
 
@@ -32,8 +56,13 @@ class Attn(nn.Module):
     norm median rose 1.15 -> 5.0 and every step from 15,400 on was skipped by the spike guard while the spin
     run at identical settings took 57 skips in 120,000. The control must be the strongest attention I can
     field, or "spin wins" means nothing."""
-    def __init__(self, d: int, heads: int = 8, window: int = 0, read_state: int = 0):
+    def __init__(self, d: int, heads: int = 8, window: int = 0, read_state: int = 0, sliding: bool = False):
         super().__init__()
+        # sliding: a TRUE sliding window everywhere (_swa). Without it the window is BLOCK-LOCAL in training (independent
+        # 512-token blocks: a token sees 0-511 back depending on where it sits in its block), sliding at decode, and
+        # FULL causal over the window for a prefill whose length is not a multiple of the window -- three different
+        # functions, found 2026-10-02 when retrieval stopped dead at the window. Kept for checkpoints trained that way.
+        self.sliding = sliding
         self.n = nn.LayerNorm(d); self.h = heads
         # read_state: head dimension of the carrier memory this layer is allowed to read, 0 for none. The
         # 1:2 hybrid recovered three quarters of attention's exact recall with a 512-token window but its
@@ -70,6 +99,35 @@ class Attn(nn.Module):
         else:
             q, k, v = [t(z).view(B_, T_, self.h, D // self.h).transpose(1, 2) for t in (self.q, self.k, self.v)]
         q, k = self.qn(q), self.kn(k)
+        if self.window and self.sliding:
+            if h0 is not None:
+                k = torch.cat([h0[0], k], dim=2); v = torch.cat([h0[1], v], dim=2)
+            if T_ == 1:
+                # decode: the ring, a fixed-size cache of the window (shapes constant for the captured decode step).
+                # Slots the graphed decode pads with zeros are not keys: masked (a real key is RMS-normed, never zero)
+                k = k[:, :, -self.window:]; v = v[:, :, -self.window:]
+                # ONE QUERY AGAINST THE WINDOW AS TWO MATRIX-VECTOR PRODUCTS. Through SDPA this picked a float32
+                # memory-efficient kernel built for long queries: 3.25 ms per token for three layers at an 8,192
+                # window, 167 tok/s against 431 at 512 (2026-10-03).
+                sc = (q.float() @ k.float().transpose(-1, -2)) * (q.shape[-1] ** -0.5)
+                sc = sc.masked_fill(~(k.abs().amax(-1) > 0).unsqueeze(2), float("-inf"))
+                a = (sc.softmax(-1) @ v.float()).to(q.dtype)
+            else:
+                a = _swa(q, k, v, self.window)
+            return x + self.o(self._state_read(a, z, mem, B_, T_, D)), (k[:, :, -self.window:], v[:, :, -self.window:])
+        if h0 is not None and self.window and T_ > self.window:
+            # A WHOLE NEW WINDOW ARRIVING WITH A CACHE (long-context prefill: the carrier's state carries, attention's
+            # cache came along). The ring branch below kept only the LAST `window` keys of cache + new, so every query
+            # before the last `window` of the new tokens had NO visible key: its row was fully masked and the layer
+            # output zeros for 7,680 of 8,192 tokens in every window after the first (found 2026-10-03). Every
+            # block-local "more context hurts" measurement past 8,192 went through this. Block-local semantics: a
+            # block-aligned window ignores the cache, exactly as in training; any other length sees a true sliding window.
+            if T_ % self.window == 0:
+                h0 = None
+            else:
+                k = torch.cat([h0[0], k], dim=2); v = torch.cat([h0[1], v], dim=2)
+                a = _swa(q, k, v, self.window)
+                return x + self.o(self._state_read(a, z, mem, B_, T_, D)), (k[:, :, -self.window:], v[:, :, -self.window:])
         if h0 is not None:
             if self.window and h0[0].shape[2] == self.window:
                 # A RING, NOT A LIST. Once the cache is full, decoding rolls it: the shapes never change again,
@@ -223,11 +281,13 @@ class GatedLinear(nn.Module):
 
 
 class LM(nn.Module):
-    def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512, mixer="spin", norm="ln"):
+    def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512, mixer="spin", norm="ln", short_conv=0,
+                 attn_window=512, attn_sliding=False, attn_windows=None):
         """mixer: "spin" (plain carrier), "gspin" (input and output gates), "fspin" (input and recurrence
         gates: per-token forgetting), "aspin" (associative: content-addressed memory), "attn" (control)."""
         super().__init__()
         self.vocab, self.d, self.layers, self.ctx, self.mixer, self.norm = vocab, d, layers, ctx, mixer, norm
+        self.attn_window, self.attn_sliding = attn_window, attn_sliding
         self.e = nn.Embedding(vocab, d)
         self.p = nn.Embedding(ctx, d)
         mk = {"spin": lambda d: SpinCarrier(d), "gspin": lambda d: SpinCarrier(d, gated="io"),
@@ -296,7 +356,7 @@ class LM(nn.Module):
               # 16 at 1024), so widening adds whole heads -- like the carrier -- instead of widening each head,
               # which changed every QK-normalised score (2026-09-23). No state read: it measured as dead weight.
               # Built with norm="rms": RMSNorm over zero-padded dimensions is an exact rescale, LayerNorm is not.
-              "grspin": lambda d, i: (Attn(d, heads=d // 64, window=512) if i % 4 == 3 else
+              "grspin": lambda d, i: (Attn(d, heads=d // 64, window=attn_window, sliding=attn_sliding) if i % 4 == 3 else
                                       AssocCarrier(d, delta=True, head_dim=128)),
               "attn": Attn}[mixer]
         self.mix = nn.ModuleList([mk(d, i) if mixer in ("altspin", "alt4spin", "rspin", "trspin", "r6spin", "grspin") else mk(d) for i in range(layers)])
@@ -311,6 +371,21 @@ class LM(nn.Module):
                     if isinstance(child, nn.LayerNorm):
                         setattr(mod, nm, nn.RMSNorm(child.normalized_shape[0]))
         self.apply(self._init)
+        # per-layer attention windows {layer index: window}, where they differ from attn_window (2026-10-03: one long-range
+        # layer for retrieval while the others stay short, so the carrier still has to carry)
+        self.attn_windows = {int(k_): int(v_) for k_, v_ in (attn_windows or {}).items()}
+        for k_, v_ in self.attn_windows.items(): self.mix[k_].window = v_
+        # short causal convolutions on every carrier's q, k, v (AssocCarrier.add_short_conv), identity at birth
+        self.short_conv = 0
+        if short_conv: self.add_short_conv(short_conv)
+
+    def add_short_conv(self, K: int):
+        """ADD A SHORT CAUSAL CONVOLUTION (K tokens) to every carrier layer, PRESERVING THE FUNCTION EXACTLY: each
+        starts as the identity. See AssocCarrier.add_short_conv for why (in-context lookup, 2026-10-01)."""
+        for mx in self.mix:
+            if hasattr(mx, "add_short_conv"): mx.add_short_conv(K)
+        self.short_conv = K
+        return self
 
     @staticmethod
     def _init(m):
@@ -323,21 +398,26 @@ class LM(nn.Module):
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
 
-    def trunk(self, x):
+    def trunk(self, x, states=None, carry=False):
         """Everything but the output head: the normalised final representation, (B, T, d).
 
         `mem` carries the most recent carrier layer's per-chunk states forward, so an attention layer built
-        with read_state can query the memory the layers beneath it wrote."""
-        h = self.e(x) + self.p(torch.arange(x.shape[1], device=x.device))
-        mem = None
-        for mx, mp in zip(self.mix, self.mlp):
+        with read_state can query the memory the layers beneath it wrote.
+        carry=True (train.py --carry): `states` are the layers' states from the previous window of the same streams
+        (None at a stream's start), and the new states are returned too -- training exactly as inference runs."""
+        # modulo the table: a training window longer than the table wraps its positions, exactly as inference does
+        # at every window boundary with the state carried (train.py --pos-table); identical for windows <= the table
+        h = self.e(x) + self.p(torch.arange(x.shape[1], device=x.device) % self.p.num_embeddings)
+        mem = None; new = []
+        for i, (mx, mp) in enumerate(zip(self.mix, self.mlp)):
             if getattr(mx, "read_state", 0):
-                h = mp(mx(h, mem=mem)[0])
+                o_, st_ = mx(h, mem=mem)
             else:
-                h = mp(mx(h)[0])
+                o_, st_ = mx(h, states[i]) if states is not None else mx(h)
                 if getattr(mx, "sent", None) is not None:
                     mem = mx.sent
-        return self.n(h)
+            h = mp(o_); new.append(st_)
+        return (self.n(h), new) if carry else self.n(h)
 
     def loss(self, h, y, chunks=4, ul_alpha=0.0, ul_window=128):
         """Cross-entropy from the trunk output WITHOUT materialising all the logits at once (goal 6).
@@ -371,7 +451,9 @@ class LM(nn.Module):
     def forward(self, x, return_hidden=False, hidden_layer=None):
         """hidden_layer selects WHICH representation to return. The final one is what the output head reads,
         so it is the least informative place to look for signal the head has not already used."""
-        h = self.e(x) + self.p(torch.arange(x.shape[1], device=x.device))
+        # modulo the table: a training window longer than the table wraps its positions, exactly as inference does
+        # at every window boundary with the state carried (train.py --pos-table); identical for windows <= the table
+        h = self.e(x) + self.p(torch.arange(x.shape[1], device=x.device) % self.p.num_embeddings)
         grab = None; mem = None
         for i, (mx, mp) in enumerate(zip(self.mix, self.mlp)):
             if getattr(mx, "read_state", 0):
@@ -427,7 +509,7 @@ class LM(nn.Module):
         import math as _m
         d = self.d; k = dn - d
         fresh = LM(self.vocab, dn, self.layers, self.mlp[0].a.weight.shape[0] // d, self.ctx, self.mixer,
-                   norm=getattr(self, "norm", "ln"))
+                   norm=getattr(self, "norm", "ln"), attn_window=getattr(self, "attn_window", 512), attn_sliding=getattr(self, "attn_sliding", False))
         fresh = fresh.to(self.e.weight.device)
         grown = {}
         def put(mod, name, new):
@@ -548,6 +630,7 @@ class LM(nn.Module):
         sqrt(d/d_new) to compensate. The residual error is the shift in the mean, second order for a stream
         whose mean is already near zero; the test measures it. (RMSNorm would make it exact; LayerNorm is kept
         so the grown model stays the same architecture as the runs it is compared with.)"""
+        assert not getattr(self, "short_conv", 0), "growth of a model with short convolutions is not implemented yet"
         d, dn = self.d, d_new
         assert dn > d, (d, dn)
         assert self.mixer in ("spin", "gspin", "fspin", "aspin", "dspin", "hspin", "hdspin",
@@ -639,9 +722,10 @@ class LM(nn.Module):
         argument as deepen(): a layer whose output projections are zero is the identity, under any norm, so this
         works on the LayerNorm lineage that cannot be widened exactly. New knowledge can then be written into the
         new layers alone, with every old weight frozen, instead of over what was already known."""
+        assert not getattr(self, "short_conv", 0), "growth of a model with short convolutions is not implemented yet"
         L = self.layers
         big = LM(self.vocab, self.d, L + k, self.mlp[0].a.weight.shape[0] // self.d, self.ctx, self.mixer,
-                 norm=getattr(self, "norm", "ln")).to(self.e.weight.device)
+                 norm=getattr(self, "norm", "ln"), attn_window=getattr(self, "attn_window", 512), attn_sliding=getattr(self, "attn_sliding", False)).to(self.e.weight.device)
         big.e.load_state_dict(self.e.state_dict()); big.p.load_state_dict(self.p.state_dict())
         big.n.load_state_dict(self.n.state_dict())
         for j in range(L):
@@ -667,10 +751,11 @@ class LM(nn.Module):
         0,1,2,7,8,9,10,15,... of 24, and the new ones fill the gaps as blocks of attention + three carriers
         spread through the depth. Returns the new model; its .new_layers lists the added indices, which
         param_groups() trains with absolute steps."""
+        assert not getattr(self, "short_conv", 0), "growth of a model with short convolutions is not implemented yet"
         L = self.layers
         assert self.mixer in ("rspin", "grspin"), self.mixer
         big = LM(self.vocab, self.d, 2 * L, self.mlp[0].a.weight.shape[0] // self.d, self.ctx, self.mixer,
-                 norm=getattr(self, "norm", "ln"))
+                 norm=getattr(self, "norm", "ln"), attn_window=getattr(self, "attn_window", 512), attn_sliding=getattr(self, "attn_sliding", False))
         big = big.to(self.e.weight.device)
         # old layer j keeps its type: rspin puts attention at i % 4 == 3 in both stacks
         oldpos, p = [], 0

@@ -1,0 +1,24 @@
+SHORT CONVOLUTION FROM SCRATCH, 2026-10-02 13:19 UTC
+[     0.4s] 18.1M params, carrier 26.2%, 0.33B tokens = 18.1 tok/param
+[   191.3s]   eval step 5000: BPB 1.5582  (235k bytes)
+[   286.3s]   eval step 10000: BPB 1.4517  (235k bytes)
+[   381.5s]   eval step 15000: BPB 1.4048  (235k bytes)
+[   476.8s]   eval step 20000: BPB 1.3755  (235k bytes)
+[     0.4s] 18.2M params, carrier 26.3%, 0.33B tokens = 18.0 tok/param
+[   134.4s]   eval step 5000: BPB 1.6123  (235k bytes)
+[   253.0s]   eval step 10000: BPB 1.4844  (235k bytes)
+[   371.8s]   eval step 15000: BPB 1.4304  (235k bytes)
+[   490.5s]   eval step 20000: BPB 1.3973  (235k bytes)
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact; /mnt/kv_cache/cs_noconv/ckpt.pt
+  distance     64 tokens:   0.0% (0/48)
+  distance    256 tokens:   0.0% (0/48)
+  distance    768 tokens:   0.0% (0/48)
+  distance   1024 tokens:   0.0% (0/48)
+  distance   1536 tokens:   0.0% (0/48)
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact; /mnt/kv_cache/cs_conv/ckpt.pt
+  distance     64 tokens:   0.0% (0/48)
+  distance    256 tokens:   2.1% (1/48)
+  distance    768 tokens:   0.0% (0/48)
+  distance   1024 tokens:   0.0% (0/48)
+  distance   1536 tokens:   0.0% (0/48)
+CONV_SCRATCH_DONE 2026-10-02 13:20 UTC

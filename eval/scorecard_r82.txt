@@ -1,0 +1,348 @@
+
+################ 1, 5  QUESTION ANSWERING, right / WRONG / declined: fine-tuned, abstention-tuned, GPT-2, SmolLM2 (/mnt/kv_cache/r82_sft/ckpt.pt, /mnt/kv_cache/r82_abst/ckpt.pt)
+   2026-10-03 13:05 UTC
+model                       EVERYDAY      SCIQ ARC(4-way)   (48 / 1,000 / 3530 questions; greedy)
+  [ours-finetuned] everyday 48/48  running 25.0%  1.9 q/s  26s
+  [ours-finetuned] sciq 100/1000  running 7.0%  2.1 q/s  47s
+  [ours-finetuned] sciq 200/1000  running 6.5%  3.1 q/s  64s
+  [ours-finetuned] sciq 300/1000  running 7.3%  3.8 q/s  80s
+  [ours-finetuned] sciq 400/1000  running 7.0%  4.4 q/s  92s
+  [ours-finetuned] sciq 500/1000  running 7.0%  4.9 q/s  101s
+  [ours-finetuned] sciq 600/1000  running 6.7%  5.6 q/s  108s
+  [ours-finetuned] sciq 700/1000  running 6.1%  6.2 q/s  114s
+  [ours-finetuned] sciq 800/1000  running 6.6%  6.6 q/s  121s
+  [ours-finetuned] sciq 900/1000  running 6.3%  7.1 q/s  127s
+  [ours-finetuned] sciq 1000/1000  running 6.8%  7.5 q/s  133s
+  [ours-finetuned] arc 500/3530  running 21.4%  5.5 q/s  91s
+  [ours-finetuned] arc 1000/3530  running 20.3%  7.5 q/s  133s
+  [ours-finetuned] arc 1500/3530  running 27.1%  9.5 q/s  158s
+  [ours-finetuned] arc 2000/3530  running 31.7%  10.8 q/s  185s
+  [ours-finetuned] arc 2500/3530  running 34.6%  11.4 q/s  219s
+  [ours-finetuned] arc 3000/3530  running 37.0%  12.4 q/s  243s
+  [ours-finetuned] arc 3500/3530  running 38.6%  13.2 q/s  265s
+ours-finetuned                 25.0%      6.8%      38.7%
+                           EVERYDAY right  25.0%  WRONG  75.0%  declined   0.0%  -> accuracy when it answers  25.0%
+                           SCIQ     right   6.8%  WRONG  93.2%  declined   0.0%  -> accuracy when it answers   6.8%
+  [ours-abstaining] everyday 48/48  running 29.2%  20.8 q/s  2s
+  [ours-abstaining] sciq 100/1000  running 1.0%  24.5 q/s  4s
+  [ours-abstaining] sciq 200/1000  running 1.5%  26.3 q/s  8s
+  [ours-abstaining] sciq 300/1000  running 1.7%  27.1 q/s  11s
+  [ours-abstaining] sciq 400/1000  running 2.2%  27.5 q/s  15s
+  [ours-abstaining] sciq 500/1000  running 2.4%  27.6 q/s  18s
+  [ours-abstaining] sciq 600/1000  running 2.2%  26.9 q/s  22s
+  [ours-abstaining] sciq 700/1000  running 2.0%  27.1 q/s  26s
+  [ours-abstaining] sciq 800/1000  running 2.2%  27.2 q/s  29s
+  [ours-abstaining] sciq 900/1000  running 2.4%  27.2 q/s  33s
+  [ours-abstaining] sciq 1000/1000  running 2.6%  27.6 q/s  36s
+  [ours-abstaining] arc 500/3530  running 21.0%  21.7 q/s  23s
+  [ours-abstaining] arc 1000/3530  running 19.9%  21.6 q/s  46s
+  [ours-abstaining] arc 1500/3530  running 26.2%  21.5 q/s  70s
+  [ours-abstaining] arc 2000/3530  running 30.9%  21.6 q/s  93s
+  [ours-abstaining] arc 2500/3530  running 34.4%  21.6 q/s  116s
+  [ours-abstaining] arc 3000/3530  running 36.9%  21.6 q/s  139s
+  [ours-abstaining] arc 3500/3530  running 38.5%  21.6 q/s  162s
+ours-abstaining                29.2%      2.6%      38.6%
+                           EVERYDAY right  29.2%  WRONG  62.5%  declined   8.3%  -> accuracy when it answers  31.8%
+                           SCIQ     right   2.6%  WRONG  53.3%  declined  44.1%  -> accuracy when it answers   4.7%
+  [GPT-2 124M] everyday 48/48  running 16.7%  3.7 q/s  13s
+  [GPT-2 124M] sciq 100/1000  running 4.0%  5.8 q/s  17s
+  [GPT-2 124M] sciq 200/1000  running 3.0%  6.0 q/s  33s
+  [GPT-2 124M] sciq 300/1000  running 2.7%  6.0 q/s  50s
+  [GPT-2 124M] sciq 400/1000  running 2.0%  6.1 q/s  66s
+  [GPT-2 124M] sciq 500/1000  running 2.0%  6.1 q/s  82s
+  [GPT-2 124M] sciq 600/1000  running 1.8%  6.1 q/s  98s
+  [GPT-2 124M] sciq 700/1000  running 2.1%  6.1 q/s  114s
+  [GPT-2 124M] sciq 800/1000  running 2.0%  6.1 q/s  130s
+  [GPT-2 124M] sciq 900/1000  running 2.1%  6.1 q/s  146s
+  [GPT-2 124M] sciq 1000/1000  running 2.2%  6.2 q/s  162s
+  [GPT-2 124M] arc 500/3530  running 17.8%  39.8 q/s  13s
+  [GPT-2 124M] arc 1000/3530  running 17.1%  42.1 q/s  24s
+  [GPT-2 124M] arc 1500/3530  running 23.4%  43.6 q/s  34s
+  [GPT-2 124M] arc 2000/3530  running 27.0%  44.4 q/s  45s
+  [GPT-2 124M] arc 2500/3530  running 30.1%  44.6 q/s  56s
+  [GPT-2 124M] arc 3000/3530  running 32.3%  45.0 q/s  67s
+  [GPT-2 124M] arc 3500/3530  running 33.7%  45.4 q/s  77s
+GPT-2 124M                     16.7%      2.2%      33.8%
+                           EVERYDAY right  16.7%  WRONG  60.4%  declined  22.9%  -> accuracy when it answers  21.6%
+                           SCIQ     right   2.2%  WRONG  80.7%  declined  17.1%  -> accuracy when it answers   2.7%
+  [SmolLM2-135M] everyday 48/48  running 62.5%  1.2 q/s  41s
+  [SmolLM2-135M] sciq 100/1000  running 12.0%  1.8 q/s  56s
+  [SmolLM2-135M] sciq 200/1000  running 12.0%  1.8 q/s  112s
+  [SmolLM2-135M] sciq 300/1000  running 10.3%  1.8 q/s  166s
+  [SmolLM2-135M] sciq 400/1000  running 10.0%  1.8 q/s  220s
+  [SmolLM2-135M] sciq 500/1000  running 11.2%  1.8 q/s  274s
+  [SmolLM2-135M] sciq 600/1000  running 11.8%  1.8 q/s  329s
+  [SmolLM2-135M] sciq 700/1000  running 12.0%  1.8 q/s  383s
+  [SmolLM2-135M] sciq 800/1000  running 12.0%  1.8 q/s  438s
+  [SmolLM2-135M] sciq 900/1000  running 12.6%  1.8 q/s  492s
+  [SmolLM2-135M] sciq 1000/1000  running 12.7%  1.8 q/s  548s
+  [SmolLM2-135M] arc 500/3530  running 23.0%  13.2 q/s  38s
+  [SmolLM2-135M] arc 1000/3530  running 26.1%  13.5 q/s  74s
+  [SmolLM2-135M] arc 1500/3530  running 32.6%  13.6 q/s  110s
+  [SmolLM2-135M] arc 2000/3530  running 39.2%  13.7 q/s  145s
+  [SmolLM2-135M] arc 2500/3530  running 43.8%  13.8 q/s  181s
+  [SmolLM2-135M] arc 3000/3530  running 46.6%  13.8 q/s  217s
+  [SmolLM2-135M] arc 3500/3530  running 48.3%  13.8 q/s  253s
+SmolLM2-135M                   62.5%     12.7%      48.4%
+                           EVERYDAY right  62.5%  WRONG  37.5%  declined   0.0%  -> accuracy when it answers  62.5%
+                           SCIQ     right  12.7%  WRONG  86.8%  declined   0.5%  -> accuracy when it answers  12.8%
+
+THE ANSWERS THEMSELVES (greedy, first 160 characters):
+
+  Q: What is the capital of France?
+     ours-finetuned           'The capital of France is Paris.'
+     ours-abstaining          'The capital of France is Paris.'
+     GPT-2 124M               'The capital of France.'
+     SmolLM2-135M             'Paris.'
+
+  Q: Who wrote Romeo and Juliet?
+     ours-finetuned           'Romeo and Juliet is a 19th century French novel written by Jean-Baptiste Leforti.'
+     ours-abstaining          'Romeo and Juliet is a 19th century French novel written by Jean-Baptiste Lamarque.'
+     GPT-2 124M               "I'm not sure."
+     SmolLM2-135M             'Who wrote Romeo and Juliet?'
+
+  Q: Why is the sky blue?
+     ours-finetuned           "The sky is blue because of the way the light from the sun is absorbed by the Earth's atmosphere."
+     ours-abstaining          "The sky is blue because of the way the sun's rays are stretched to shield the sun from the solar wind."
+     GPT-2 124M               "I'm not sure why the sky blue is blue."
+     SmolLM2-135M             "Because it reflects the sun's light."
+
+  Q: What causes the seasons on Earth?
+     ours-finetuned           "The seasons on Earth are caused by the Earth's tilt, rotation, and the movement of tectonic plates."
+     ours-abstaining          "The seasons are caused by the Earth's tilt, which is the rotation of the Earth's axis."
+     GPT-2 124M               'The seasons on Earth are the seasons of the Earth.'
+     SmolLM2-135M             "The Earth's axis is tilted 23.5 degrees from the plane of its orbit."
+
+  Q: How do plants make their food?
+     ours-finetuned           'Plants make their food by breaking down plant material into smaller pieces.'
+     ours-abstaining          'Plants make their food by breaking down plant cell walls into smaller fragments.'
+     GPT-2 124M               'Plants are the most important food for humans.'
+     SmolLM2-135M             'Plants make their food by using sunlight and water.'
+
+  Q: What is the largest planet in our solar system?
+     ours-finetuned           'The largest planet in our solar system is the Sun.'
+     ours-abstaining          'The largest planet in our solar system is Mercury, located in the constellation of Vesta.'
+     GPT-2 124M               'The largest planet in our solar system is the Earth.'
+     SmolLM2-135M             'Jupiter.'
+
+  Q: Explain what gravity is in one sentence.
+     ours-finetuned           'Gravity is a force that exists in one place, but it does not interact with the other forces.'
+     ours-abstaining          'Gravity is a force that is attractive to objects in a vacuum, such as air or water.'
+     GPT-2 124M               'Gravity is the amount of energy that can be transferred from one object to another.'
+     SmolLM2-135M             'Explain what gravity is in one sentence.'
+
+  Q: What is photosynthesis?
+     ours-finetuned           'Photosynthesis is the process by which plants, algae, and some bacteria convert light energy into chemical energy.'
+     ours-abstaining          'Photosynthesis is the process by which plants, algae, and some bacteria convert light energy into chemical energy.'
+     GPT-2 124M               'Photosynthesis is the process of converting carbon dioxide into energy.'
+     SmolLM2-135M             'Photosynthesis is the process by which plants and other organisms use sunlight to make their own food.'
+
+  Q: Who was the first president of the United States?
+     ours-finetuned           'The first president of the United States was George Washington.'
+     ours-abstaining          'George Washington'
+     GPT-2 124M               "I'm not sure."
+     SmolLM2-135M             'George Washington.'
+
+  Q: What is two plus two?
+     ours-finetuned           'Two plus two is equal to two plus two.'
+     ours-abstaining          'Two plus two is equal to two plus two.'
+     GPT-2 124M               'Two plus two.'
+     SmolLM2-135M             'Two plus two equals four.'
+
+################ 1, 4, 9  CONTEXT ROT, FACTS + CALIBRATION, INDUCTION, INFERENCE MEMORY (/mnt/kv_cache/run82_final.pt)
+   2026-10-03 13:34 UTC
+
+============================================================================================
+1. CONTEXT ROT: bits per byte on held-out text as the window grows
+============================================================================================
+  window        final        GPT-2
+     512       1.1594       1.2167
+    1024       1.1193       1.2249
+    2048       1.1157   (max 1024)
+    4096       1.1039   (max 1024)
+    8192       1.0889   (max 1024)
+
+============================================================================================
+3. INFERENCE EFFICIENCY: decode rate and the memory held while decoding
+============================================================================================
+  final              404 tok/s   peak   1153.6 MiB
+  GPT-2 124M         248 tok/s   peak   1200.0 MiB
+
+============================================================================================
+6. FACTS and CALIBRATION: four-way, scored by total log-probability
+============================================================================================
+  final          27/48   confidence when right 0.761, when wrong 0.547, separation +0.214
+  GPT-2 124M     33/48   confidence when right 0.737, when wrong 0.550, separation +0.186
+
+============================================================================================
+9. INDUCTION on material no model can have memorised (random consonant-vowel pairs), no prompt cue
+============================================================================================
+  final           97.0%   (n=400, chance 25%)
+  GPT-2 124M      98.5%   (n=400, chance 25%)
+
+============================================================================================
+78. GENERATION QUALITY and LONG-GENERATION HORIZON, judged by the other model
+============================================================================================
+  the band: real held-out text scores 1.072 under GPT-2 (10-90%: 0.954-1.188)
+  final at temperature 0.9: 1.476
+  final at temperature 1.0: 1.627
+  final at temperature 1.1: 2.305
+  -> best temperature 0.9, scoring 1.476
+
+  32,768 tokens at temperature 0.9, in band while:
+          0-4,096     1.476          commonest token  6.0% '\n'
+      4,096-8,192     1.372          commonest token 58.3% '\n'
+      8,192-12,288    0.225          commonest token 32.6% "''"
+     12,288-16,384    0.068          commonest token 49.9% ';'
+     16,384-20,480    0.224          commonest token 49.7% '\\'
+     20,480-24,576    0.092          commonest token 25.0% ';'
+     24,576-28,672    0.531          commonest token 46.8% ';'
+     28,672-32,768    0.114          commonest token 37.3% ' \\'
+  HORIZON: 0 tokens in band
+
+  START: ' with Barnum’s Landy September 10, 1935.\n\nAfter the bond of ordinary people doesn’t last long so Barnum gets promoted and on the Sears Tower until late of the mission.\n\nUltimately there will be more than enough people to settle and add to t'
+
+  MIDDLE: ';\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\,\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\;\\'
+
+wrote /mnt/kv_cache/nine_axes.json
+
+################ 9  IN-CONTEXT LOOKUP, HARD: every wrong option is another answer from the same context (/mnt/kv_cache/r82_sft/ckpt.pt)
+   2026-10-03 13:37 UTC
+Facts are read, not trained on: the weights never change, so nothing known can be forgotten.  HARD: every wrong option is another answer from the same context.
+
+facts in context                 Carrier            GPT-2 124M
+10                         70.0% ( 158 tok)         40.0% ( 130 tok)
+30                         53.3% ( 470 tok)         33.3% ( 398 tok)
+60                         55.0% ( 938 tok)         43.3% ( 788 tok)
+120                        35.8% (1894 tok)does not fit (1581 tok)
+
+No facts in context at all (what each model guesses cold): Carrier 21.7%   GPT-2 124M 29.2%   (chance 25%)
+
+Carrier with all 120 facts in context (1894 tokens), accuracy by how far back the fact sits:
+   facts   1-30  (the earliest quarter): 3.3%
+   facts  31-60  (the middle quarter): 20.0%
+   facts  61-90  (the middle quarter): 63.3%
+   facts  91-120 (the most recent quarter): 73.3%
+
+################ 9  RETRIEVAL: passkey (standard, out of distribution), needles by distance (real prose), lookup with error bars (/mnt/kv_cache/r82_sft/ckpt.pt / /mnt/kv_cache/run82_final.pt)
+   2026-10-03 13:39 UTC
+PASSKEY: five digits in filler, greedy exact match, 5 depths x 4 keys per length; /mnt/kv_cache/run82_final.pt
+tokens             Carrier      GPT-2 124M   (ours by depth 0 / 25 / 50 / 75 / 100%)
+512            70% (14/20)     80% (16/20)   0/4 / 4/4 / 4/4 / 4/4 / 2/4
+2048            40% (8/20)    does not fit   0/4 / 0/4 / 0/4 / 4/4 / 4/4
+8192             0% (0/20)    does not fit   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+32768            0% (0/20)    does not fit   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact; /mnt/kv_cache/run82_final.pt
+  distance     64 tokens: 100.0% (24/24)
+  distance    256 tokens: 100.0% (24/24)
+  distance   1024 tokens:  16.7% (4/24)
+  distance   4096 tokens:   0.0% (0/24)
+  distance   7000 tokens:   0.0% (0/24)
+  distance  16384 tokens:   0.0% (0/24)
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/r82_sft/ckpt.pt
+facts in context                         Carrier                    GPT-2 124M
+10                          59.8% +- 4.3 (n=500)          39.6% +- 4.3 (n=500)
+30                          58.8% +- 4.3 (n=500)          36.8% +- 4.2 (n=500)
+60                          59.0% +- 4.3 (n=500)          36.8% +- 4.2 (n=500)
+120                         37.8% +- 4.3 (n=500)                  does not fit
+Carrier at 120 facts, by where the fact sits: earliest   4.2% +- 3.6   early-mid  11.9% +- 5.5   late-mid  67.2% +- 8.2   latest  68.9% +- 8.2
+
+################ 9  CONTEXT PAST THE TRAINING WINDOW: the same passages after 8k vs 32k of context, 24 passages, paired (/mnt/kv_cache/run82_final.pt)
+   2026-10-03 13:50 UTC
+      8,192 tokens of context: 1.0403 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.0398 bits/byte over 24 passages; vs 8,192: -0.0006 +- 0.0010
+
+################ 6  ONE MILLION TOKENS OF CONTEXT: memory and bits per byte (/mnt/kv_cache/run82_final.pt)
+   2026-10-03 13:50 UTC
+checkpoint /mnt/kv_cache/run82_final.pt
+model ctx 8192, state per layer 6 heads
+positions after the first window: wrap
+      8,192 tokens of context: 1.1424 bits/byte      5.7 s to ingest   peak 2.41 GiB
+     32,768 tokens of context: 1.1431 bits/byte      0.1 s to ingest   peak 2.89 GiB
+    131,072 tokens of context: 1.1421 bits/byte      0.3 s to ingest   peak 2.89 GiB
+    524,288 tokens of context: 1.1421 bits/byte      1.1 s to ingest   peak 2.89 GiB
+  1,048,576 tokens of context: 1.1426 bits/byte      2.1 s to ingest   peak 2.89 GiB
+
+  generated after 1,048,576 tokens of context:
+  '.\n\n\\label{${}^{2 \\l{F}\\l{{}^{2}{\\l{F}\\l{F}{}^{2}{\\l{F}\\l{F}\\l{F}{}^{2}{\\l{F}\\l{F}{}^{2}{\\l{F}\\l{F}\\l{F}{}^{2}{\\l{F}\\l{F'
+
+################ 1  GENERATION QUALITY: words, surprise and variety together, against GPT-2 (/mnt/kv_cache/run82_final.pt)
+   2026-10-03 13:50 UTC
+                         words     bpb  variety   (1,024 generated tokens, mean of 5 prompts)
+REAL HELD-OUT TEXT        0.79    1.15     0.99
+ours (run82_final) t=0.8    0.85    0.95     0.94
+ours (run82_final) t=0.85    0.83    1.07     0.99
+ours (run82_final) t=0.9    0.83    1.27     0.99
+GPT-2 124M t=0.8          0.86    0.67     0.90
+GPT-2 124M t=0.9          0.85     nan     1.00
+GPT-2 124M t=1.0          0.82    1.53     1.00
+
+  a sample from each at its best setting:
+  ours : ' with the narrative about the Town of Drummond, as it was actually founded in 1819.\nThe political history of the site is the supporting image of the depiction of a war that has continued for decades. In that sense, the geographical description of this site is the representation of the people who left the city after the war and at the same time'
+  GPT-2: ' done.\n\nSince coming to the city in 2004, the Ann Arbor Metro Chamber of Commerce has worked to build economic development on Lake Michigan, developing its own historical landmarks and regional bus routes. The Chamber is also planning a No car-residivism efforts, which includes new fundraising for a local retail building and a massive new program to provide free bus rides for students. The Organic Arts Library,'
+
+################ 7  LEARNING WITHOUT FORGETTING, NO RATE: whole model, + self-rehearsal, new layers only (/mnt/kv_cache/r82_sft/ckpt.pt)
+   2026-10-03 13:53 UTC
+120 invented facts, 360 training sentences, 150 steps, schedule-free Prodigy, no rate; /mnt/kv_cache/r82_sft/ckpt.pt
+
+                          NEW before  NEW after  OLD before  OLD after  TEXT before  TEXT after
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
+whole model, no rate          25.0%      93.3%      75.0%      64.6%       1.2080      1.8711   (train loss 0.368)
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
+whole + self-rehearsal, no rate      25.0%      91.7%      75.0%      56.2%       1.2080      2.1406   (train loss 0.227)
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
++4 layers only, no rate       25.0%      35.8%      75.0%      43.8%       1.2080      2.4510   (train loss 0.853)
+
+Learning without forgetting: NEW rises, OLD and TEXT hold. Chance on NEW is 25%.
+
+################ 7, 8  GROWTH AND RATE DECIDED BY THE MODEL (from its training log)
+   2026-10-03 14:00 UTC
+[   471.3s]   eval step 200000: BPB 1.0986  (952k bytes)
+[   912.4s]     RECONSIDER at step 202000: this stage's length has doubled to 4000 steps; TRIAL of R vs unchanged, 1000 steps each
+[   926.4s]     REACH doubled to a 1024-token window at step 202000: same-row loss 2.5053 -> 2.5070
+[  1153.4s]     TRIAL R: grown branch 2.8036 -> 2.8010 over 1000 steps at 97.7M
+[  1161.4s]     TRIAL: now the same 1000 steps unchanged
+[  1387.0s]     TRIAL R: behind unchanged (2.8010 vs 2.7997), marginal gain per 1e12 param-steps 0.0522
+[  1387.0s]     TRIAL R: marginal held-out gain per 1e12 param-steps over the last 500 steps: grown 0.0522 vs unchanged 0.0399; grown behind (2.8010 vs 2.7997)
+[  1387.0s]     DECISION at step 204000: STAY. Held-out gain per unit compute 0.000 unchanged vs 0.000 grown (2.8036 -> 2.7997 vs -> 2.8010); will reconsider when this stage's length doubles again
+[  1878.3s]     RECONSIDER at step 206000: this stage's length has doubled to 8000 steps; TRIAL of R vs unchanged, 1000 steps each
+[  1887.4s]     REACH doubled to a 1024-token window at step 206000: same-row loss 2.4955 -> 2.4957
+[  2112.9s]     TRIAL R: grown branch 2.7930 -> 2.7898 over 1000 steps at 97.7M
+[  2120.7s]     TRIAL: now the same 1000 steps unchanged
+[  2427.5s]   eval step 208000: BPB 1.0927  (952k bytes)
+[  2429.2s]     TRIAL R: behind unchanged (2.7898 vs 2.7897), marginal gain per 1e12 param-steps 0.0417
+[  2429.2s]     TRIAL R: marginal held-out gain per 1e12 param-steps over the last 500 steps: grown 0.0417 vs unchanged 0.0324; grown behind (2.7898 vs 2.7897)
+[  2429.2s]     DECISION at step 208000: STAY. Held-out gain per unit compute 0.000 unchanged vs 0.000 grown (2.7930 -> 2.7897 vs -> 2.7898); will reconsider when this stage's length doubles again
+[  4079.2s]     RECONSIDER at step 214000: this stage's length has doubled to 16000 steps; TRIAL of R vs unchanged, 1000 steps each
+[  4087.4s]     REACH doubled to a 1024-token window at step 214000: same-row loss 2.4770 -> 2.4764
+[  4312.0s]     TRIAL R: grown branch 2.7751 -> 2.7712 over 1000 steps at 97.7M
+[  4319.7s]     TRIAL: now the same 1000 steps unchanged
+[  4547.6s]   eval step 216000: BPB 1.0872  (952k bytes)
+[  4548.7s]     TRIAL R: ahead of unchanged (2.7712 vs 2.7730), marginal gain per 1e12 param-steps 0.0472
+[  4548.7s]     TRIAL R: marginal held-out gain per 1e12 param-steps over the last 500 steps: grown 0.0472 vs unchanged 0.0206; grown ahead (2.7712 vs 2.7730)
+[  4556.5s]     DECISION at step 216000: GROW (R). Held-out gain per unit compute 0.000 grown vs 0.000 unchanged (2.7751 -> 2.7712 vs -> 2.7730); continuing from the grown branch at 97.7M
+[  5458.1s]     RECONSIDER at step 220000: this stage's length has doubled to 4000 steps; TRIAL of R vs unchanged, 1000 steps each
+[  5472.7s]     REACH doubled to a 2048-token window at step 220000: same-row loss 2.4641 -> 2.4645
+[  5703.7s]     TRIAL R: grown branch 2.7619 -> 2.7671 over 1000 steps at 97.7M
+[  5711.5s]     TRIAL: now the same 1000 steps unchanged
+[  5940.7s]     TRIAL R: behind unchanged (2.7671 vs 2.7599), marginal gain per 1e12 param-steps 0.0314
+[  5940.7s]     TRIAL R: marginal held-out gain per 1e12 param-steps over the last 500 steps: grown 0.0314 vs unchanged 0.0198; grown behind (2.7671 vs 2.7599)
+[  5940.7s]     DECISION at step 222000: STAY. Held-out gain per unit compute 0.000 unchanged vs 0.000 grown (2.7619 -> 2.7599 vs -> 2.7671); will reconsider when this stage's length doubles again
+[  6425.9s]     RECONSIDER at step 224000: this stage's length has doubled to 8000 steps; TRIAL of R vs unchanged, 1000 steps each
+[  6430.2s]   eval step 224000: BPB 1.0803  (952k bytes)
+[  6438.8s]     REACH doubled to a 2048-token window at step 224000: same-row loss 2.4562 -> 2.4563
+[  6669.8s]     TRIAL R: grown branch 2.7563 -> 2.7604 over 1000 steps at 97.7M
+[  6678.0s]     TRIAL: now the same 1000 steps unchanged
+[  6908.8s]     TRIAL R: behind unchanged (2.7604 vs 2.7547), marginal gain per 1e12 param-steps 0.0260
+[  6908.8s]     TRIAL R: marginal held-out gain per 1e12 param-steps over the last 500 steps: grown 0.0260 vs unchanged 0.0156; grown behind (2.7604 vs 2.7547)
+[  6908.8s]     DECISION at step 226000: STAY. Held-out gain per unit compute 0.000 unchanged vs 0.000 grown (2.7563 -> 2.7547 vs -> 2.7604); will reconsider when this stage's length doubles again
+[  8269.0s]     RECONSIDER at step 232000: this stage's length has doubled to 16000 steps; TRIAL of R vs unchanged, 1000 steps each
+[  8271.9s]   eval step 232000: BPB 1.0756  (952k bytes)
+[  8280.7s]     REACH doubled to a 2048-token window at step 232000: same-row loss 2.4405 -> 2.4412
+[  8515.4s]     TRIAL R: grown branch 2.7484 -> 2.7505 over 1000 steps at 97.7M
+[  8523.5s]     TRIAL: now the same 1000 steps unchanged
+[  8756.9s]     TRIAL R: behind unchanged (2.7505 vs 2.7474), marginal gain per 1e12 param-steps 0.0151
+[  8756.9s]     TRIAL R: marginal held-out gain per 1e12 param-steps over the last 500 steps: grown 0.0151 vs unchanged 0.0066; grown behind (2.7505 vs 2.7474)
+[  8756.9s]     DECISION at step 234000: STAY. Held-out gain per unit compute 0.000 unchanged vs 0.000 grown (2.7484 -> 2.7474 vs -> 2.7505); will reconsider when this stage's length doubles again
+SCORECARD_DONE 2026-10-03 14:00 UTC
+EVAL_r82_DONE 2026-10-03 14:00 UTC

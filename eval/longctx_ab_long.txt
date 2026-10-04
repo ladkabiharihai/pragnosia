@@ -1,0 +1,15 @@
+LONG-WINDOW A/B (long, second corpus tokrecall), 2026-10-01 13:59 UTC
+[  2358.4s] 199400/200000 loss 2.4318 ppl 11.4 lr 1.00e+00 210 ktok/s (last 200: 218) eta 3m 29.4 GiB d 3.14e-05 1.23e-04
+[  2428.5s] 199600/200000 loss 2.4502 ppl 11.6 lr 1.00e+00 209 ktok/s (last 200: 187) eta 2m 29.4 GiB d 3.14e-05 1.23e-04
+[  2490.2s] 199800/200000 loss 2.4170 ppl 11.2 lr 1.00e+00 209 ktok/s (last 200: 212) eta 1m 29.4 GiB d 3.14e-05 1.23e-04
+[  2550.4s] 200000/200000 loss 2.3935 ppl 11.0 lr 1.00e+00 209 ktok/s (last 200: 218) eta 0m 29.4 GiB d 3.14e-05 1.23e-04
+[  2552.9s]   eval step 200000: BPB 1.1035  (952k bytes)
+== ctrl
+      8,192 tokens of context: 1.1169 bits/byte      4.5 s to ingest   peak 2.31 GiB
+     32,768 tokens of context: 1.1445 bits/byte      0.1 s to ingest   peak 2.31 GiB
+    131,072 tokens of context: 1.1450 bits/byte      0.2 s to ingest   peak 2.31 GiB
+== long
+      8,192 tokens of context: 1.1085 bits/byte      4.5 s to ingest   peak 2.31 GiB
+     32,768 tokens of context: 1.1375 bits/byte      0.1 s to ingest   peak 2.31 GiB
+    131,072 tokens of context: 1.1375 bits/byte      0.2 s to ingest   peak 2.31 GiB
+LONG_POST_DONE 2026-10-01 14:00 UTC

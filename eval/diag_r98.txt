@@ -1,0 +1,50 @@
+DIAGNOSTICS on the 98M lineage, 2026-10-01 11:06 UTC, card to ourselves (prod aside)
+################ IN-CONTEXT LOOKUP, POWERED (hard distractors): where is the ability lost?
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/run70_98M.pt
+facts in context                         Carrier                    GPT-2 124M
+10                          33.2% +- 4.1 (n=500)          39.6% +- 4.3 (n=500)
+30                          27.6% +- 3.9 (n=500)          36.8% +- 4.2 (n=500)
+60                          26.8% +- 3.9 (n=500)          36.8% +- 4.2 (n=500)
+120                         24.0% +- 3.7 (n=500)                  does not fit
+Carrier at 120 facts, by where the fact sits: earliest  36.4% +- 8.7   early-mid  17.8% +- 6.4   late-mid  20.8% +- 7.1   latest  22.1% +- 7.4
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/r98r/ckpt.pt
+facts in context                         Carrier
+10                          38.6% +- 4.3 (n=500)
+30                          34.0% +- 4.2 (n=500)
+60                          29.2% +- 4.0 (n=500)
+120                         24.8% +- 3.8 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  50.8% +- 9.0   early-mid  15.6% +- 6.1   late-mid  19.2% +- 6.9   latest  15.6% +- 6.4
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/r98_sft/ckpt.pt
+facts in context                         Carrier
+10                          38.0% +- 4.3 (n=500)
+30                          34.8% +- 4.2 (n=500)
+60                          31.8% +- 4.1 (n=500)
+120                         22.8% +- 3.7 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  49.2% +- 9.0   early-mid  17.8% +- 6.4   late-mid  13.6% +- 6.0   latest  12.3% +- 5.8
+################ POSITIONS PAST THE 8,192-TOKEN WINDOW: same final 256 tokens, more context (r98r)
+positions after the first window: wrap
+      8,192 tokens of context: 1.1195 bits/byte      4.5 s to ingest   peak 2.34 GiB
+     32,768 tokens of context: 1.1430 bits/byte      0.1 s to ingest   peak 2.34 GiB
+    131,072 tokens of context: 1.1433 bits/byte      0.2 s to ingest   peak 2.34 GiB
+positions after the first window: clamp
+      8,192 tokens of context: 1.1131 bits/byte      4.5 s to ingest   peak 2.34 GiB
+     32,768 tokens of context: 1.1478 bits/byte      0.1 s to ingest   peak 2.34 GiB
+    131,072 tokens of context: 1.1481 bits/byte      0.2 s to ingest   peak 2.34 GiB
+positions after the first window: half
+      8,192 tokens of context: 1.1179 bits/byte      4.6 s to ingest   peak 2.34 GiB
+     32,768 tokens of context: 1.1428 bits/byte      0.1 s to ingest   peak 2.34 GiB
+    131,072 tokens of context: 1.1440 bits/byte      0.2 s to ingest   peak 2.34 GiB
+DIAG_DONE 2026-10-01 11:27 UTC
+################ LEARNING WITHOUT FORGETTING, NO RATE (schedule-free Prodigy at defaults), r98_sft, 2026-10-01 11:27 UTC
+120 invented facts, 360 training sentences, 150 steps, schedule-free Prodigy, no rate; /mnt/kv_cache/r98_sft/ckpt.pt
+
+                          NEW before  NEW after  OLD before  OLD after  TEXT before  TEXT after
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
+whole model, no rate          19.2%      84.2%      66.7%      58.3%       1.1899      1.6243   (train loss 0.370)
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
+whole + self-rehearsal, no rate      19.2%      88.3%      66.7%      58.3%       1.1899      1.9521   (train loss 0.229)
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
++4 layers only, no rate       19.2%      36.7%      66.7%      47.9%       1.1899      2.3731   (train loss 0.834)
+
+Learning without forgetting: NEW rises, OLD and TEXT hold. Chance on NEW is 25%.
+CONT_DONE 2026-10-01 11:33 UTC

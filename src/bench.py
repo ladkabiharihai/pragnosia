@@ -153,6 +153,9 @@ class Ours:
             for s_ in states:
                 if isinstance(s_, tuple) and len(s_) == 2 and torch.is_tensor(s_[0]) and not torch.is_tensor(s_[1]):
                     out.append((s_[0], torch.tensor(float(s_[1]), device=dev)))    # assoc: (S, p0) with p0 an int
+                elif isinstance(s_, tuple) and len(s_) == 3 and torch.is_tensor(s_[0]) and not torch.is_tensor(s_[1]):
+                    # assoc with short convolutions: (S, p0, the last K-1 q/k/v inputs)
+                    out.append((s_[0], torch.tensor(float(s_[1]), device=dev), s_[2]))
                 else:
                     out.append(tuple(s_))
             return out
@@ -163,7 +166,14 @@ class Ours:
             win = getattr(blk, "window", 0)            # NOT w: w is the context width the position wraps on,
             if win and isinstance(fresh[i], tuple) and torch.is_tensor(fresh[i][0]) and fresh[i][0].shape[2] < win:
                 pad = win - fresh[i][0].shape[2]       # and clobbering it made the wrap a modulo by zero
-                fresh[i] = tuple(torch.cat([t[:, :, :1].expand(-1, -1, pad, -1), t], dim=2) for t in fresh[i])
+                if getattr(blk, "sliding", False):
+                    # ZEROS, which the sliding layer's decode masks out. Copies of the first key (below) are attended
+                    # like real keys: with a short prompt and an 8,192-token window that is ~8,190 copies of one token,
+                    # and run80's greedy text left the exact eager decode after 7 tokens (2026-10-03).
+                    fresh[i] = tuple(torch.cat([torch.zeros_like(t[:, :, :1]).expand(-1, -1, pad, -1), t], dim=2)
+                                     for t in fresh[i])
+                else:                                  # unchanged for the block-local checkpoints already scored
+                    fresh[i] = tuple(torch.cat([t[:, :, :1].expand(-1, -1, pad, -1), t], dim=2) for t in fresh[i])
         if getattr(self, "_g", None) is None:
             st = [tuple(t.clone().contiguous() for t in s_) for s_ in fresh]
             tok = torch.zeros(1, 1, dtype=torch.long, device=dev)

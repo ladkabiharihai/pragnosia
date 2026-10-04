@@ -1,0 +1,37 @@
+model                       EVERYDAY      SCIQ ARC(4-way)   (48 / 1,000 / 3530 questions; greedy)
+ours-98M-fullmix               16.7%      3.2%      37.5%
+                           EVERYDAY right  16.7%  WRONG  83.3%  declined   0.0%  -> accuracy when it answers  16.7%
+                           SCIQ     right   3.2%  WRONG  96.8%  declined   0.0%  -> accuracy when it answers   3.2%
+
+THE ANSWERS THEMSELVES (greedy, first 160 characters):
+
+  Q: What is the capital of France?
+     ours-98M-fullmix         'The capital of France is the capital of France.'
+
+  Q: Who wrote Romeo and Juliet?
+     ours-98M-fullmix         'Romeo and Juliet is a fictional character from the 1950s and 1950s films.'
+
+  Q: Why is the sky blue?
+     ours-98M-fullmix         'The sky is blue.'
+
+  Q: What causes the seasons on Earth?
+     ours-98M-fullmix         "The Earth's climate is characterized by a variety of climatic factors, including temperature and precipitation patterns, which can lead to changes in the distri"
+
+  Q: How do plants make their food?
+     ours-98M-fullmix         'Plants are a diverse group of organisms that are adapted to a wide range of ecological niches.'
+
+  Q: What is the largest planet in our solar system?
+     ours-98M-fullmix         'The planet is the largest planet in the solar system, with an estimated mass of approximately 1.2 billion solar masses.'
+
+  Q: Explain what gravity is in one sentence.
+     ours-98M-fullmix         'Gravitational forces are the forces that cause the particles of the theory to collapse under their own gravity, causing the particles to come together and form '
+
+  Q: What is photosynthesis?
+     ours-98M-fullmix         'Photosynthesis is the process of converting carbon dioxide (CO2) to CO2, which is the process of photosynthesis.'
+
+  Q: Who was the first president of the United States?
+     ours-98M-fullmix         'The US Supreme Court has granted the right to a fair trial by the US Supreme Court for the existence of the United States, which was signed on December 17, 1787'
+
+  Q: What is two plus two?
+     ours-98M-fullmix         'Two sides of a right triangle triangle.'
+QA_R98FULL_DONE 2026-10-01 11:05 UTC

@@ -1,0 +1,22 @@
+ONE LONG-RANGE LAYER vs control, from run82_final, 2026-10-03 15:16 UTC
+== long7: [     1.6s] attention windows set per layer: {7: 8192} [   491.2s]   eval step 240000: BPB 1.0720  (952k bytes) [  1177.7s]   eval step 243000: BPB 1.0699  (952k bytes) 
+      8,192 tokens of context: 1.0594 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.0597 bits/byte over 24 passages; vs 8,192: +0.0003 +- 0.0023
+    131,072 tokens of context: 1.0598 bits/byte over 24 passages; vs 8,192: +0.0004 +- 0.0022
+  distance    256 tokens: 100.0% (24/24)
+  distance   1024 tokens:  25.0% (6/24)
+  distance   4096 tokens:   0.0% (0/24)
+  distance   7000 tokens:   0.0% (0/24)
+2048            25% (5/20)   0/4 / 0/4 / 0/4 / 4/4 / 1/4
+8192             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+== ctrl: [   475.0s]   eval step 240000: BPB 1.0712  (952k bytes) [  1148.2s]   eval step 243000: BPB 1.0695  (952k bytes) 
+      8,192 tokens of context: 1.0617 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.0606 bits/byte over 24 passages; vs 8,192: -0.0011 +- 0.0011
+    131,072 tokens of context: 1.0607 bits/byte over 24 passages; vs 8,192: -0.0010 +- 0.0010
+  distance    256 tokens: 100.0% (24/24)
+  distance   1024 tokens:  25.0% (6/24)
+  distance   4096 tokens:   0.0% (0/24)
+  distance   7000 tokens:   4.2% (1/24)
+2048            30% (6/20)   0/4 / 0/4 / 0/4 / 4/4 / 2/4
+8192             0% (0/20)   0/4 / 0/4 / 0/4 / 0/4 / 0/4
+ONELONG_DONE 2026-10-03 16:07 UTC

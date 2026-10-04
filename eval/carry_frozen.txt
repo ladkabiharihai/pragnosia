@@ -1,0 +1,13 @@
+CARRIED, STEP SIZE FROZEN (diagnostic), 2026-10-03 08:07 UTC
+[   170.4s]   eval step 238500: BPB 1.0687  (952k bytes)
+[   316.9s] 239000/241000 loss 2.4600 ppl 11.7 lr 1.00e+00 219 ktok/s (last 200: 223) eta 10m 10.6 GiB d 8.13e-04 6.14e-03
+[   492.8s] 239600/241000 loss 2.4676 ppl 11.8 lr 1.00e+00 220 ktok/s (last 200: 224) eta 7m 10.6 GiB d 8.13e-04 6.14e-03
+[   612.6s]   eval step 240000: BPB 1.0704  (952k bytes)
+[   789.2s] 240600/241000 loss 2.5024 ppl 12.2 lr 1.00e+00 221 ktok/s (last 200: 224) eta 2m 10.6 GiB d 8.13e-04 6.14e-03
+      8,192 tokens of context: 1.0617 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.0711 bits/byte over 24 passages; vs 8,192: +0.0094 +- 0.0070
+    131,072 tokens of context: 1.0713 bits/byte over 24 passages; vs 8,192: +0.0096 +- 0.0071
+  distance   1024 tokens:  66.7% (16/24)
+  distance   4096 tokens:  45.8% (11/24)
+  distance   7000 tokens:  12.5% (3/24)
+CARRYFZ_DONE 2026-10-03 08:09 UTC

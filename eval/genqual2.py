@@ -31,10 +31,12 @@ ref = [met(tk.decode([int(v) for v in a[i:i + 1500]])) for i in (10**7, 3*10**7,
 R = np.array(ref)
 print(f"{'':<22s} {'words':>7s} {'bpb':>7s} {'variety':>8s}   (1,024 generated tokens, mean of 5 prompts)")
 print(f"{'REAL HELD-OUT TEXT':<22s} {R[:,0].mean():7.2f} {R[:,1].mean():7.2f} {R[:,2].mean():8.2f}")
-m = Ours("" + (sys.argv[1] if len(sys.argv) > 1 else "/mnt/kv_cache/run45_prose/ckpt.pt") + "", "/mnt/kv_cache/tok_v8192.json")
+CK = sys.argv[1] if len(sys.argv) > 1 else "/mnt/kv_cache/run45_prose/ckpt.pt"
+m = Ours(CK, "/mnt/kv_cache/tok_v8192.json")
+NAME = (CK.split("/")[-2] if CK.endswith("/ckpt.pt") else CK.split("/")[-1].removesuffix(".pt"))[:12]   # was a fixed "run44"
 for t in (0.8, 0.85, 0.9):
     v = np.array([met(m.decode(m.generate(m.encode(p), 1024, temp=t, seed=1))) for p in PROMPTS])
-    print(f"{'ours (run44) t=' + str(t):<22s} {v[:,0].mean():7.2f} {v[:,1].mean():7.2f} {v[:,2].mean():8.2f}", flush=True)
+    print(f"{'ours (' + NAME + ') t=' + str(t):<22s} {v[:,0].mean():7.2f} {v[:,1].mean():7.2f} {v[:,2].mean():8.2f}", flush=True)
 for t in (0.8, 0.9, 1.0):
     vs = []
     for p in PROMPTS:
