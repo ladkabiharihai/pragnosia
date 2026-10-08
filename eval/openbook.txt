@@ -1,0 +1,24 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 25.9 GiB free on the card
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 5773.73it/s]
+Loading weights:   0%|          | 0/272 [00:00<?, ?it/s]Loading weights: 100%|██████████| 272/272 [00:00<00:00, 8192.00it/s]
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book         D=0     D=2,048     D=8,192    D=32,768
+run85-368k                               46.7%       76.7%       42.0%       41.3%       43.3%
+run85-368k +recall                       46.7%       76.7%       56.0%       41.3%       42.7%
+rc1-recall-arm (recall-trained)          47.3%       77.3%       66.0%       60.7%       43.3%
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (2094 > 1024). Running this sequence through the model will result in indexing errors
+GPT-2 124M                               48.0%       77.3%       43.3%       45.3%       42.7%
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/openbook.py", line 80, in <module>
+    ok = sum(int(np.argmax([M.opt_lp(CTX[(D, i)], o) for o in options(r)])) == 0 for i, r in enumerate(Q))
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/eval/openbook.py", line 80, in <genexpr>
+    ok = sum(int(np.argmax([M.opt_lp(CTX[(D, i)], o) for o in options(r)])) == 0 for i, r in enumerate(Q))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/eval/openbook.py", line 30, in opt_lp
+    lp = self.m(torch.tensor([ids], device="cuda")).logits[0].float().log_softmax(-1)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.29 GiB. GPU 0 has a total capacity of 93.09 GiB of which 17.91 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.61 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 2428834 has 38.58 GiB memory in use. Process 2430187 has 946.00 MiB memory in use. Process 2430188 has 946.00 MiB memory in use. Process 2430189 has 946.00 MiB memory in use. Process 2430190 has 946.00 MiB memory in use. Process 2540900 has 20.80 GiB memory in use. Including non-PyTorch memory, this process has 5.78 GiB memory in use. 6.00 GiB allowed; Of the allocated memory 4.12 GiB is allocated by PyTorch, and 940.65 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+GUARD: peak 6530 MiB of 6 GiB (.venv/bin/python -u eval/openbook.py /mnt/kv_cache/run85_s368000_c.pt=run85-368k /mnt/kv_cache/run85_s368000_c.pt=run85-368k+recall /mnt/kv_cache/rc1/ckpt.pt=rc1-recall-arm)
+OPENBOOK_DONE 09:17 UTC

@@ -1,0 +1,46 @@
+RECALL A/B, read 2026-10-05 12:34 UTC: rc1 = 4,000 steps WITH recall 16, rc0 = the same 4,000 steps without; both from run85 step 368,000 (window 2,048)
+################ rc1
+/mnt/kv_cache/rc1/ckpt.pt (step 372000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance       k=0      k=16   (k = far keys each query may recall; 0 = trained)
+    1,024    100.0%    100.0%
+    2,048      0.0%    100.0%
+   (D=4096 k=16 miss: wanted 912383, wrote ' 91238 introduction the first time,')
+    4,096      0.0%     95.8%
+    8,192      0.0%    100.0%
+   16,384      0.0%    100.0%
+   (D=32768 k=16 miss: wanted 481453, wrote ' 89298 introduction the first time')
+   32,768      0.0%     91.7%
+   (D=65536 k=16 miss: wanted 284759, wrote ' 284756 introduction the first time')
+   65,536      0.0%     79.2%
+/mnt/kv_cache/rc1/ckpt.pt (step 372000)  attention window 2048  context window 8192  mode stream
+  k=0: mean loss 2.3223 nats/token over 8 x 32,768 tokens
+  k=16: mean loss 2.2708 nats/token over 8 x 32,768 tokens
+loss by position in the stream (nats/token), and k minus k=0 per stream: mean +- 95% interval over 8 streams
+  k=16:      0-1,024  2.6452 +0.0000+-0.0000 |  1,024-4,096  2.3402 -0.0100+-0.0119 |  4,096-8,192  2.2827 -0.0569+-0.0796 |  8,192-16,384 2.3131 -0.0678+-0.0915 | 16,384-32,768 2.3133 -0.0529+-0.0937
+################ rc0
+/mnt/kv_cache/rc0/ckpt.pt (step 372000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance       k=0      k=16   (k = far keys each query may recall; 0 = trained)
+    1,024    100.0%    100.0%
+    2,048      0.0%    100.0%
+   (D=4096 k=16 miss: wanted 912383, wrote ' 91238 introduction the first time.')
+    4,096      0.0%     75.0%
+   (D=8192 k=16 miss: wanted 158015, wrote ' 993898 introduction the Cam')
+    8,192      0.0%     75.0%
+   (D=16384 k=16 miss: wanted 557229, wrote ' 5557 introduction the first time.')
+   16,384      0.0%     70.8%
+   (D=32768 k=16 miss: wanted 557847, wrote ' 587549 introduction the Cze')
+   32,768      0.0%     54.2%
+   (D=65536 k=16 miss: wanted 44119, wrote ' 388989 introduction the Braz')
+   65,536      0.0%     45.8%
+/mnt/kv_cache/rc0/ckpt.pt (step 372000)  attention window 2048  context window 8192  mode stream
+  k=0: mean loss 2.3046 nats/token over 8 x 32,768 tokens
+  k=16: mean loss 2.2881 nats/token over 8 x 32,768 tokens
+loss by position in the stream (nats/token), and k minus k=0 per stream: mean +- 95% interval over 8 streams
+  k=16:      0-1,024  2.6317 -0.0000+-0.0001 |  1,024-4,096  2.3237 -0.0078+-0.0105 |  4,096-8,192  2.2625 -0.0520+-0.0763 |  8,192-16,384 2.2955 -0.0354+-0.0887 | 16,384-32,768 2.2956 -0.0009+-0.0935
+  logs/recall_ab_1.out:[  2945.6s]   eval step 372000: BPB 1.0530  (952k bytes)
+  logs/recall_ab_1.out:[  2946.2s] END train  ok  (49.1 min)
+  logs/recall_ab_0.out:[   979.0s]   eval step 372000: BPB 1.0481  (952k bytes)
+  logs/recall_ab_0.out:[   979.6s] END train  ok  (16.3 min)
+RECALL_AB_EVAL_DONE 2026-10-05 12:44 UTC

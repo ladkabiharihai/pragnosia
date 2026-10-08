@@ -26,6 +26,14 @@ print(f"checkpoint {CK}", flush=True)
 sd = torch.load(CK, map_location="cuda")
 m = LM(**sd["cfg"]).cuda(); m.load_state_dict(sd["model"]); m.eval()
 W = sd["cfg"]["ctx"]
+import os
+# RECALL AT A MILLION (2026-10-08): MILLION_RECALL=k sets the recall k (0 = off: the carrier and the window only);
+# RECALL_OFFLOAD=1 keeps the store in host memory (model.py FarStore), so a recall model reaches a million tokens at all
+if os.environ.get("MILLION_RECALL") is not None and getattr(m, "recall_k", 0):
+    m.set_recall(int(os.environ["MILLION_RECALL"]), span=0); print(f"recall k = {m.recall_k}", flush=True)
+if os.environ.get("RECALL_OFFLOAD"):
+    for at in m.mix: at.recall_offload = True
+    print("recall store in host memory", flush=True)
 print(f"model ctx {W}, state per layer {m.mix[0].h if hasattr(m.mix[0],'h') else '?'} heads", flush=True)
 
 TARGETS = (8192, 32768, 131072, 524288, 1048576)

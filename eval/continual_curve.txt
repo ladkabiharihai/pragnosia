@@ -1,0 +1,20 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 25.3 GiB free on the card
+120 invented facts, 360 training sentences; /mnt/kv_cache/r85_s368000_sft/ckpt.pt
+
+                  step     NEW     OLD     TEXT
+whole                0   26.7%   72.9%   1.1917
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
+whole               10   25.8%   72.9%   1.1864   (train loss 3.576)
+whole               20   24.2%   79.2%   1.1783   (train loss 2.869)
+whole               40   29.2%   66.7%   1.4148   (train loss 0.750)
+whole               80   92.5%   68.8%   1.7422   (train loss 0.400)
+whole              150   95.8%   66.7%   1.9153   (train loss 0.368)
+whole + replay       0   26.7%   72.9%   1.1917
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
+whole + replay      10   24.2%   72.9%   1.1849   (train loss 3.473)
+whole + replay      20   22.5%   72.9%   1.1652   (train loss 2.779)
+whole + replay      40   32.5%   75.0%   1.2776   (train loss 1.640)
+whole + replay      80   73.3%   68.8%   1.6281   (train loss 0.742)
+whole + replay     150   85.0%   66.7%   2.4986   (train loss 0.211)
+GUARD: peak 3752 MiB of 6 GiB (.venv/bin/python -u eval/continual.py /mnt/kv_cache/r85_s368000_sft/ckpt.pt curve)
+DONE 11:30 UTC

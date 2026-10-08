@@ -39,5 +39,5 @@ $P eval/genqual2.py "$BASE" 2>&1 | clean >> $OUT
 sec "7  LEARNING WITHOUT FORGETTING, NO RATE: whole model, + self-rehearsal, new layers only ($SFT)"
 $P eval/continual.py "$SFT" intrinsic 2>&1 | clean >> $OUT
 sec "7, 8  GROWTH AND RATE DECIDED BY THE MODEL (from its training log)"
-grep -E "RECONSIDER|TRIAL|DECISION|GREW|REACH|DEEPENED|SPLIT|eval step" logs/train83.out >> $OUT
+grep -E "RECONSIDER|TRIAL|DECISION|GREW|REACH|DEEPENED|SPLIT|eval step" logs/train85.out >> $OUT
 echo "SCORECARD_DONE $(date -u '+%Y-%m-%d %H:%M UTC')" >> $OUT

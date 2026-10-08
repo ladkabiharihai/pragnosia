@@ -1,0 +1,6 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 20.6 GiB free on the card
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book         D=0     D=2,048     D=8,192    D=32,768
+final-base+far-lookup (recall-trained)       48.0%       79.3%       66.7%       65.3%       48.7%
+(95% interval about +-8 points per cell; GPT-2 sees the last 1,024 tokens, SmolLM2 the last 8,192)
+GUARD: peak 6640 MiB of 6 GiB (.venv/bin/python -u eval/openbook.py /mnt/kv_cache/far_lookup/ckpt_s375000.pt=final-base+far-lookup)

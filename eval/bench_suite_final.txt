@@ -1,0 +1,53 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 38.5 GiB free on the card
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 6205.27it/s]
+Loading weights:   0%|          | 0/272 [00:00<?, ?it/s]Loading weights: 100%|██████████| 272/272 [00:00<00:00, 7740.20it/s]
+  [final-base-rc1] HellaSwag 30.2
+  [final-base-rc1] PIQA 61.6
+  [final-base-rc1] ARC-Easy 39.8
+  [final-base-rc1] ARC-Challenge 24.6
+  [final-base-rc1] OpenBookQA 29.0
+  [final-base-rc1] LAMBADA 16.6
+  [final-base-rc1] GSM8K 0.8 (n=250)
+  [final-base-rc1] facts 66.7  arithmetic 15.0 / exact 0.0  reasoning 42.2
+  [best-text-368k] HellaSwag 29.8
+  [best-text-368k] PIQA 61.0
+  [best-text-368k] ARC-Easy 40.0
+  [best-text-368k] ARC-Challenge 23.4
+  [best-text-368k] OpenBookQA 27.2
+  [best-text-368k] LAMBADA 15.2
+  [best-text-368k] GSM8K 2.8 (n=250)
+  [best-text-368k] facts 64.6  arithmetic 16.7 / exact 0.0  reasoning 45.0
+  [GPT-2 124M] HellaSwag 32.0
+  [GPT-2 124M] PIQA 63.4
+  [GPT-2 124M] ARC-Easy 39.8
+  [GPT-2 124M] ARC-Challenge 22.0
+  [GPT-2 124M] OpenBookQA 25.6
+  [GPT-2 124M] LAMBADA 16.2
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (1188 > 1024). Running this sequence through the model will result in indexing errors
+  [GPT-2 124M] GSM8K 0.8 (n=250)
+  [GPT-2 124M] facts 79.2  arithmetic 35.0 / exact 0.0  reasoning 61.2
+  [SmolLM2-135M] HellaSwag 45.2
+  [SmolLM2-135M] PIQA 69.0
+  [SmolLM2-135M] ARC-Easy 59.2
+  [SmolLM2-135M] ARC-Challenge 29.8
+  [SmolLM2-135M] OpenBookQA 32.4
+  [SmolLM2-135M] LAMBADA 22.2
+  [SmolLM2-135M] GSM8K 0.4 (n=250)
+  [SmolLM2-135M] facts 91.7  arithmetic 36.7 / exact 0.0  reasoning 53.2
+
+benchmark             final-base-rc1  best-text-368k      GPT-2 124M    SmolLM2-135M
+HellaSwag                      30.2%           29.8%           32.0%           45.2%
+PIQA                           61.6%           61.0%           63.4%           69.0%
+ARC-Easy                       39.8%           40.0%           39.8%           59.2%
+ARC-Challenge                  24.6%           23.4%           22.0%           29.8%
+OpenBookQA                     29.0%           27.2%           25.6%           32.4%
+LAMBADA                        16.6%           15.2%           16.2%           22.2%
+GSM8K                           0.8%            2.8%            0.8%            0.4%
+facts (48)                     66.7%           64.6%           79.2%           91.7%
+arithmetic 4-way               15.0%           16.7%           35.0%           36.7%
+arithmetic exact                0.0%            0.0%            0.0%            0.0%
+reasoning (400)                42.2%           45.0%           61.2%           53.2%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3244 MiB of 6 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/final_base_rc1.pt=final-base-rc1 /mnt/kv_cache/run85_s368000_c.pt=best-text-368k)

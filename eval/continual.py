@@ -26,6 +26,14 @@ CK = sys.argv[1] if len(sys.argv) > 1 else "/mnt/kv_cache/run45_prose/ckpt.pt"
 # three ways: whole model, whole + self-rehearsal, new layers only.
 MODE = sys.argv[2] if len(sys.argv) > 2 else "compare"
 STEPS, LR, BATCH, SEQ = 150, 5e-5, 8, 256
+import torch as _t
+def _own_d(ck):
+    try:
+        sd_ = _t.load(ck, map_location="cpu", weights_only=False); g_ = (sd_.get("opt") or {}).get("param_groups", [{}])[0]
+        return float(g_.get("sf_saved", {}).get("d", 9.69e-4))
+    except Exception:
+        return 9.69e-4
+OWN_D = _own_d(CK)
 RATES, GROW_K = (1e-4, 3e-4, 1e-3), 4
 
 rng = random.Random(1234)
@@ -83,6 +91,9 @@ def text_bpb(model, enc, fwd):
     return nats / (math.log(2) * nby)
 
 
+CURVE_AT, CURVE_CB = (), None                 # (2026-10-06) mode "curve": evaluate along the way (see below)
+
+
 def train(params, fwd, enc, lr=LR, own=None):
     """The same loop for both models: fixed steps, fixed rate, sequences packed from the shuffled sentences.
     own: sequences the model WROTE ITSELF before learning; when given, half of every batch is its own text
@@ -107,9 +118,42 @@ def train(params, fwd, enc, lr=LR, own=None):
             lg = fwd(x[:, :-1])
         loss = F.cross_entropy(lg.float().reshape(-1, lg.shape[-1]), x[:, 1:].reshape(-1))
         opt.zero_grad(set_to_none=True); loss.backward(); opt.step()
+        if step + 1 in CURVE_AT and CURVE_CB is not None:
+            if lr is None: opt.eval()
+            CURVE_CB(step + 1, float(loss))
+            if lr is None: opt.train()
     if lr is None: opt.eval()                  # schedule-free: the averaged weights are the model
     return float(loss)
 
+
+if MODE == "curve":
+    # LEARNING WITHOUT FORGETTING, ALONG THE WAY (2026-10-06): every 150-step arm damaged general text (1.19 -> 1.9-2.6 bits
+    # per byte): 150 steps of 8 x 256 tokens are ~40 passes over 360 sentences. NEW, OLD and TEXT after 10/20/40/80/150 steps,
+    # whole model, schedule-free Prodigy (no rate), with and without replay of its own pretraining text
+    CURVE_AT = (10, 20, 40, 80, 150)
+    print(f"{len(TEST)} invented facts, {len(TRAIN)} training sentences; {CK}\n")
+    print(f"{'':<16s} {'step':>5s} {'NEW':>7s} {'OLD':>7s} {'TEXT':>8s}")
+    for how in ("whole", "whole + replay"):
+        m = Ours(CK, "/mnt/kv_cache/tok_v8192.json"); enc = m.encode; m.graphable = False
+        fwd = lambda x: m.m(x); torch.manual_seed(0)
+        print(f"{how:<16s} {0:>5d} {mc(m, TEST, enc):>7.1%} {mc(m, FACTS, enc):>7.1%} {text_bpb(m, enc, fwd):>8.4f}", flush=True)
+        own = None
+        if how == "whole + replay":
+            own = []; rr_ = np.random.default_rng(99)
+            for src_ in ("dclm", "fineweb-edu", "wikipedia", "arxiv"):
+                a_ = np.memmap(f"/mnt/kv_cache/tokfull_v8192/{src_}.bin", dtype=np.uint16, mode="r")
+                for _ in range(16):
+                    o_ = int(rr_.integers(len(a_) // 2, len(a_) - SEQ - 2)); own.append(np.asarray(a_[o_:o_ + SEQ + 1]).astype(int).tolist())
+        def cb_(st_, l_, how=how):
+            m.m.eval()
+            print(f"{how:<16s} {st_:>5d} {mc(m, TEST, enc):>7.1%} {mc(m, FACTS, enc):>7.1%} {text_bpb(m, enc, fwd):>8.4f}   (train loss {l_:.3f})", flush=True)
+            m.m.train()
+        CURVE_CB = cb_
+        import src.assoc as A_
+        with A_.fused_scan(m.m):
+            m.m.train(); train(list(m.m.parameters()), fwd, enc, None, own); m.m.eval()
+        del m; torch.cuda.empty_cache()
+    sys.exit(0)
 
 if MODE in ("grow", "rehearse", "intrinsic"):
     print(f"{len(TEST)} invented facts, {len(TRAIN)} training sentences, {STEPS} steps, "
@@ -117,7 +161,8 @@ if MODE in ("grow", "rehearse", "intrinsic"):
     print(f"{'':<24s} {'NEW before':>11s} {'NEW after':>10s} {'OLD before':>11s} {'OLD after':>10s} {'TEXT before':>12s} {'TEXT after':>11s}")
     for lr in ((None,) if MODE == "intrinsic" else RATES):
         for how in (("whole model", f"+{GROW_K} layers only") if MODE == "grow" else
-                    ("whole model", "whole + self-rehearsal", f"+{GROW_K} layers only") if MODE == "intrinsic" else
+                    ("whole model", "whole + self-rehearsal", "whole + replay", "whole, own step", "whole + replay, own step",
+                     f"+{GROW_K} layers only") if MODE == "intrinsic" else
                     ("whole model", "whole + self-rehearsal")):
             m = Ours(CK, "/mnt/kv_cache/tok_v8192.json"); enc = m.encode; m.graphable = False
             fwd = lambda x: m.m(x)
@@ -132,7 +177,16 @@ if MODE in ("grow", "rehearse", "intrinsic"):
                     ids = m.generate([8191], SEQ, temp=1.0, seed=k_)
                     own.append(([8191] + ids)[:SEQ + 1])
                 params = list(m.m.parameters())
-            elif how == "whole model":
+            elif how in ("whole + replay", "whole + replay, own step"):
+                # REPLAY (2026-10-06): half of every batch is real text of the kind it was trained on (its own pretraining
+                # corpora, a region the TEXT measure does not read): the self-written rehearsal above made TEXT worse
+                own = []; rr_ = np.random.default_rng(99)
+                for src_ in ("dclm", "fineweb-edu", "wikipedia", "arxiv"):
+                    a_ = np.memmap(f"/mnt/kv_cache/tokfull_v8192/{src_}.bin", dtype=np.uint16, mode="r")
+                    for _ in range(16):
+                        o_ = int(rr_.integers(len(a_) // 2, len(a_) - SEQ - 2)); own.append(np.asarray(a_[o_:o_ + SEQ + 1]).astype(int).tolist())
+                params = list(m.m.parameters())
+            elif how in ("whole model", "whole, own step"):
                 params = list(m.m.parameters())
             else:
                 m.m = m.m.add_layers(GROW_K)
@@ -140,7 +194,12 @@ if MODE in ("grow", "rehearse", "intrinsic"):
                 params = [p_ for i in m.m.new_layers for p_ in list(m.m.mix[i].parameters()) + list(m.m.mlp[i].parameters())]
                 for p_ in params: p_.requires_grad_(True)
                 assert abs(mc(m, FACTS, enc) - ob) < 1e-9, "adding zero-output layers changed the model"
-            m.m.train(); last = train(params, fwd, enc, lr, own); m.m.eval()
+            import src.assoc as A_
+            with A_.fused_scan(m.m):          # the python scan's backward allocates outside the capped allocator (2026-10-06)
+                # "own step" (2026-10-06): the step size the model LEARNED in pretraining (its Prodigy d, held at 9.69e-4 since
+                # 2026-10-05), not a fresh Prodigy estimate made from 360 sentences, which damaged general text in every way
+                lr_ = OWN_D if how.endswith("own step") else lr
+                m.m.train(); last = train(params, fwd, enc, lr_, own); m.m.eval()
             na, oa, ta = mc(m, TEST, enc), mc(m, FACTS, enc), text_bpb(m, enc, fwd)
             print(f"{how + (f' lr {lr:g}' if lr else ', no rate'):<24s} {nb:>10.1%} {na:>10.1%} {ob:>10.1%} {oa:>10.1%} {tb:>12.4f} {ta:>11.4f}   (train loss {last:.3f})", flush=True)
             del m; torch.cuda.empty_cache()
@@ -159,7 +218,11 @@ for lab in ("Carrier", "GPT-2 124M"):
         fwd = lambda x: m.m(x).logits; params = m.m.parameters(); m.m.train()
     torch.manual_seed(0)
     nb, ob, tb = mc(m, TEST, enc), mc(m, FACTS, enc), text_bpb(m, enc, fwd)
-    last = train(params, fwd, enc)
+    if hasattr(m, "m") and hasattr(m.m, "mix"):
+        import src.assoc as A_
+        with A_.fused_scan(m.m): last = train(params, fwd, enc)
+    else:
+        last = train(params, fwd, enc)
     if lab == "Carrier": m.graphable = False                  # weights changed; do not reuse a captured decode graph
     na, oa, ta = mc(m, TEST, enc), mc(m, FACTS, enc), text_bpb(m, enc, fwd)
     print(f"{lab:<14s} {nb:>10.1%} {na:>10.1%} {ob:>10.1%} {oa:>10.1%} {tb:>12.4f} {ta:>11.4f}   (final train loss {last:.3f})", flush=True)

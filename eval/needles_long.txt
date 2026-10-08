@@ -1,0 +1,16 @@
+NEEDLES FAR PAST THE WINDOW: /mnt/kv_cache/final_base_far.pt, 2026-10-07 15:07 UTC
+/mnt/kv_cache/final_base_far.pt (step 375000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance      k=16   (k = far keys each query may recall; 0 = trained)
+   (D=524288 k=16 miss: wanted 925199, wrote ' 9259\nQ: What is')
+GUARD: peak 17646 MiB of 22 GiB (.venv/bin/python -u eval/recall_test.py /mnt/kv_cache/final_base_far.pt needle)
+NEEDLES FAR PAST THE WINDOW: /mnt/kv_cache/final_base_far.pt, 2026-10-07 15:46 UTC
+/mnt/kv_cache/final_base_far.pt (step 375000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 12 per cell
+ distance      k=16   (k = far keys each query may recall; 0 = trained)
+   (D=524288 k=16 miss: wanted 925199, wrote ' 9259\nQ: What is')
+  524,288     66.7%   (peak GPU allocated 2.38 GiB, the store in host memory)
+   (D=1048576 k=16 miss: wanted 159702, wrote ' 54869 introduction the first time')
+1,048,576     33.3%   (peak GPU allocated 2.38 GiB, the store in host memory)
+GUARD: peak 3374 MiB of 4 GiB (.venv/bin/python -u eval/recall_test.py /mnt/kv_cache/final_base_far.pt needle)
+NEEDLES_LONG_DONE 2026-10-07 18:27 UTC

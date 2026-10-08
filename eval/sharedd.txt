@@ -1,0 +1,12 @@
+SHARED STEP SIZE (+/- carried windows), from run83_final, 2026-10-04 06:59 UTC
+== sd_A/ckpt.pt: [   263.5s]   eval step 339000: BPB 1.0418  (952k bytes) [   955.0s]   eval step 342000: BPB 1.0411  (952k bytes) 
+      8,192 tokens of context: 1.0963 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.0955 bits/byte over 24 passages; vs 8,192: -0.0008 +- 0.0005
+  distance    256 tokens: 100.0% (24/24)
+  distance   1024 tokens:   0.0% (0/24)
+== sd_B/ckpt.pt: [   251.6s]   eval step 339000: BPB 1.0418  (952k bytes) [   924.7s]   eval step 342000: BPB 1.0409  (952k bytes) 
+      8,192 tokens of context: 1.2671 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.2666 bits/byte over 24 passages; vs 8,192: -0.0005 +- 0.0004
+  distance    256 tokens: 100.0% (24/24)
+  distance   1024 tokens:   0.0% (0/24)
+SHAREDD_DONE 2026-10-04 07:47 UTC

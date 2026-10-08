@@ -1,0 +1,10 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 29.7 GiB free on the card
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/272 [00:00<?, ?it/s]Loading weights: 100%|██████████| 272/272 [00:00<00:00, 9074.90it/s]
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book         D=0     D=2,048     D=8,192    D=32,768
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (27071 > 8192). Running this sequence through the model will result in indexing errors
+SmolLM2-135M                             72.7%       93.3%       80.7%       74.0%       72.0%
+(95% interval about +-8 points per cell; GPT-2 sees the last 1,024 tokens, SmolLM2 the last 8,192)
+GUARD: peak 6626 MiB of 6 GiB (.venv/bin/python -u eval/openbook.py)
+DONE 09:33 UTC

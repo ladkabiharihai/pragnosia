@@ -1,0 +1,10 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 29.7 GiB free on the card
+SELF-CONSISTENCY ABSTENTION, no labels, no threshold set by hand: /mnt/kv_cache/r85_s368000_sft/ckpt.pt, K=6 samples at temperature 1
+  EVERYDAY  greedy, always answers                       right  22.9%  WRONG  77.1%  declined   0.0%  -> accuracy when it answers  22.9%
+  EVERYDAY  self-consistent (>= half of 6 samples agree) right  16.7%  WRONG  20.8%  declined  62.5%  -> accuracy when it answers  44.4%
+  EVERYDAY  consistency when right 0.56, when wrong 0.25
+  SCIQ      greedy, always answers                       right   8.2%  WRONG  91.8%  declined   0.0%  -> accuracy when it answers   8.2%
+  SCIQ      self-consistent (>= half of 6 samples agree) right   2.7%  WRONG   8.4%  declined  88.9%  -> accuracy when it answers  24.3%
+  SCIQ      consistency when right 0.34, when wrong 0.13
+GUARD: peak 1896 MiB of 6 GiB (.venv/bin/python -u eval/selfcons.py /mnt/kv_cache/r85_s368000_sft/ckpt.pt 6)
+DONE 10:13 UTC

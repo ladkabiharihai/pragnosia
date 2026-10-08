@@ -1,0 +1,12 @@
+FAR READ 382k EVAL 07:06 UTC
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book         D=0     D=2,048     D=8,192    D=32,768
+far-read-382k (recall-trained)           51.3%       84.0%       72.7%       76.0%       50.0%
+(95% interval about +-8 points per cell; GPT-2 sees the last 1,024 tokens, SmolLM2 the last 8,192)
+GUARD: peak 6640 MiB of 7 GiB (.venv/bin/python -u eval/openbook.py /mnt/kv_cache/far_read2/ckpt_s382000.pt=far-read-382k)
+LEARNING BY READING: 30 invented facts read once, then D tokens of unrelated prose, then a question (4-way, every wrong option another answer from the same facts; chance 25%); 100 questions per cell
+model                              D=8,192    D=32,768
+far-read-382k                        87.0%       89.0%
+(95% interval about +-10 points per cell)
+GUARD: peak 4810 MiB of 7 GiB (.venv/bin/python -u eval/learn_by_reading.py /mnt/kv_cache/far_read2/ckpt_s382000.pt=far-read-382k)
+DONE382

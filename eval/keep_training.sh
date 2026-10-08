@@ -20,10 +20,14 @@ while true; do
   s=$(step_of "$OUT/ckpt.pt")
   if [ "$s" = "$last" ]; then fails=$((fails + 1)); else fails=1; last=$s; fi
   echo "TRAINER EXITED with code $rc at $(date -u '+%Y-%m-%d %H:%M UTC'); last checkpoint at step $s (failure $fails there)" >> "$LOG"
-  if [ "$s" -lt 0 ] || [ "$fails" -ge 2 ]; then
-    echo "${MARK%_DONE}_FAILED $(date -u '+%Y-%m-%d %H:%M UTC'): no progress past step $s across two attempts; stopping for a human" >> "$LOG"
+  # PATIENT (2026-10-06): a restart that collides with a side job (the 6-hourly scorecard) dies of out-of-memory at
+  # capture; twice in a row and the card sat idle 14 hours overnight. Now: up to 6 attempts at one checkpoint, 10
+  # minutes apart, so a collision waits the side job out
+  if [ "$s" -lt 0 ] || [ "$fails" -ge 6 ]; then
+    echo "${MARK%_DONE}_FAILED $(date -u '+%Y-%m-%d %H:%M UTC'): no progress past step $s across $fails attempts; stopping for a human" >> "$LOG"
     exit 1
   fi
+  [ "$fails" -ge 2 ] && sleep 600
   # resume from the run's own checkpoint (a copy, since the resumed run rewrites ckpt.pt); --resume-stage is dropped
   # because the checkpoint carries the stage clock
   NEW=(); skip=0

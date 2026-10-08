@@ -1,0 +1,30 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 33.5 GiB free on the card
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 8910.60it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (1231 > 1024). Running this sequence through the model will result in indexing errors
+band: real text 1.113 (10-90%: 0.965-1.205, 12 samples)  /mnt/kv_cache/run85_s368000_c.pt
+  temp 0.80 min-p 0.00: 0.688
+  temp 0.85 min-p 0.00: 0.992
+  temp 0.90 min-p 0.00: 0.936
+  temp 1.00 min-p 0.00: 1.427
+  temp 0.80 min-p 0.05: 0.209
+  temp 0.85 min-p 0.05: 0.300
+  temp 0.90 min-p 0.05: 0.331
+  temp 1.00 min-p 0.05: 0.523
+  temp 0.80 min-p 0.10: 0.170
+  temp 0.85 min-p 0.10: 0.186
+  temp 0.90 min-p 0.10: 0.208
+  temp 1.00 min-p 0.10: 0.189
+    temp 0.85 min-p 0.0 'The history of the city ': horizon 0; segments 0.92 1.23 0.93 0.61 1.57 0.70 0.28 1.01; worst commonest-token share 26%
+    temp 0.85 min-p 0.0 'In this paper we study': horizon 4,096; segments 1.05 1.28 1.11 1.04 0.83 0.77 0.11 0.14; worst commonest-token share 20%
+    temp 0.85 min-p 0.0 'The river rises in the m': horizon 4,096; segments 1.03 0.54 0.04 0.02 0.61 1.10 1.15 1.15; worst commonest-token share 15%
+  temp 0.85 min-p 0.0: HORIZON median 4,096 (0, 4,096, 4,096); in band at 2k: 0.992
+    temp 0.9 min-p 0.0 'The history of the city ': horizon 0; segments 1.23 1.16 1.12 1.30 1.11 1.09 1.07 1.41; worst commonest-token share 8%
+    temp 0.9 min-p 0.0 'In this paper we study': horizon 0; segments 0.73 0.08 0.23 0.02 0.98 1.76 0.98 1.62; worst commonest-token share 50%
+    temp 0.9 min-p 0.0 'The river rises in the m': horizon 12,288; segments 1.03 1.09 1.20 1.33 1.73 1.25 1.16 1.31; worst commonest-token share 16%
+  temp 0.9 min-p 0.0: HORIZON median 0 (0, 0, 12,288); in band at 2k: 0.936
+    temp 1.0 min-p 0.0 'The history of the city ': horizon 0; segments 1.47 2.36 2.70 3.02 2.90 1.53 1.56 1.87; worst commonest-token share 5%
+    temp 1.0 min-p 0.0 'In this paper we study': horizon 0; segments 1.50 2.61 3.40 2.45 3.68 1.55 2.15 2.64; worst commonest-token share 11%
+    temp 1.0 min-p 0.0 'The river rises in the m': horizon 0; segments 1.36 1.67 1.63 1.85 1.53 1.95 2.09 2.17; worst commonest-token share 4%
+  temp 1.0 min-p 0.0: HORIZON median 0 (0, 0, 0); in band at 2k: 1.427
+GUARD: peak 4740 MiB of 6 GiB (.venv/bin/python -u eval/longgen.py /mnt/kv_cache/run85_s368000_c.pt)
+LONGGEN_DONE 05:50 UTC

@@ -48,6 +48,12 @@ def main():
 
     sd = torch.load(a.init, map_location="cuda", weights_only=False)
     m = LM(**sd["cfg"]).cuda(); m.load_state_dict(sd["model"]); m.train()
+    # THE FUSED SCAN, as in training: the python chunk scan's backward allocates ~10 GiB outside the capped allocator, so
+    # this fine-tune held 15.9 GiB under a 7 GiB cap beside the training and prod (2026-10-06)
+    import src.assoc as A_
+    A_.FUSED_SCAN = True
+    for mx_ in m.mix:
+        if hasattr(mx_, "need_sent"): mx_.need_sent = False
     ROW = a.row
     tr = np.memmap(f"{a.data}/train.bin", dtype=np.uint16, mode="r").reshape(-1, ROW)
     trm = np.memmap(f"{a.data}/train.mask", dtype=np.uint8, mode="r").reshape(-1, ROW)
@@ -59,7 +65,9 @@ def main():
 
     if a.optim == "psf":
         from prodigyplus import ProdigyPlusScheduleFree
-        opt = ProdigyPlusScheduleFree([{"params": g["params"]} for g in m.param_groups(lr=a.lr, spectral_lr=a.spectral_lr)])
+        # empty groups skipped: a transformer has no spectral parameters, and the package fails on an empty group
+        opt = ProdigyPlusScheduleFree([{"params": g["params"]} for g in m.param_groups(lr=a.lr, spectral_lr=a.spectral_lr)
+                                       if g["params"]])
         opt.train()
     else:
         opt = Fabric(m.param_groups(lr=a.lr, spectral_lr=a.spectral_lr), lr=a.lr, fused=bool(a.fused))

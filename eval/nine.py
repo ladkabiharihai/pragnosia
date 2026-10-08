@@ -110,28 +110,49 @@ a = np.memmap("/mnt/kv_cache/tokfull_v8192/dclm.bin", dtype=np.uint16, mode="r")
 band = [bpb_under_gpt2(tk.decode([int(t) for t in a[i:i + 1500]])) for i in (10**7, 2*10**7, 3*10**7, 4*10**7, 5*10**7, 6*10**7)]
 lo, hi = np.nanpercentile(band, [10, 90])
 print(f"  the band: real held-out text scores {np.nanmean(band):.3f} under GPT-2 (10-90%: {lo:.3f}-{hi:.3f})")
+# (2026-10-06) temperatures from 0.7, and the horizon over THREE prompts: one prompt at one seed, with 0.9 as the coolest
+# choice, scored a checkpoint whose text at 0.9 reads too surprising as "horizon 0", one sample deciding the number
+PROMPTS = ["The history of the city begins", "In this paper we study", "The river rises in the mountains"]
 best = None
-for t in (0.9, 1.0, 1.1):
-    out = ours.generate(ours.encode("The history of the city begins"), 2048, temp=t, seed=0)
-    s = bpb_under_gpt2(ours.decode(out))
-    print(f"  {LAB} at temperature {t}: {s:.3f}", flush=True)
+for t in (0.7, 0.8, 0.9, 1.0, 1.1):
+    s = float(np.nanmean([bpb_under_gpt2(ours.decode(ours.generate(ours.encode(p_), 2048, temp=t, seed=0))) for p_ in PROMPTS]))
+    print(f"  {LAB} at temperature {t}: {s:.3f} (mean of {len(PROMPTS)} prompts)", flush=True)
     if best is None or abs(s - np.nanmean(band)) < abs(best[1] - np.nanmean(band)): best = (t, s)
 print(f"  -> best temperature {best[0]}, scoring {best[1]:.3f}")
 T0 = best[0]
-out = ours.generate(ours.encode("The history of the city begins"), 32768, temp=T0, seed=0)
-print(f"\n  32,768 tokens at temperature {T0}, in band while:")
-horizon = 0
-for s in range(0, len(out), 4096):
-    seg = ours.decode(out[s:s + 4096]); sc = bpb_under_gpt2(seg[:4000])
-    inb = lo <= sc <= hi
-    if inb and horizon == s: horizon = s + 4096
-    top = collections.Counter(out[s:s + 4096]).most_common(1)[0]
-    print(f"    {s:>7,}-{s+4096:<7,} {sc:7.3f} {'in band' if inb else '       '}  commonest token "
-          f"{100*top[1]/4096:4.1f}% {ours.decode([top[0]])!r}", flush=True)
-print(f"  HORIZON: {horizon:,} tokens in band")
+hz = []
+for pi_, p_ in enumerate(PROMPTS):
+    out = ours.generate(ours.encode(p_), 32768, temp=T0, seed=0)
+    print(f"\n  32,768 tokens at temperature {T0} from {p_!r}, in band while:")
+    horizon = 0
+    for s in range(0, len(out), 4096):
+        seg = ours.decode(out[s:s + 4096]); sc = bpb_under_gpt2(seg[:4000])
+        inb = lo <= sc <= hi
+        if inb and horizon == s: horizon = s + 4096
+        top = collections.Counter(out[s:s + 4096]).most_common(1)[0]
+        print(f"    {s:>7,}-{s+4096:<7,} {sc:7.3f} {'in band' if inb else '       '}  commonest token "
+              f"{100*top[1]/4096:4.1f}% {ours.decode([top[0]])!r}", flush=True)
+    hz.append(horizon)
+horizon = int(np.median(hz))
+print(f"  HORIZON: {horizon:,} tokens in band (median of {len(hz)} prompts: {', '.join(f'{h:,}' for h in hz)})")
+# (2026-10-06) THE SAME 32k GENERATIONS WITH A REPETITION GUARD, and the count that does not hinge on one segment: plain
+# sampling collapses into loops after a few thousand tokens (segments at 0.02-0.28 under GPT-2); a DRY penalty (src/bench.py:
+# only a token that would extend a sequence already seen) at 0.4, the setting eval/longgen3.py found best on 368k (14/24
+# segments in band, 0 collapsed, vs 8/24 and 6/24 plain), is reported beside it
+import src.bench as SB_
+for lab_, dry_ in (("plain", 0.0), ("DRY 0.4", 0.4)):
+    SB_.DRY_MULT = dry_; inb_ = col_ = tot_ = 0
+    for p_ in PROMPTS:
+        o_ = ours.generate(ours.encode(p_), 32768, temp=0.85, seed=1)
+        for s_ in range(0, len(o_), 4096):
+            sc_ = bpb_under_gpt2(ours.decode(o_[s_:s_ + 4096])[:4000]); tot_ += 1
+            inb_ += lo <= sc_ <= hi; col_ += sc_ < 0.6
+    print(f"  32k x {len(PROMPTS)} prompts at temperature 0.85, {lab_:8s}: {inb_}/{tot_} segments in band, {col_}/{tot_} collapsed into loops", flush=True)
+    R.setdefault("longgen", {})[lab_] = dict(in_band=inb_, collapsed=col_, segments=tot_)
+SB_.DRY_MULT = 0.0
 R["horizon"] = horizon; R["gen_temp"] = T0; R["gen_bpb"] = best[1]; R["band"] = [float(lo), float(hi)]
 txt = ours.decode(out); n = len(txt)
 for nm, sg in (("START", txt[:240]), ("MIDDLE", txt[n//2:n//2+240])):
     print(f"\n  {nm}: {sg!r}")
-json.dump(R, open("/mnt/kv_cache/nine_axes.json", "w"), indent=1)
+json.dump(R, open("/mnt/kv_cache/nine_axes.json", "w"), indent=1, default=float)
 print(f"\nwrote /mnt/kv_cache/nine_axes.json", flush=True)

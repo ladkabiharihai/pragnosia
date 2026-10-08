@@ -1,0 +1,16 @@
+[gpu] capped at 5.0 GiB of 93 GiB; 43.1 GiB free on the card
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 8151.87it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (3355 > 1024). Running this sequence through the model will result in indexing errors
+  far_read/ckpt_s378000.pt recall 0 'The history of the c': 1.07 1.12 1.13 1.14
+  far_read/ckpt_s378000.pt recall 0 'In this paper we stu': 0.85 0.89 1.27 0.99
+  far_read/ckpt_s378000.pt recall 0 'The river rises in t': 1.01 1.25 1.47 0.91
+/mnt/kv_cache/far_read/ckpt_s378000.pt@0: temp 0.85 DRY 0.4: 6/12 segments in band, 0/12 collapsed, median 1.09
+  far_read/ckpt_s378000.pt recall 16 'The history of the c': 1.07 1.04 1.22 1.33
+  far_read/ckpt_s378000.pt recall 16 'In this paper we stu': 0.85 0.78 1.06 0.80
+  far_read/ckpt_s378000.pt recall 16 'The river rises in t': 1.01 1.12 1.63 1.01
+/mnt/kv_cache/far_read/ckpt_s378000.pt: temp 0.85 DRY 0.4: 6/12 segments in band, 0/12 collapsed, median 1.05
+  si_far_r3_ft/ckpt.pt recall 16 'The history of the c': 0.99 1.14 0.96 1.06
+  si_far_r3_ft/ckpt.pt recall 16 'In this paper we stu': 1.14 1.03 1.19 1.73
+  si_far_r3_ft/ckpt.pt recall 16 'The river rises in t': 1.06 2.41 1.28 1.08
+/mnt/kv_cache/si_far_r3_ft/ckpt.pt: temp 0.85 DRY 0.4: 8/12 segments in band, 0/12 collapsed, median 1.11
+GUARD: peak 5620 MiB of 6 GiB (.venv/bin/python -u eval/lg_check.py /mnt/kv_cache/far_read/ckpt_s378000.pt@0 /mnt/kv_cache/far_read/ckpt_s378000.pt /mnt/kv_cache/si_far_r3_ft/ckpt.pt)

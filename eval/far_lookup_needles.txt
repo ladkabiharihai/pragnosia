@@ -1,0 +1,9 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 40.3 GiB free on the card
+/mnt/kv_cache/far_lookup/ckpt_s375000.pt (step 375000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance      k=16   (k = far keys each query may recall; 0 = trained)
+    4,096    100.0%
+    8,192    100.0%
+   32,768    100.0%
+   65,536    100.0%
+GUARD: peak 6408 MiB of 6 GiB (.venv/bin/python eval/recall_test.py /mnt/kv_cache/far_lookup/ckpt_s375000.pt needle)

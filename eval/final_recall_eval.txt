@@ -1,0 +1,16 @@
+/mnt/kv_cache/final_recall/ckpt_s370000.pt (step 370000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance       k=0      k=16   (k = far keys each query may recall; 0 = trained)
+    2,048      0.0%     95.8%
+   (D=4096 k=16 miss: wanted 865228, wrote ' 893922 introduction the first time')
+    4,096      0.0%     37.5%
+   (D=8192 k=16 miss: wanted 158015, wrote ' 795572 introduction\n\nRe')
+    8,192      0.0%      4.2%
+   (D=16384 k=16 miss: wanted 715930, wrote ' 783820 introduction\n\nRe')
+   16,384      0.0%      4.2%
+   (D=32768 k=16 miss: wanted 557847, wrote ' 584436 introduction\n\nRe')
+   32,768      0.0%      4.2%
+   (D=65536 k=16 miss: wanted 488851, wrote ' 790173 introduction\n\nRe')
+   65,536      0.0%      0.0%
+GUARD: peak 6232 MiB of 6 GiB (.venv/bin/python eval/recall_test.py /mnt/kv_cache/final_recall/ckpt_s370000.pt needle)
+DONE

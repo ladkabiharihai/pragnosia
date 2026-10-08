@@ -1,0 +1,23 @@
+MILLION on final base 382k, 07:33 UTC
+== recall off (carrier + window)
+checkpoint /mnt/kv_cache/final_base_fr382.pt
+recall k = 0
+model ctx 8192, state per layer 6 heads
+positions after the first window: wrap
+      8,192 tokens of context: 1.0359 bits/byte     13.4 s to ingest   peak 2.48 GiB
+     32,768 tokens of context: 1.0439 bits/byte      0.6 s to ingest   peak 2.58 GiB
+    131,072 tokens of context: 1.0436 bits/byte      2.2 s to ingest   peak 2.58 GiB
+    524,288 tokens of context: 1.0416 bits/byte      8.1 s to ingest   peak 2.58 GiB
+  1,048,576 tokens of context: 1.0411 bits/byte     16.4 s to ingest   peak 2.58 GiB
+
+  generated after 1,048,576 tokens of context:
+  '. \\c\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m\\m'
+GUARD: peak 3950 MiB of 5 GiB (.venv/bin/python -u eval/million.py /mnt/kv_cache/final_base_fr382.pt)
+== recall k=16, store in host memory
+checkpoint /mnt/kv_cache/final_base_fr382.pt
+recall store in host memory
+model ctx 8192, state per layer 6 heads
+positions after the first window: wrap
+      8,192 tokens of context: 1.0358 bits/byte     13.5 s to ingest   peak 2.48 GiB
+     32,768 tokens of context: 1.0362 bits/byte      2.8 s to ingest   peak 2.69 GiB
+    131,072 tokens of context: 1.0515 bits/byte     16.7 s to ingest   peak 3.15 GiB

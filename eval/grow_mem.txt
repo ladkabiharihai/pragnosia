@@ -1,0 +1,10 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 17.9 GiB free on the card
+model                                params   bpb @8k  bpb @1M  peak GiB @1M  ingest 1M
+trained (d768, 12 layers)               98M    1.0327   1.0381          0.83        11s
+widened to d1024                       168M    1.0337   1.0388          1.16        19s
+d1024, 24 layers                       319M    1.0337   1.0388          1.62        33s
+d1536, 24 layers                       706M    1.0318   1.0359          2.84        41s
+d2048, 24 layers                      1244M    1.0335   1.0396          4.34        66s
+d2048, 48 layers                      2454M  does not fit under the 6 GiB cap
+GUARD: peak 6298 MiB of 6 GiB (.venv/bin/python -u eval/grow_mem.py /mnt/kv_cache/run85_s396000_e.pt)
+DONE 12:44 UTC

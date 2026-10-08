@@ -2786,3 +2786,816 @@ idled ~5 h: my hourly wakeups did not fire overnight.
 - **FIX under test (eval/sharedd.sh):** optim.py share_d / train.py --share-d: ONE Prodigy step size for the whole model (as
   published), from the summed statistics of all groups; the per-group step size is prodigyplus's extension. Smoke-tested
   (both groups 1.32e-3; trains). Arms from run83_final, 6,000 steps: A shared + carried windows (half), B shared only.
+
+## 2026-10-04 07:11 UTC: USER approved: shared-step-size results, then carrier diagnostics, then a matched transformer control
+An external review of the early log (Sep 11-13) named carrier retrieval as the central open question: the long timescales
+exist, but no retrieval flows through them. eval/carrier_probe.py turns it into two measurements, queued behind
+eval/sharedd.sh, on run82_final, run83_final and r98r:
+- **halflife:** each carrier head's actual per-token decay on real text, as a median half-life in tokens, plus write strength.
+- **retain:** contexts identical except the needle's value (A vs B), then N tokens of prose (128 to 16k).
+  - STORED: the relative difference of the carrier states before the question.
+  - READ: log p(code A | context A) - log p(code A | context B) at the answer, in nats.
+  Stored but not read means a readout problem; not stored means a storage problem.
+- `2026-10-04 07:22:56 UTC` **train** (23.6 min) ok
+  d512 L12 mlp4 ctx8192 B2 344000 steps -> /mnt/kv_cache/sd_A
+  (log `logs/20261004-065921-train.log`, seed 13)
+- `2026-10-04 07:45:54 UTC` **train** (22.9 min) ok
+  d512 L12 mlp4 ctx8192 B2 344000 steps -> /mnt/kv_cache/sd_B
+  (log `logs/20261004-072301-train.log`, seed 13)
+- 2026-10-04 07:48 UTC **Shared step size, from run83_final, 6,000 steps (eval/sharedd.txt):**
+  | Arm | long passages 8k | past 8k | needles 1k | held-out | step size |
+  |---|---|---|---|---|---|
+  | **A: --share-d + carried windows (half)** | **1.0963** | -0.0008 | 0% | **1.0411** | rose 8.1e-4 -> 2.16e-3 |
+  | B: --share-d only | 1.2671 | -0.0005 | 0% | 1.0409 | stayed 8.1e-4 |
+  For reference: run83 1.2618 / held-out 1.0425; run82 1.0403 / 1.0756. Training window starts with a carried state is what
+  repairs the cross-window behaviour. With one shared step size it costs NO general quality (A 1.0411 vs B 1.0409), unlike the
+  per-group carried runs (carry80b: +0.012). The shared step size still rises under carried training (watch in long runs).
+  This combination is the candidate for the next long run of the main lineage.
+- `2026-10-04 08:15:18 UTC` **train** (2.8 min) ok
+  d768 L12 mlp4 ctx8192 B2 300 steps -> /mnt/kv_cache/mt_smoke
+  (log `logs/20261004-081230-train.log`, seed 21)
+
+## 2026-10-04 08:16 UTC: WHY NO RETRIEVAL FLOWS THROUGH THE CARRIER: its long channels are OVERWRITTEN by filler (eval/carrier_probe.txt)
+- **READ** (log p(true code | its context) - log p(true code | the other code's context), nats; 12 pairs per distance):
+  | Model | 128 | 512 | 1,024 | 2,048 | 4,096 | 8,192+ |
+  |---|---|---|---|---|---|---|
+  | run82 (window 1,024) | 23.7 | 22.7 | 7.9 | 1.5 +-1.7 | 0.4 +-0.5 | 0 |
+  | run83 (drifted carrier) | 25.4 | 25.0 | 0.0 | 0.0 | 0.0 | 0 |
+  | r98r (block-local 512) | 10.2 | 4.6 | 3.6 +-0.7 | **3.0 +-0.9** | **1.3 +-0.5** | 0 |
+  The carrier CAN carry the value past the attention window (r98r: 3 nats at 2k, 1.3 at 4k), far too weakly for exact recall,
+  and nothing past ~8k.
+- **STORED** (relative carrier-state difference before the question): the most affected layers (9, 10) fall to a floor by
+  4-8k; slow layers keep a small constant difference. A same-code control (RETAIN_SAME=1) is added to measure the
+  numerical floor; NOT yet run.
+- **HALF-LIVES** (median per head on real text): only 7 of 54 heads exceed 16k tokens (several effectively never decay),
+  most forget within 1-200 tokens.
+- **THE MECHANISM:** the long heads keep WRITING. Their median write strength is 0.17-0.27 (one runs at 1.00), and on the needle's code
+  tokens they write NO MORE than on the surrounding filler (code/filler ratio 0.3-0.6 for most long heads; one head 2x).
+  In a delta-rule memory each write overwrites along its key direction. With 128-dimensional keys a stored item survives
+  ~exp(-N beta / 128), so the half-life is ~330 tokens at beta 0.27 and ~2,200 at 0.04. That predicts a usable span of
+  ~1-2k tokens, which is where READ dies. **A storage problem from overwriting, not decay and not readout.** The long timescales exist,
+  but nothing makes the memory write selectively.
+- **Fix direction (an architecture change, to be proposed to the user before any from-scratch run):** selective,
+  surprise-gated writing (write strongly what the model did not predict, barely at all on predictable filler; cf. Titans,
+  Behrouz et al. 2024), and/or larger keys for the long heads (span ~ key dim / write strength).
+- **Matched transformer control LAUNCHED (eval/matched.sh), as approved:** two 98M models from scratch, the same data,
+  3.0B tokens each, the same no-rate optimizer (--share-d) and seed. Ours (sliding 1,024 window, fixed) vs a standard
+  transformer (full attention, learned positions, 97.6M; smoke-tested). Then the full pipeline on both. ~11 h.
+- 2026-10-04 09:17 UTC Matched control: ours at 10,000 / 46,000 steps (held-out 1.3479 at 4k, 1.2461 at 8k), but at 182 ktok/s, not run82's ~285. Production (vLLM, restarted ~12 h ago) is serving at full load on the shared card, so THROUGHPUT numbers from this run are contaminated; the quality comparison (equal tokens) is not. Speed comparison to be measured separately on a quiet card.
+
+## 2026-10-04 10:30 UTC: OVERWRITING CONFIRMED CAUSALLY (oracle), and "surprise" is the wrong signal for what to keep
+- **ORACLE (eval/carrier_probe.py oracle; no training):** the long carrier heads (median half-life > 1,024) write ONLY on the
+  needle's value tokens, every other head unchanged. READ in nats:
+  | Model, writes | 1,024 | 2,048 | 4,096 | 8,192 | 16,384 |
+  |---|---|---|---|---|---|
+  | r98r normal | 3.6 | 3.0 | 1.3 | 0.0 | 0.0 |
+  | r98r ORACLE | 15.2 | 14.6 | **15.8** | **10.0** | **3.3** |
+  | run82 normal | 7.9 | 1.5 | 0.4 | 0.0 | 0.0 |
+  | run82 ORACLE | 19.8 | 20.2 | 12.4 | 4.2 | 0.8 |
+  Filler overwriting the long heads is what erases a needle, and the model's EXISTING readout uses a preserved needle
+  far past its attention window. What is missing is selective writing.
+- **SURPRISE-GATED writes do not reproduce it:** the long heads write only on the sequence's top 5% / 2% most surprising tokens
+  by the model's own surprisal. r98r is unchanged (3.0 / 1.4 / 0.1 at 2k / 4k / 8k); run82 is worse (0.0 even at 1k).
+  Reason measured: a random 6-digit code is NOT unusually surprising to the model:
+  - r98r: 8.3 bits per code token vs a prose median of 2.4 and a 95th percentile of 11.2; 13% of prose tokens are more surprising, and only 17% of
+    code tokens are in the top 5%;
+  - run82: 5.2 bits per code token; 0% in the top 5%.
+  What makes a needle worth keeping is that it will be ASKED about (importance), not that it was unexpected. That has to be
+  learned from content (the write strength already depends on the hidden state, e.g. on "the secret code is"), and 6,000 steps
+  of the far-needle curriculum did not teach it.
+- Candidate fixes for the user to choose from (all change training or architecture):
+  (1) much longer far-needle training on the main lineage, watching whether the long heads' writes become selective;
+  (2) a GROWN memory layer whose writes start closed (write strength ~0 by default, outputs zero: an exact growth) and
+      open only where training finds it pays: selectivity by default instead of by exception;
+  (3) larger keys for the long heads (span ~ key dimension / write strength).
+- `2026-10-04 12:57:22 UTC` **train** (281.5 min) ok
+  d768 L12 mlp4 ctx8192 B2 46000 steps -> /mnt/kv_cache/m_ours
+  (log `logs/20261004-081550-train.log`, seed 21)
+- `2026-10-04 17:41:01 UTC` **train** (283.5 min) ok
+  d768 L12 mlp4 ctx8192 B2 46000 steps -> /mnt/kv_cache/m_attn
+  (log `logs/20261004-125729-train.log`, seed 21)
+
+## 2026-10-05 06:03 UTC: MATCHED TRANSFORMER CONTROL, results (eval/scorecard_m_ours.txt, eval/scorecard_m_attn_partial.txt)
+Two 98M models from scratch, the same data, 3.0B tokens each, the same no-rate optimizer (one shared step size) and seed.
+Training finished 2026-10-04 17:41 UTC, both pipelines by 19:08 UTC. THE CARD THEN IDLED ~11 h (my wakeups did not fire while
+the session was quiet). The transformer's fine-tune crashed: prodigyplus fails on an empty parameter group, and a transformer
+has no spectral parameters. Fixed in src/sft.py (empty groups skipped); its Q&A / lookup / continual sections are re-running.
+| Measure | OURS (carrier + 1-in-4 sliding attention 1,024) | TRANSFORMER (full attention) |
+|---|---|---|
+| held-out bits/byte, fresh 8k windows (44k steps) | **1.1046** | 1.1772 |
+| context curve 512 / 1k / 2k / 4k / 8k | **1.190 / 1.148 / 1.146 / 1.136 / 1.121** | 1.266 / 1.225 / 1.218 / 1.200 / 1.183 |
+| 24 long passages after 8k / 32k of context | **1.0244 / 1.0243 (flat)** | 1.3234 / 3.0206 (breaks past its 8,192 positions) |
+| 1M-token stream: memory at 131k | **2.86 GiB, flat to 131k** | 12.31 GiB at 131k, 3.23 bits/byte |
+| decode (card shared with production) | **404 tok/s** | 265 tok/s |
+| needles 1k / 4k / 7k / 16k | 0 / 0 / 0 / 0% | **100 / 100 / 100 / 0%** |
+| passkey 512 / 2,048 / 8,192 | 85 / 40 / 0% | **100 / 85** / 0% |
+| facts | 29/48 | 30/48 |
+| induction | **99.0%** | 94.5% |
+| calibration separation | +0.081 | **+0.181** |
+| Q&A everyday / SciQ / ARC (fine-tuned) | 25.0 / 4.8 / 38.6 | (re-running) |
+| training throughput (production load on the card) | 179 ktok/s | 177 ktok/s (equal; not a clean speed test) |
+At equal data and tokens, ours predicts text better at every context length (by 0.06-0.08 bits/byte, ~6%), stays flat to
+131k in a fifth of the memory, decodes 1.5x faster, and has better induction. The transformer retrieves exact facts anywhere
+inside its 8k window (ours only inside its 1,024 attention window: the overwriting found yesterday), and is better calibrated
+at this budget. Its prediction breaks past its trained 8,192 positions.
+- 2026-10-05 06:15 UTC **USER: "can't we do things in parallel with the scorecard run".** Yes: memory fits (production ~46 GiB, scorecard
+  jobs <= 20, training ~16 actual). The cost is contention, so the transformer re-run's DECODE SPEED is not used; its first
+  measurement (265 tok/s) stands. **GROWN MEMORY LAYER built (eval/deepen.py memory):** one carrier layer on top, every
+  head at the long end of the decay range (half-life ~7k), writes closed by default (sigmoid(-6)), output zero. EXACT:
+  2.267318 -> 2.267318, 97.7M -> 104.8M. **A/B launched (eval/memlayer.sh)** beside the scorecard: run83 + memory layer vs
+  run83, both with a cold optimizer, shared step size + carried windows, 25% far-needle documents, 6,000 steps, then READ by
+  distance, needles, the context test, held-out. (The trainer's "absolute lr 0.0003" line for added layers is stale under the
+  fused optimizer: every group runs at multiplier 1.0 times the shared step size.)
+- `2026-10-05 06:48:37 UTC` **train** (1.6 min) ok
+  d256 L4 mlp4 ctx1024 B4 500 steps -> /mnt/kv_cache/mg_smoke
+  (log `logs/20261005-064701-train.log`, seed 3)
+- 2026-10-05 06:51 UTC Memory-layer A/B RESTARTED with warm optimizers (the first version started both cold: shared step size 6e-5 vs run83's 8.1e-4, neither arm could learn; stopped by verified PIDs 2306125 / 2306172 / 2306174). New: train.py --deepen-init memory (in-run growth, every existing weight's optimizer state carried, the shared step size kept, carried streams restarted on the shape change). Smoke-tested (exact, 79 tensors carried). In the run: DEEPENED to 13 layers at 338,000, same batch loss 2.3450 -> 2.3450, optimizer state carried for 231 tensors.
+- `2026-10-05 07:23:27 UTC` **train** (34.3 min) ok
+  d512 L12 mlp4 ctx8192 B2 344000 steps -> /mnt/kv_cache/ml_mem
+  (log `logs/20261005-064906-train.log`, seed 14)
+- `2026-10-05 07:58:19 UTC` **train** (34.8 min) ok
+  d512 L12 mlp4 ctx8192 B2 344000 steps -> /mnt/kv_cache/ml_ctrl
+  (log `logs/20261005-072332-train.log`, seed 14)
+
+## 2026-10-05 08:04 UTC: matched control complete; the grown memory layer opened its writes NON-selectively; run84 launched
+- **Transformer, the re-run sections** (eval/scorecard_m_attn.txt; its fine-tune now works):
+  - Q&A everyday / SciQ / ARC: 12.5 / 2.2 / 34.1 (abstaining 10.4 / 2.2 / 34.3). OURS (matched): **25.0 / 4.8 / 38.6**.
+  - Powered lookup at 10 / 30 / 60 / 120 facts: 30.6 / 28.8 / 26.0 / 24.8% (chance 25). OURS: **37.4 / 39.8 / 43.4 / 30.2%**.
+  - Learning without forgetting, no rate: new facts 22.5 -> 47.5%, old 66.7 -> 45.8%. OURS: **22.5 -> 90.8%**, old 72.9 -> 52.1%.
+  At matched data and tokens, ours leads on Q&A, multi-fact lookup and learning new facts, as well as on prediction, context
+  length, memory and decode. The transformer leads on single-needle retrieval inside its window (100% to 7k vs our 0% past
+  1k) and on calibration (+0.181 vs +0.081). Facts 29 vs 30.
+- **Grown memory layer A/B (eval/memlayer.txt): no retrieval past the window in either arm.**
+  - READ ~0 from 1,024 on; needles 0% at 1-7k.
+  - The new layer WAS used (|o.weight| 0 -> 16.7), and its writes opened, but non-selectively: write strength 0.17 on filler vs
+    0.10 on the code (min 0, max 0.94). Next-token prediction rewards keeping ordinary recent text; needle answers are a tiny
+    share of the loss, so "closed by default" did not stay selective.
+  - Arms not matched in step size: memory arm 8.1e-4 throughout; control ratcheted to 3.25e-3 within a few hundred steps.
+  - Memory arm: held-out 1.0411, long passages 1.1401, READ inside the window 23 nats.
+  - Control: held-out 1.0494 (worse), long passages 0.9862, READ inside the window 9.6.
+- **Retrieval past the attention window: diagnosed (overwriting), causally confirmed (oracle), two learned-selectivity fixes
+  failed in 6,000-step tests.** Reported as the open research problem, with the mechanism and the oracle evidence.
+- **run84 launched (eval/run84.sh):** run83 + the repair that worked (one shared step size + carried windows), 60,000 steps,
+  held-out every 4,000, then the full pipeline. Watch: the shared step size has ratcheted under carried windows in two of
+  three runs.
+- `2026-10-05 08:13:43 UTC` **train** (4.7 min) ok
+  d256 L4 mlp4 ctx1024 B4 1400 steps -> /mnt/kv_cache/ct_smoke
+  (log `logs/20261005-080901-train.log`, seed 3)
+
+## 2026-10-05 08:25 UTC: USER: "the vision complete before the meeting, far ahead"; "scorecard every 6 hours"; "retrieval beyond 1k, also long generation"
+- **Carried training + growth trials now work together** (train.py). A snapshot saves and an install restores each stream's
+  corpus and position, the group step counts, and every group's carried layer states. Streams hold corpus indices, so a
+  deep-copied snapshot never copies a corpus. A rebuilt optimizer keeps the shared step size. Smoke-tested: trials of R and W
+  under carried training, exact growth (5.6070 -> 5.6070), decisions taken.
+- **run85 (eval/run85.sh), the long run to the meeting**, continues run84 from its step-344,000 checkpoint with no gap.
+  - Growth: R (window) / W (width) / d (depth) vs stay, decided by trials on 32k carried streams.
+  - Training: carried windows (streams of up to 131k tokens), one shared step size.
+  - Data: 25% retrieval documents = lookup lists + needles + far needles (>= 1,500 tokens back), 1/3 each.
+- **eval/periodic_eval.sh:** the full pipeline on the latest checkpoint every 6 hours, beside the training (decode speed from
+  those runs not used).
+- **Retrieval beyond 1k:** proven only through a longer attention window (run80, 8k: needles 100 / 96 / 38% at 1k / 4k / 7k).
+  Its cost (worse prediction past 8k) is what carried training reduces, so the model's own window trials, judged on long
+  streams, may now choose it. If they do not, that will be reported, not forced (a hand-set window would break goal 8).
+  Far needles give selective writing a chance to emerge over a long run.
+- **run84 (6,000 steps of the repair):** shared step size steady at 8.1e-4, held-out 1.0416 at 340k.
+- 2026-10-05 08:30 UTC **Long generation, before vs after carried training (nine.py, 32k at t=0.9):** run83 horizon 0, blocks out of band or looping from 12k; **sd_A (run83 + 6,000 carried steps) horizon 8,192**, a glitch at 8-16k (46.6% one byte token at 8-12k), then back IN BAND at 20-32k (1.076 / 1.094 / 1.187). Carried training (streams of up to 131k) is the lever for long generation; run85 trains with it throughout.
+- 2026-10-05 08:51 UTC **run85 RUNNING** from run84's step-344,000 checkpoint (run84 stopped there by verified PIDs). 280 ktok/s, shared step size 9.7e-4. First growth trial at 348,000. eval/periodic_eval.sh is running (first scorecard ~15:00 UTC).
+- 2026-10-05 09:24 UTC **run85's first trial (352,000): STAY.** On 32k carried streams from 2.6704: unchanged 2.6669, W (168M) 2.6671, R (2,048 window) 2.6677, d (24 layers, 183M) 2.6734. All growth exact (W 2.3335 -> 2.3327, d 2.3335 -> 2.3335). Next trial when the stage doubles (~360,000). Raised with the user: the trials optimize average loss, where needle answers are a tiny share, so R may keep losing. Option B (score trials on a held-out where recall counts as much as text) is offered as a decision for the user, not taken.
+- 2026-10-05 10:03 UTC **RECALL: exact retrieval past the attention window WITHOUT retraining (src/recall.py, eval/recall_test.py).**
+  The three sliding attention layers keep every key and value that slides out of their 1,024 window in a store; each query
+  also attends to its own top-k far keys by the layer's own q.k score (Memorizing Transformers / InfLLM, exact top-k). The
+  attention has no rotary positions, so a far key needs no re-indexing. k = 0 is the trained model (last-window loss 2.55622
+  unpatched vs 2.55628 patched; max log-prob difference 0.08 from flex vs explicit softmax).
+  - In-distribution needles on run85 step 352,000 (16 per cell, greedy exact), k=0 -> k=16: 512 100 -> 100%, **1,024 0 -> 100,
+    2,048 0 -> 100, 4,096 0 -> 68.8, 8,192 0 -> 56.2, 16,384 0 -> 37.5, 32,768 0 -> 31.2%**. Many misses lose one digit
+    (865228 -> 86522, 547104 -> 54710): the first tokens are recalled, a later one is not.
+  - Cost, ungated (one 8,192-token window after 12k of context, wiki): loss 2.556 -> 2.626 (k=16) / 2.602 (k=64). The layers never
+    saw far keys in training. Testing a parameter-free gate (a far key only if it beats every key in the window) and the cost
+    on long streams by position.
+- 2026-10-05 10:15 UTC **Recall's cost on long streams** (8 x 32,768 tokens of arxiv/wiki/dclm/fineweb-edu, window by window,
+  states carried; eval/recall_stream.txt): mean loss k=0 2.3273, k=16 2.3732, k=16 gated 2.4002, k=64 gated 2.3893. By position
+  (k=16 minus k=0, +-95%): 1-4k **-0.036 +-0.027**, 4-8k -0.080 +-0.118, 8-16k +0.025 +-0.112, 16-32k **+0.106 +-0.143**. Recall
+  helps inside the first context window and hurts after the first window boundary; the gate does not help. Likely cause:
+  positions restart every 8,192 tokens, so an old key at the same in-window position aliases (to verify). Fix in progress:
+  train WITH recall (old keys as candidates in carried training), so the layers learn to use them by content.
+- `2026-10-05 10:17:21 UTC` **train** (2.4 min) ok
+  d256 L4 mlp4 ctx1024 B4 600 steps -> /mnt/kv_cache/rc_smoke
+  (log `logs/20261005-101459-train.log`, seed 3)
+- 2026-10-05 10:25 UTC **Recall made trainable** (one implementation for training and inference: model.py `Attn._recall`;
+  LM(recall_k=...), `LM.set_recall(k, span)`). The window goes through flex attention with its log-sum-exp; each query's
+  top-k keys older than the window (chosen by q.k, no gradient through the choice) are gathered and merged exactly by
+  log-sum-exp. Training carries the previous context window's keys as the store (a fixed shape for the graphs); held-out
+  and inference keep the whole past. No parameters, so a checkpoint and its optimizer state load unchanged. Checked: the
+  model's recall = the explicit reference (last-window loss 2.60207 vs 2.60204 at k=64). train.py: `--recall K`, growth op
+  **M** (recall on at 16, or doubled), the checkpoint's recall_k restored on resume, held-out read with the whole past.
+  Smoke test (5.5M, carried windows, recall 8, an M trial doubling it to 16): trains, decides (STAY), saves recall_k.
+- **Plan (eval/pause85_ab.sh, running):** at run85's step-360,000 checkpoint, pause run85 (exact PIDs), then the A/B
+  (eval/recall_ab.sh): 4,000 steps from that checkpoint with `--recall 16` vs `--recall 0`, same seed and data, one after
+  the other; then run85 resumes from the same checkpoint with M among its growth options (eval/run85b.sh; M is left out
+  if the recall arm did not finish cleanly). Then needles 1-32k and the long-stream loss on both arms.
+- 2026-10-05 10:30:22 UTC **run85 paused** at its step-360000 checkpoint (PIDs 2327437, 2327439 verified by cmdline) for the recall A/B; it resumes from the same checkpoint afterwards (eval/run85b.sh).
+- `2026-10-05 10:33:12 UTC` **train** (2.8 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 48.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 24.19 MiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.61 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 2264466 has 38.50 GiB memory in use. Process 2265865 has 1.53 GiB memory in use. Process 2265864 has 1.71 GiB memory in use. Process 2265867 has 1.73 GiB memory in use. Process 2265866 has 946.00 MiB memory in use. Process 2334849 has 4.22 GiB memory in use. Process 2342042 has 18.55 GiB memory in use. Including non-PyTorch memory, this process has 19.58 GiB memory in use. 34.00 GiB allowed; Of the allocated memory 18.33 GiB is allocated by PyTorch, with 12.83 GiB allocated in private pools (e.g., CUDA Graphs), and 265.88 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B2 364000 steps -> /mnt/kv_cache/rc1
+  (log `logs/20261005-103026-train.log`, seed 16)
+- 2026-10-05 10:41 UTC **INCIDENT: the pause failed and two trainings shared the card; the card filled.** eval/pause85_ab.sh checked
+  each PID's /proc cmdline with grep for "keep_training.sh logs/train85.out", but cmdline separates arguments with NUL bytes,
+  so the wrapper was NOT killed; the trainer (matched on "src.train", inside one argument) was. keep_training.sh then resumed
+  run85 from its step-360,000 checkpoint at once, as designed, while the A/B's recall arm started beside it. The arm died
+  out of memory with **24 MiB free on the card**. Its control arm started next and I killed it (and the orchestrator and A/B
+  script) by verified PIDs (2340643, 2341996, 2343811) within minutes. **Prod checked: vLLM /health 200, model listed;
+  Kokoro, chatterbox and Whisper processes alive.** run85 is training (resumed at 360,000, current code, recall off; its
+  next trial started at 360,400). Fixes: cmdline checks now read NUL as spaces, and recall_ab.sh and run85b.sh refuse to
+  start while any other trainer is running.
+- 2026-10-05 10:55 UTC **run85's shared step size rose 9.69e-4 -> 2.73e-3 in the 200 steps after the automatic resume** (six
+  consecutive maximal x2^0.25 rises, 360,200-360,400). The checkpoint's saved Prodigy statistics are consistent (numerator
+  -0.0045, sum|s| 0.564, d 9.69e-4): the rise is Prodigy's own estimate after every carried stream restarted (run85's own
+  start rose once, 8.13e-4 -> 9.69e-4). Watching held-out at 364,000 (360,000: 1.0394 bits/byte). Found while checking: a
+  real bug, `Fabric.load_state_dict` (used by every trial install) did not reset the shared-d device state, so each trial
+  branch and the run after a trial inherited the highest d any earlier branch reached. Fixed in src/optim.py (takes effect
+  at run85's next start).
+- 2026-10-05 11:05 UTC **CAPABILITY SUITE (eval/bench_suite.py, eval/bench_suite.txt): run85 step 352,000 vs GPT-2 124M vs
+  SmolLM2-135M**, zero-shot, identical scoring for all three (acc_norm for multiple choice; 500 items per benchmark, so +-4
+  points at 95%; GSM8K 250 items 8-shot; facts 48, arithmetic 60, reasoning 400 from src/facts.py, summed log-prob):
+  HellaSwag 29.2 / 32.0 / 45.2; PIQA 61.6 / 63.4 / 69.0; ARC-Easy 39.4 / 39.8 / 59.2; ARC-Challenge 23.6 / 22.0 / 29.8;
+  OpenBookQA 26.8 / 25.6 / 32.4; LAMBADA 15.6 / 16.2 / 22.2; **GSM8K 3.6 / 0.8 / 0.8** (9 vs 2 of 250); facts 64.6 / 79.2 /
+  91.7; arithmetic four-way 18.3 / 35.0 / 36.7 (below chance: it prefers the typical-error distractors); arithmetic exact
+  0 / 0 / 0; reasoning probe 45.5 / 61.2 / 53.2. **Verdict: at GPT-2's level on the standard reasoning benchmarks (every
+  difference inside the interval except facts and the two probes, where GPT-2 leads); SmolLM2 (2T training tokens, ~100x
+  ours) leads everything but GSM8K.** Generation (genqual2, 1,024 tokens): statistics match real text at t=0.9 (words 0.82
+  vs 0.79, variety 0.98 vs 0.99) and GPT-2's; content fluent but factually unreliable ("the architect Mozart who was a
+  famous composer").
+- 2026-10-05 11:28:46 UTC **run85 stopped at its step-368000 checkpoint** (eval/pause85_ab2.sh: wrapper then trainer, verified dead); its trainer check then matched a shell's command line and aborted the A/B, so the card was idle ~5 min. Relaunched the A/B by hand (anchored trainer pattern).
+- `2026-10-05 11:32:33 UTC` **train** (2.1 min) ok
+  d256 L4 mlp4 ctx1024 B4 600 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261005-113028-train.log`, seed 3)
+- `2026-10-05 11:33:13 UTC` **train** (0.6 min) ok
+  d256 L4 mlp4 ctx1024 B4 700 steps -> /mnt/kv_cache/rc_smoke3
+  (log `logs/20261005-113238-train.log`, seed 3)
+- 2026-10-05 11:20 UTC **run85 decided GROW (R) at 364,500: attention window 1,024 -> 2,048** (32k carried held-out streams:
+  R 2.6508 vs unchanged 2.6552; W 2.6623, d 2.6816). Exact retrieval inside the trained model now reaches ~2k, chosen by the
+  model. Held-out bits/byte: 360k 1.0394, 364k 1.0399, 368k 1.0446 (the step size rose 2.8x after the 360k resume; watching).
+- 2026-10-05 11:25 UTC **RETRACTION (10:55 entry):** the "stale shared step size across trial installs" bug does not exist:
+  `install()` builds a NEW optimizer (`make_opt`) every time, so its shared-d state starts fresh. The added reset in
+  `Fabric.load_state_dict` is harmless and kept.
+- 2026-10-05 11:30 UTC **ADVERSARIAL REVIEW of the trainable recall (workflow, 31 agents: four lenses + a gradient test, every
+  finding re-checked by a skeptic): 21 findings confirmed, 5 rejected.** The gradient test PASSED: forward and gradients of
+  `Attn._recall` match a dense float64 reference to the bf16 noise floor when given the same selection (bf16 scores make
+  near-tied far keys swap: tie-breaking, not a gradient defect). Fixed (src/model.py, src/train.py, src/recall.py,
+  src/bench.py; smoke-tested: an M-or-R trial with carried windows, held-out with recall, resume, loaders):
+  - held-out zeroed recall's span and restored it only on success; an out-of-memory retry kept 0 and the recapture would
+    crash on a state-shape mismatch -> restored in `finally` to the training span;
+  - every LM(**cfg) loader (scorecard, Ours, probes) ran recall with the TRAINING span (last 8,192 keys), not the whole past
+    -> the default span is now 0 (whole past); training sets its window length (`train_span`) before every capture;
+  - an automatic resume repeated the launch's --recall over a recall_k the model had grown -> the checkpoint's recall wins;
+  - a growth that changes the layer states' shapes (R, W, d, M) restarted the carried streams in the grown branch only; the
+    unchanged branch kept the snapshot's -> the unchanged branch now restarts them too (same batches for every branch;
+    this also affected the R decision at 364,500: its grown branch trained on restarted streams, the unchanged on carried);
+  - the reference recall at k=0 could use the graphed decode (eval only) -> never.
+  Recorded, not fixed: trials price compute as parameters x steps, so options that add compute without parameters (R, M)
+  look free (~+10% FLOPs each at these sizes); the carried mode has no out-of-memory fallback for recapture (pre-existing);
+  the far-key top-k scans the whole score row (cost being measured on the A/B's recall arm).
+- 2026-10-05 11:27 UTC **the A/B is running** (eval/ab_then_85.sh): run85 stopped at its 368,000 checkpoint; arm 1 (--recall 16,
+  window 2,048 from the checkpoint) captured with 18.9 GiB reserved (10.1 without recall).
+- `2026-10-05 11:38:56 UTC` **train** (1.0 min) ok
+  d256 L4 mlp4 ctx1024 B4 300 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261005-113759-train.log`, seed 3)
+- 2026-10-05 11:50 UTC **Faster exact far-key selection** (model.py `_far_topk`): only the keys that can be far for a chunk of
+  queries are scored, the staircase at their end masked in place, chunks with no far key skipped, and the top-k found in
+  two stages (each 64-key block's maximum, the k best blocks, the k best keys among them; exact: every key of the true
+  top-k lies in a block whose maximum is at least the k-th best score, and at most k blocks can have that). Checked:
+  identical key sets to the full-row top-k on six shapes (fresh, continued, decode, ragged lengths); the model's recall
+  output unchanged (last-window loss 2.60207); compiled carried training runs. ~2x faster per chunk at training shapes
+  (2.2-2.65 vs 4.1-9.0 ms, measured beside the A/B). The A/B's recall arm started before this (81 ktok/s vs ~280 without
+  recall). **run85 will resume WITHOUT M** among its options until the A/B is read and recall's time cost is priced.
+- `2026-10-05 11:42:59 UTC` **train** (2.2 min) ok
+  d256 L4 mlp4 ctx1024 B4 600 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261005-114044-train.log`, seed 3)
+- `2026-10-05 11:46:07 UTC` **train** (3.0 min) ok
+  d256 L4 mlp4 ctx1024 B4 800 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261005-114310-train.log`, seed 3)
+- 2026-10-05 12:15 UTC **Trials now price compute as TIME** (train.py): the second half of every branch is timed (wall clock,
+  synchronised, between the mid-point held-out and the end) and the decision compares held-out gain per second (logged per
+  hour), with parameters x steps still logged beside it. Before, an option that adds time without parameters (R, M) looked
+  free. Smoke test (5.5M, an M-or-R-or-W trial beside the A/B): s/step unchanged 0.017, R 0.029, M 0.059, W 0.104; per hour
+  unchanged 414 vs W 77 -> STAY (W was ahead in loss but bought it at 6x the time). Caveat recorded: wall-clock includes
+  contention from anything sharing the card during a branch.
+- 2026-10-05 12:20 UTC run85b.sh offers M again (time-priced trials).
+- `2026-10-05 12:17:57 UTC` **train** (49.1 min) ok
+  d512 L12 mlp4 ctx8192 B2 372000 steps -> /mnt/kv_cache/rc1
+  (log `logs/20261005-112850-train.log`, seed 16)
+- `2026-10-05 12:34:22 UTC` **train** (16.3 min) ok
+  d512 L12 mlp4 ctx8192 B2 372000 steps -> /mnt/kv_cache/rc0
+  (log `logs/20261005-121802-train.log`, seed 16)
+- 2026-10-05 12:35 UTC **The A/B arms finished** (4,000 steps from 368,000, window 2,048): recall arm 49.1 min (93 ktok/s; old
+  selection), control 16.3 min (278 ktok/s). The trainer's held-out bits/byte at 372,000: **control 1.0481, recall 1.0530**.
+  Read-out of needles and long streams running (eval/recall_ab_eval.sh -> eval/recall_ab.txt).
+- 2026-10-05 12:40 UTC **FOUND: run85 had been degrading since the automatic resume at 360,000, and the cause is the step size,
+  not the window.** The trainer's own held-out (8 x 4 windows of 8,192, seed 1234) re-measured on each checkpoint, at its own
+  window and at 1,024: 352k 1.0398 / 360k 1.0394 (window 1,024) ; 368k **1.0446 at 2,048, 1.0480 at 1,024** ; control arm 372k
+  **1.0481 at 2,048, 1.0521 at 1,024**; recall arm 1.0529. The 2,048 window the model grew is worth -0.0035 to -0.004 at the
+  same weights; the WEIGHTS got worse by ~0.004 per 4,000 steps from the moment the shared step size ratcheted 9.69e-4 ->
+  2.73e-3 (360,200-360,400; it only rises). The long held-out agreed: at the 360,400 trial the unchanged branch made no
+  progress in 1,025 steps (2.6553 -> 2.6552) where earlier trials' unchanged branches gained 0.003. Likely mechanism (not
+  proven): a resume restarts every carried stream at once; fresh windows make the gradient correlate with the direction back
+  toward Prodigy's reference point, its estimate reads that as a larger distance, and the max ratchets.
+- **Acted:** run85b (resumed at 368,000 four minutes earlier) stopped by verified PIDs; **run85c (eval/run85c.sh) resumes from
+  360,000, the last healthy checkpoint, with --freeze-d 1**: the shared step size held at the model's own estimate there
+  (9.69e-4; schedule-free at a constant step, as published for SF-AdamW). Found on the way: `_share_d_update` ignored
+  --freeze-d (fixed in src/optim.py). Cost: 8,000 steps (~35 min) and the R decision, which its trial re-takes under the
+  fixed rules (time-priced, same batches, M offered). Window growth itself is confirmed good (-0.004 bits/byte).
+- 2026-10-05 12:50 UTC **RECALL A/B READ (eval/recall_ab.txt): trained recall solves retrieval past the window.** Both arms
+  4,000 steps from run85's 368,000 (window 2,048); 24 in-distribution needles per cell, greedy exact:
+  | distance | 2k | 4k | 8k | 16k | 32k | 64k |
+  | recall-trained arm, recall on | 100 | 95.8 | 100 | 100 | 91.7 | 79.2 |
+  | control arm, recall added untrained | 100 | 75.0 | 75.0 | 70.8 | 54.2 | 45.8 |
+  | either arm, recall off | 0 | 0 | 0 | 0 | 0 | 0 |
+  Long streams (8 x 32,768 tokens, window by window, states carried): **recall arm with recall 2.2708 nats/token vs control
+  without 2.3046 (-0.034)**; by position vs the control: 0-1k +0.0135, 1-4k +0.0065, 4-8k -0.037, 8-16k -0.050, 16-32k
+  -0.035. Within each arm, recall on vs off: recall arm -0.0515 overall (past 8k -0.068 / -0.053: the untrained cost past
+  the first window, +0.106, is gone); control arm -0.0165. Short range is worse in the recall arm (and its trainer's
+  bits/byte 1.0530 vs 1.0481); its shared step size ratcheted further (3.30e-3 vs 2.73e-3), the degradation found above, so
+  the short-range gap is confounded with it. The recall arm trained 3x slower (old selection; 93 vs 278 ktok/s).
+- `2026-10-05 13:36:19 UTC` **train** (4.9 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 278.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 243.81 MiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.61 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 2264466 has 38.50 GiB memory in use. Process 2265865 has 1.53 GiB memory in use. Process 2265864 has 1.71 GiB memory in use. Process 2265867 has 1.73 GiB memory in use. Process 2265866 has 946.00 MiB memory in use. Process 2388834 has 24.75 GiB memory in use. Including non-PyTorch memory, this process has 17.39 GiB memory in use. 20.00 GiB allowed; Of the allocated memory 15.70 GiB is allocated by PyTorch, with 5.39 GiB allocated in private pools (e.g., CUDA Graphs), and 696.93 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B1 360700 steps -> /mnt/kv_cache/rc_dbg
+  (log `logs/20261005-133122-train.log`, seed 18)
+- `2026-10-05 13:39:27 UTC` **train** (2.1 min) ok
+  d256 L4 mlp4 ctx4096 B2 500 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261005-133722-train.log`, seed 3)
+- 2026-10-05 13:00 UTC **run85c CRASHED (SIGSEGV, exit 139) twice, at the M branch's mid-trial held-out**, and keep_training
+  then resumed from run85/ckpt.pt = the 368,000 high-step-size checkpoint (not 360,000) and crashed the same way: TRAIN85_FAILED
+  at 13:00 UTC; the card idle ~30 min until I looked at 13:28. The recall branch itself trained fine (141-163 ktok/s with the
+  new selection, 27.1 GiB). Cause: the held-out pass with recall keeps the whole past of 8 x 32k streams (~10 GiB, measured
+  offline: 4.5 -> 10.1 GiB over four windows) beside the branch's 27 GiB of graphs under a 34 GiB cap; the out-of-memory
+  inside a kernel killed the process without a Python traceback (not reproduced offline with room; reproduced as an
+  out-of-memory in the real trainer at full size). Fixes: held-out with recall runs ONE STREAM AT A TIME (same mean;
+  smoke-tested: an M trial with 8 x 32k held-out streams), faulthandler enabled in train.py.
+- 2026-10-05 13:30 UTC **run85c restarted by hand from 360,000 without M** (run85/ckpt.pt replaced by the 360k copy so a crash
+  cannot resume the high-step-size state; the 368k checkpoints kept aside as run85_s368000*.pt).
+- 2026-10-05 13:36 UTC **INCIDENT: my reproduction filled the card to 243 MiB free** (a full-size trainer at cap 20 beside
+  run85c in a trial and prod ~51 GiB). It died of out-of-memory itself; **prod checked: vLLM /health 200 and a completion
+  served; Kokoro, chatterbox, Whisper processes alive; run85c alive.** Rule from now: the caps of everything on the card
+  must sum under it: prod ~51 + the trainer 32 + side jobs 8 (<= 93). `MEMBRAE_CAP_MAX` (src/common.py cap_gpu) clamps
+  every cap in a process tree; eval/eval_ckpt.sh (the 6-hourly scorecard) exports 8 (its fine-tunes asked for 30).
+- 2026-10-05 13:55 UTC **eval/to85d.sh armed:** at run85c's first checkpoint >= 368,000 (after its 360,400 trial decides),
+  stop it (wrapper verified dead first) and start run85d = run85c + M offered + cap 32.
+- 2026-10-05 14:14:39 UTC run85c stopped at its step-368000 checkpoint (wrapper 2388832, trainer 2388834 verified dead); run85d starts from it with M offered, cap 32.
+- `2026-10-05 14:40:03 UTC` **train** (25.3 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 48.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 9.40 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.61 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 2264466 has 38.50 GiB memory in use. Process 2265865 has 1.53 GiB memory in use. Process 2265864 has 1.71 GiB memory in use. Process 2265867 has 1.73 GiB memory in use. Process 2265866 has 946.00 MiB memory in use. Including non-PyTorch memory, this process has 32.99 GiB memory in use. 32.00 GiB allowed; Of the allocated memory 31.43 GiB is allocated by PyTorch, with 9.57 GiB allocated in private pools (e.g., CUDA Graphs), and 559.11 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B2 2400000 steps -> /mnt/kv_cache/run85
+  (log `logs/20261005-141442-train.log`, seed 19)
+- `2026-10-05 14:44:07 UTC` **train** (3.9 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 48.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 7.81 MiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.61 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 2264466 has 38.50 GiB memory in use. Process 2265865 has 1.53 GiB memory in use. Process 2265864 has 1.71 GiB memory in use. Process 2265867 has 1.73 GiB memory in use. Process 2265866 has 946.00 MiB memory in use. Including non-PyTorch memory, this process has 26.93 GiB memory in use. Process 2399012 has 15.44 GiB memory in use. 32.00 GiB allowed; Of the allocated memory 25.54 GiB is allocated by PyTorch, with 19.76 GiB allocated in private pools (e.g., CUDA Graphs), and 387.94 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B2 2400000 steps -> /mnt/kv_cache/run85
+  (log `logs/20261005-144012-train.log`, seed 19)
+
+## 2026-10-06 04:35 UTC: overnight, the run sat idle 14 hours
+- **run85c (step size held) recovered:** trainer held-out bits/byte 364k **1.0394**, 368k **1.0371** (the best yet; the
+  high-step-size branch had reached 1.0446 at 368k). Its trial at 360,400, now priced by time and on the same batches:
+  R 2.6535 (0.0167/hour, 0.322 s/step) vs unchanged 2.6543 (0.0133/hour, 0.236 s/step); W 2.6552, d 2.6594 -> **GROW (R):
+  window 1,024 -> 2,048 again, by the model's own fair trial.**
+- **run85d (M offered, cap 32) from 368,000 (14:14 UTC): trial at 368,600: M 2.6498 -> 2.6939 (+0.044 after 1,000 steps:
+  untrained recall costs ~0.08 under bf16 and 1,000 steps at the held step size did not recover it); R (4,096) 2.6606;
+  W 2.6498.** The d branch (183M) then died of out-of-memory at capture under the 32 GiB cap (it fit under 34 at 360,400).
+  keep_training resumed at 14:40 UTC; that attempt collided with the 6-hourly scorecard's fine-tune (a process at 15.4 GiB
+  although its log says "capped at 8.0 GiB"), the card reached **7.81 MiB free**, the trainer died, and keep_training's two
+  failures stopped it at 14:44 UTC. Nothing ran from then until 04:31 UTC (14 hours). vLLM /health 200 this morning.
+- **Fixed:** keep_training.sh is patient (6 attempts at one checkpoint, 10 minutes apart from the second, so a collision
+  waits the side job out). **run85e (eval/run85e.sh) started 04:36 UTC from run85c's 368,000** (step size held, cap 34,
+  options R|W|d). M is no longer offered: the model's own trial rejected it at 1,000 steps; retrieval past the window will
+  be a recall-trained variant (the A/B's 4,000 steps gave needles 79-100% to 64k), reported as such.
+- **The 6-hourly full scorecard will not run beside training** until the fine-tune's real footprint is measured: a per-process
+  memory fraction did not bound it (15.4 GiB observed vs an 8 GiB cap) and the voice services allocate on demand, so a full
+  card can fail prod requests.
+- 2026-10-06 04:45 UTC **ROOT CAUSE of the side job that broke its cap: the carrier's PYTHON chunk scan in backward allocates
+  ~10 GiB outside PyTorch's capped allocator.** Measured (scratchpad memprobe.py, 98M model, batch 2 x 1,024, cap 6 GiB):
+  python scan forward 1.73 GiB reserved / 2.41 GiB on the card, backward -> **11.3 GiB on the card** (killed by the guard);
+  fused scan (flash-linear-attention, what training uses) forward 2.32, backward 2.97 GiB. The scorecard's fine-tune
+  (src/sft.py) never set the fused scan: 15.4-15.9 GiB under a 7-8 GiB cap, in ONE process. Fixed: src/sft.py uses the fused
+  scan (re-measured: 7.07 GiB peak under a 7 GiB cap, same starting answer loss 1.8013, trains); eval/continual.py trains
+  inside `src.assoc.fused_scan(model)` (new context manager). New **eval/guarded.sh <GiB> <cmd>**: runs a side job and kills
+  exactly its own PIDs if their GPU memory (nvidia-smi, every 2 s) passes the limit; it caught the 15.5 GiB fine-tune
+  within one poll. **eval/periodic_eval.sh relaunched** (04:46 UTC): every 6 hours, the full pipeline on the latest
+  checkpoint under guarded.sh 6 with MEMBRAE_CAP_MAX=6 (prod ~51 + trainer 34 + 6.5 < 93).
+- **Scorecard of run85c step 368,000 (eval/scorecard_r85_s368000.txt, finished 16:02 UTC yesterday):** everyday Q&A 22.9%
+  (fine-tuned) / 39.6% right, 52.1% wrong, 8.3% declined (abstention-tuned) vs GPT-2 16.7 / SmolLM2 62.5; ARC 39.8 vs 33.8 /
+  48.4; SciQ 8.4 vs 2.2 / 12.7; facts 31/48 vs 33, calibration +0.230 vs +0.186; induction 99.0 vs 98.5; context rot bits/byte
+  1.1244 (512) -> 1.0495 (8,192) (GPT-2 1.2167 / 1.2249, max 1,024); one million tokens 1.0090 in 2.98 GiB (flat from 8k);
+  32k vs 8k of context -0.0028 +- 0.0017; hard lookup 50-55% vs GPT-2 37-40%; needles 100% to 1,024, 0% from 4,096;
+  passkey 85% (512), 65% (2,048), 0% (8k+); decode 390 vs 250 tok/s (shared card). **Long generation REGRESSED: horizon 0**
+  (32k at t=0.9: out of band for the first 12k tokens, scores 1.315 vs real text's band to 1.188, then in band); run84's
+  carried-training check had horizon 8,192. To investigate.
+- `2026-10-06 04:56:09 UTC` **train** (23.4 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 6.21 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.61 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 2428834 has 37.25 GiB memory in use. Process 2430187 has 946.00 MiB memory in use. Process 2430188 has 946.00 MiB memory in use. Process 2430189 has 946.00 MiB memory in use. Process 2430190 has 946.00 MiB memory in use. Including non-PyTorch memory, this process has 35.00 GiB memory in use. Process 2463515 has 4.61 GiB memory in use. 34.00 GiB allowed; Of the allocated memory 33.37 GiB is allocated by PyTorch, with 23.52 GiB allocated in private pools (e.g., CUDA Graphs), and 633.97 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B2 2400000 steps -> /mnt/kv_cache/run85
+  (log `logs/20261006-043244-train.log`, seed 20)
+- 2026-10-06 05:15 UTC **run85e died at its trial's W branch (168M): the branch's SNAPSHOT passed the 34 GiB cap** (deepcopy
+  made the whole model again on the card before moving it to the CPU), 04:56 UTC; the out-of-memory retry (roomy) could not
+  help because under carried training it released no graph memory. keep_training retried; the second attempt was heading
+  for the same failure. Fixed (src/train.py): the snapshot copies every parameter and buffer straight to the CPU through
+  deepcopy's memo (checked: identical state, everything on the CPU, attributes kept, the same loss after reload, 0.8 MB of
+  extra GPU memory instead of a second model), and roomy now also releases the carried-training graphs (keeping the streams'
+  states and positions, handed back after the recapture). Restarted by hand from 368,000 (05:13 UTC).
+  Two near-misses on the way, caught by guards: (1) my trainer pattern anchored on "--out /mnt/kv_cache/run85$" did not match
+  the auto-resumed trainer (keep_training appends --resume after --out), so it survived my stop; run85e.sh's own guard then
+  REFUSED to start a second trainer. (2) eval/periodic_eval.sh used the same anchored pattern and would have stopped after
+  any automatic resume: fixed ("( |$)") and relaunched with the first scorecard at ~10:45 UTC.
+- `2026-10-06 05:36:56 UTC` **train** (26.9 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 4.86 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.61 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 2428834 has 38.58 GiB memory in use. Process 2430187 has 946.00 MiB memory in use. Process 2430188 has 946.00 MiB memory in use. Process 2430189 has 946.00 MiB memory in use. Process 2430190 has 946.00 MiB memory in use. Including non-PyTorch memory, this process has 35.00 GiB memory in use. Process 2473188 has 4.63 GiB memory in use. 34.00 GiB allowed; Of the allocated memory 33.37 GiB is allocated by PyTorch, with 23.52 GiB allocated in private pools (e.g., CUDA Graphs), and 633.97 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B2 2400000 steps -> /mnt/kv_cache/run85
+  (log `logs/20261006-051005-train.log`, seed 20)
+- `2026-10-06 05:41:11 UTC` **train** (2.6 min) ok
+  d256 L4 mlp4 ctx1024 B4 900 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261006-053838-train.log`, seed 3)
+- 2026-10-06 05:40 UTC **run85e failed a THIRD time at the W branch's end, again at its own 34 GiB cap (4.9 GiB free on the
+  card): `install()` loaded the next branch's snapshot while the outgoing branch's carried-training graphs (their pool), its
+  168M model and its 1.3 GiB of optimizer state were still on the card.** Fixed: install releases them first (carry_g, m,
+  opt = None, then collect). Smoke-tested: a full R|W|d trial with installs and the unchanged branch (peak 3.0 GiB at 5.5M).
+  Restarted by hand at 05:52 UTC (wrapper verified dead, then the trainer; the trainer found by the unanchored pattern).
+- 2026-10-06 05:50 UTC **Long generation (eval/longgen.py, 368k): min-p sampling makes it WORSE.** Real text under GPT-2
+  0.965-1.205 bits/byte; min-p 0.05-0.1 at temperature 0.8-1.0 scores 0.17-0.52 (too predictable: repetitive). Plain
+  temperature 0.85: horizons 0 / 4,096 / 4,096 (segments fall to 0.02-0.28 = loops); 0.9: 0 / 0 / 12,288. The failure is
+  repetition collapse, not sampling noise. Next (eval/longgen2.py, running): a frequency penalty over the last 2,048
+  tokens (src/bench.py FREQ_PEN, off by default) whose strength is chosen by matching real text's 4-gram repeat rate
+  (0.131 median over 9 spans of dclm/wikipedia/arxiv).
+- `2026-10-06 06:10:43 UTC` **train** (29.2 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 5.15 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.61 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 2428834 has 38.58 GiB memory in use. Process 2430187 has 946.00 MiB memory in use. Process 2430188 has 946.00 MiB memory in use. Process 2430189 has 946.00 MiB memory in use. Process 2430190 has 946.00 MiB memory in use. Including non-PyTorch memory, this process has 35.01 GiB memory in use. Process 2488783 has 4.34 GiB memory in use. 34.00 GiB allowed; Of the allocated memory 33.32 GiB is allocated by PyTorch, with 23.52 GiB allocated in private pools (e.g., CUDA Graphs), and 690.27 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B2 2400000 steps -> /mnt/kv_cache/run85
+  (log `logs/20261006-054130-train.log`, seed 20)
+- `2026-10-06 06:34:11 UTC` **train** (2.3 min) ok
+  d256 L4 mlp4 ctx1024 B4 900 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261006-063154-train.log`, seed 3)
+- 2026-10-06 06:37 UTC **The fourth W-branch failure (06:10 UTC) found its real cause: the step loop's own local handle on the
+  carried-training graphs (`C_ = carry_g`) kept the outgoing branch's whole graph pool (~20 GiB) alive after install dropped
+  carry_g;** a widening's map of old to new parameters (`grown_`) also held both models' parameters. install and roomy now
+  clear both, and install logs what is still allocated after releasing: 0.17-0.36 GiB in a 5.5M smoke test of a W|R trial
+  (it would have held the outgoing branch). run85e restarted by hand from 368,000.
+- 2026-10-06 06:55 UTC **Long generation II (eval/longgen2.py, 368k): a frequency penalty chosen by real text's repetition rate
+  removes the loops.** Real text: 4-gram repeat rate 0.131 (median of 9 spans; 0.048-0.338). Plain sampling repeats 0.22
+  (t=0.85) / 0.35 (t=0.9) over 8k tokens and 0.46-0.51 over 32k (loops: GPT-2 segments 0.11-0.28). Penalty 0.05 at t=0.85
+  (closest to real text: repeat 0.086, start score 1.117 vs real 1.113): 32k horizons 4,096 / 0 / **32,768** (median 4,096),
+  repeat 0.03-0.17, no segment below the band; the out-of-band segments are now ABOVE it (1.2-1.6: too surprising, as the
+  penalty also pushes away from common words). Next (eval/longgen3.py, running): a DRY penalty (src/bench.py: only a
+  token that would extend a sequence already seen in the last 4,096 tokens, x1.75 per extra matched token), strength chosen
+  the same way. Both off by default; no published score uses them.
+- 2026-10-06 07:06 UTC **run85e passed the W-branch hand-off** that failed four times: install logged 1.44 GiB still allocated after the R branch and 1.55 GiB after W (the leak held ~20 GiB); the d branch (183M) deepened and is training.
+- 2026-10-06 07:25 UTC **Long generation III (eval/longgen3.py, 368k): a DRY repetition guard ends the collapse.** 3 prompts x
+  32,768 tokens = 24 segments of 4,096, judged by GPT-2 against real text's band (0.965-1.205): plain sampling (t=0.85)
+  **8/24 in band, 6/24 collapsed into loops** (segments 0.02-0.28: "The frog is found in the area of the frog. The frog
+  is..."); frequency penalty 0.05: 10/24, 0 collapsed (one prompt entirely above the band); **DRY 0.4 (only tokens that would
+  extend an already-seen sequence): 14/24 in band, 0/24 collapsed, lowest segment 0.89, highest 1.56.** The automatic pick
+  (8k-token repeat rate vs real text's 0.131) preferred plain sampling, because the loops start after 8k: that criterion is
+  wrong for long generation and the 24-segment count is now reported instead. eval/nine.py (the scorecard) prints both,
+  plain and DRY 0.4, as "segments in band / collapsed". The strict horizon (consecutive in-band segments from the start)
+  stays 0 / 0 / 8,192: one segment just over the band ends it.
+- 2026-10-06 07:24 UTC **run85e's first complete trial since the fixes: STAY at 372,600** (32k carried held-out, time-priced):
+  unchanged 2.6497 -> 2.6492 (0.235 s/step); R (4,096 window) 2.6606 (0.504 s/step); W (168M) 2.6504 (0.973); d (183M, 24
+  layers) 2.6558 (0.787). Every growth is behind the unchanged model, and each costs 2-4x the time per step. install left
+  1.44 / 1.55 / 3.04 GiB allocated after each branch (the leak had held ~20 GiB).
+- 2026-10-06 08:30 UTC **Reading speed for evaluations (src/bench.py Ours.prefix / continuation_lp, src/model.py _swa):** a
+  document is read ONCE and each answer option scored as a continuation of its state (checked against re-reading: within
+  0.003-0.03 nats over 7 tokens, across a window boundary too); reading uses the fused scan; every new sequence length cost
+  ~2.3 s (the fused carrier kernel tunes itself per length; attention built a mask per length), so documents are read in
+  full windows, then pieces of 256, then the remainder (lengths bounded; piecewise = whole-window read within 0.03-0.06
+  max log-prob, same top-1), and attention pads queries/keys at the end to multiples of 256 outside training (exact: the
+  causal mask hides padded keys). Note: Ours.logits_last tiles windows from the END of a sequence, prefix() from the START
+  (as training streams and generate() do); past one window they give different functions (max 0.98 at 20k tokens).
+- **eval/openbook.py (new): open-book SciQ at a distance** -- the answering paragraph D tokens back among real science
+  paragraphs, every model given the same context (GPT-2 sees its last 1,024 tokens, SmolLM2 its last 8,192), 4-way by
+  log-probability, closed book as baseline. Running on run85 368k, 368k + untrained recall, the A/B's recall arm.
+- 2026-10-06 08:55 UTC The first open-book run died at once (out of memory at its 6 GiB cap): outside a compiled region flex
+  attention fell back to its reference maths, a full 8,192 x 8,192 score block (3 GiB). **Reading without a backward pass
+  now uses an exact chunked sliding window (src/model.py `_swa_dense`: 1,024 queries at a time against the keys their
+  windows reach, float32 softmax)**: last-window loss 2.55629 vs 2.55622 through flex; recall 2.60199 vs the explicit
+  reference 2.60204. Training (compiled) is unchanged. run85e: trial 2 decided STAY at 376,800 (d 2.6661, unchanged 2.6490);
+  trainer held-out bits/byte **1.0384 at 380,000** (1.0371 at 368k; 1.0394 at 360k); trial 3 running at 381,200.
+- `2026-10-06 09:27:06 UTC` **train** (1.5 min) ok
+  d256 L4 mlp4 ctx1024 B4 800 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261006-092539-train.log`, seed 3)
+- `2026-10-06 09:28:09 UTC` **train** (1.0 min) ok
+  d256 L4 mlp4 ctx1024 B4 300 steps -> /mnt/kv_cache/rc_smoke3
+  (log `logs/20261006-092711-train.log`, seed 3)
+- `2026-10-06 09:28:45 UTC` **train** (0.5 min) ok
+  d256 L4 mlp4 ctx1024 B4 400 steps -> /mnt/kv_cache/rc_smoke3
+  (log `logs/20261006-092814-train.log`, seed 3)
+- `2026-10-06 09:29:44 UTC` **train** (0.5 min) ok
+  d256 L4 mlp4 ctx1024 B4 400 steps -> /mnt/kv_cache/rc_smoke3
+  (log `logs/20261006-092913-train.log`, seed 3)
+
+## 2026-10-06 09:45 UTC: USER: "the vision resolved anyhow, highest priority" -- plan approved
+- Plan (approved): until Oct 10 the flagship trains while side work runs one job at a time under the watchdog (abstention by
+  the model's own calibration; learning without forgetting via replay; self-improvement that compounds; recall with a
+  smooth start; learned growth initialisation; open-book reading). Oct 10-12: the flagship's final phase with recall on and
+  high-quality + instruction data (train splits only), the mix chosen by the model. Oct 12-13: fine-tunes, final
+  self-improvement, a consumer-GPU training run (capped at 22 GiB), final scorecards, the report page.
+- **eval/guarded.sh now takes a lock**: one side job at a time on the card (prod ~51 + trainer 34 + one side job 6).
+- **Recall with a smooth start (the user's "better initialisation"):** `LM.set_recall(k, gated=True)` adds one learnable gate
+  per head to the far keys' log-sum-exp, born at -4 (the far keys carry ~2% of their weight), registered last in the module
+  so a rebuilt model lists parameters in the same order. train.py: `--recall-gated 1` (default), growth op M gated, the
+  optimizer's groups re-listed in model order when the gates appear (new parameters initialised lazily), checkpoints carry
+  recall_gated, a resume rebuilds the optimizer when the gates appear before loading its state. Smoke tests (5.5M): switching
+  recall on in a trial changed the same-row loss **9.0190 -> 9.0190** (ungated: +0.08 nats at full size); a gated run
+  saved and resumed with its optimizer state warm (80 tensors; the first attempt started cold -- fixed), gates kept.
+- `2026-10-06 09:36:25 UTC` **train** (1.3 min) ok
+  d256 L4 mlp4 ctx1024 B4 700 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261006-093508-train.log`, seed 3)
+- 2026-10-06 10:05 UTC **Open-book SciQ at a distance (eval/openbook.py; 150 questions per cell, +-8 points; 4-way):**
+  | model | closed book | D=0 | 2,048 | 8,192 | 32,768 |
+  | run85 368k | 46.7 | 76.7 | 42.0 | 41.3 | 43.3 |
+  | run85 368k + untrained recall | 46.7 | 76.7 | 56.0 | 41.3 | 42.7 |
+  | the A/B's recall-trained arm | 47.3 | 77.3 | **66.0** | **60.7** | 43.3 |
+  | GPT-2 124M (sees the last 1,024 tokens) | 48.0 | 77.3 | 43.3 | 45.3 | 42.7 |
+  Reading the right paragraph lifts every model ~30 points when it is adjacent; past the window only recall keeps it
+  (recall-trained: 66 / 61 at 2k / 8k vs ~42-45 for every model without), and at 32k, among hundreds of similar science
+  paragraphs, it is lost too. SmolLM2's row died out of memory (its default attention at 8k); re-running with SDPA.
+- **Instruction corpora for the final phase (eval/build_instr.py -> /mnt/kv_cache/tokinstr_v8192, TRAIN splits only):**
+  instr_chat (Alpaca, Dolly, OpenAssistant, CAMEL) 135k examples / 51M tokens; instr_qa (SciQ, ARC, CommonsenseQA,
+  OpenBookQA train) 30k / 2.2M; instr_math (Orca-Math, MetaMathQA, GSM8K train) 603k / 171M; instr_sense (HellaSwag, PIQA
+  train, as text) 56k / 4.8M. Every test/validation split eval/ asks is held out.
+- **The model chooses its data mix (train.py --mix-auto N, goal 8: the last hand-set numbers):** every N steps the loss on a
+  held-out slice of each source (cut from its end and never trained on, so a small source cannot look good by being
+  memorised); each source's weight = its smoothed positive progress + a floor (the mean progress / number of sources);
+  equal weights before the first look; the mix is saved in checkpoints and restored. Smoke test (5.5M, 7 sources): from
+  14% each to math 19.5 / chat 19.2 / sense 14.3 / qa 13.6 / wikipedia 13.1 / dclm 10.2 / fineweb-edu 10.1% in 600 steps.
+- **Self-improvement curriculum:** eval/selfimprove.py lookup takes SI_FACTS (facts per self-labelled document), so each round
+  can move to harder documents than the last (round 2 at round 1's difficulty added nothing).
+- Side jobs queued under the lock: SmolLM2's open-book row, learning without forgetting with REPLAY (eval/continual.py
+  intrinsic: + "whole + replay"), abstention by self-consistency (eval/selfcons.py: no labels, no threshold set by hand).
+- 2026-10-06 10:26 UTC **FINAL PHASE STARTED NOW (user: start now instead of Oct 10)**: run85e stopped at its step-396000 checkpoint (kept as run85_s396000_e.pt, the fallback); eval/run85f.sh from it: gated recall 16, the model-chosen mix over 12 sources (main corpora, retrieval documents, instruction corpora, train splits only), trials R|W|d, step size held.
+- `2026-10-06 10:27:03 UTC` **train** (0.0 min) FAILED: RuntimeError('Error(s) in loading state_dict for LM:\n\tMissing key(s) in state_dict: "mix.3.recall_gate", "mix.7.recall_gate", "mix.11.recall_gate". ')
+  d512 L12 mlp4 ctx8192 B2 2400000 steps -> /mnt/kv_cache/run85
+  (log `logs/20261006-102701-train.log`, seed 21)
+- `2026-10-06 10:27:10 UTC` **train** (0.0 min) FAILED: RuntimeError('Error(s) in loading state_dict for LM:\n\tMissing key(s) in state_dict: "mix.3.recall_gate", "mix.7.recall_gate", "mix.11.recall_gate". ')
+  d512 L12 mlp4 ctx8192 B2 2400000 steps -> /mnt/kv_cache/run85
+  (log `logs/20261006-102708-train.log`, seed 21)
+- `2026-10-06 10:30:39 UTC` **train** (0.4 min) ok
+  d256 L4 mlp4 ctx1024 B4 800 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261006-103015-train.log`, seed 3)
+- 2026-10-06 10:30 UTC run85f's first start failed: a checkpoint without recall resumed into a model built with gates (missing keys). Fixed: weights and optimizer load exactly as saved, then the gates are added and registered with the warm optimizer (smoke-tested: optimizer state resumed, mix restored, gates added). Relaunched.
+- 2026-10-06 10:50 UTC **Abstention by SELF-CONSISTENCY (eval/selfcons.py; no labels, no threshold set by hand; the fine-tuned
+  368k model answers greedily and samples 6 more at temperature 1; it answers only if >= half share an answer word):**
+  EVERYDAY: always answering right 22.9 / WRONG 77.1%; self-consistent right 16.7 / **WRONG 20.8** / declined 62.5 ->
+  accuracy when it answers **22.9 -> 44.4%**. SCIQ: right 8.2 / WRONG 91.8 -> right 2.7 / **WRONG 8.4** / declined 88.9 ->
+  **8.2 -> 24.3%** (the abstention-TRAINED model: right 3.5 / wrong 37.9 / declined 58.6, 8.5% when answering). Agreement
+  separates right from wrong: 0.56 vs 0.25 (everyday), 0.34 vs 0.13 (SciQ). Goals 4-5: the model knows when it does not
+  know, measured on itself.
+- **Learning without forgetting, REPLAY: no.** whole model NEW 26.7 -> 97.5, OLD 72.9 -> 66.7, TEXT 1.19 -> 1.92; + replay of
+  its own pretraining text NEW 82.5, OLD 66.7, TEXT **2.50** (worse); self-rehearsal 2.42; new layers only 2.57. Every arm
+  damages text, so the cause is likely the step size a FRESH Prodigy estimates from 360 sentences; running "own step" rows
+  (the step size the model learned in pretraining, 9.69e-4, held) with and without replay.
+- **The final phase is RUNNING** (eval/run85f.sh from 396,000): gated recall 16, the model's mix over 12 sources, 18.7 GiB
+  reserved, 90-145 ktok/s (recall's measured cost; was ~280 without). Note: run85e had been degrading with the step size
+  held (trainer held-out 368k 1.0371 -> 380k 1.0384 -> 388k 1.0415 -> 392k 1.0450 -> 396k 1.0488, no trial in between);
+  suspected: the 25% retrieval documents come from 550M tokens, repeated ~11x per day; the model's own mix now decides.
+- `2026-10-06 10:55:35 UTC` **train** (24.7 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 48.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 9.48 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.61 GiB memory in use. Process 1640367 has 3.60 GiB memory in use. Process 2428834 has 38.58 GiB memory in use. Process 2430187 has 946.00 MiB memory in use. Process 2430188 has 946.00 MiB memory in use. Process 2430189 has 946.00 MiB memory in use. Process 2430190 has 946.00 MiB memory in use. Including non-PyTorch memory, this process has 35.02 GiB memory in use. 34.00 GiB allowed; Of the allocated memory 33.69 GiB is allocated by PyTorch, with 25.44 GiB allocated in private pools (e.g., CUDA Graphs), and 309.90 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx8192 B2 2400000 steps -> /mnt/kv_cache/run85
+  (log `logs/20261006-103053-train.log`, seed 21)
+- `2026-10-06 11:08:19 UTC` **train** (0.6 min) ok
+  d256 L4 mlp4 ctx1024 B4 900 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261006-110742-train.log`, seed 3)
+- 2026-10-06 11:20 UTC **The final phase's first hour, and two fixes:**
+  (1) **the model's mix COLLAPSED onto the instruction sets** (weight by raw progress fed itself: a source sampled more improves
+  more): the five main corpora at the 0.6% floor, instr_qa (2.2M tokens) 34.7%, instr_sense 27.4%, instr_math 23.6%. Fixed:
+  progress per SHARE of training (the progress since the last look divided by the source's share over it, no less than an
+  equal share). Smoke test: no collapse (every source 10-18%).
+  (2) **it died at its first growth trial (398,000, R: capture under the 34 GiB cap)**: recall's 8k-key carried stores over 16
+  stream groups (~4 GiB) plus a grown branch do not fit, and a trial that cannot fit crashes the trainer and repeats on every
+  resume. **The final phase runs WITHOUT growth trials** (the last six all decided STAY; growth was shown earlier in this run:
+  46M -> 98M, window 1,024 -> 2,048).
+  Restarted from 396,000 (run85_s396000_e.pt).
+- Learning without forgetting, "own step" rows: AdamW at the pretraining step size 9.69e-4 with fresh moments is far worse
+  (TEXT 1.19 -> 5.31; with replay 2.61); the fresh Prodigy run stays the least damaging (1.92). Not solved; parametric
+  continual learning remains the open item of goal 7.
+- The 6-hourly scorecard's fine-tune (fused, batch 8) peaked at 7.0 GiB and was killed by its 6 GiB guard: the scorecard of
+  392,000 did not run. Fixed for the next: the fine-tunes run at batch 4.
+- 2026-10-06 11:40 UTC **Self-improvement rounds launched (eval/si_rounds.sh, side slot):** from run85 396,000 (before the final
+  phase): round 0 test, then three rounds of label -> learn -> test on documents of 20-80, 80-160, 160-320 facts (a curriculum
+  on its own labels; selfimprove.py now also writes a fine-tune format, loss on its answers only, rows of 4,097; src/sft.py
+  --row 4097, batch 1). **Learning-without-forgetting curve queued** (eval/continual.py curve: NEW / OLD / TEXT after
+  10/20/40/80/150 steps, with and without replay): is there a point where it has learned without forgetting?
+- 2026-10-06 11:24 UTC **The mix collapsed again** with progress per share (the first interval is at equal shares; the main corpora barely move at this stage while the new instruction data improves fast; and gains-only ignores forgetting: dclm 2.718 -> 2.720 while starved). **Now ABSOLUTE progress per share** (a source being forgotten pulls weight like one being learned). Restarted from 396,000.
+- 2026-10-06 12:00 UTC **Learning without forgetting, along the way (eval/continual.py curve; 368k fine-tuned; 120 invented facts):**
+  whole model (schedule-free Prodigy): step 0 NEW 26.7 / OLD 72.9 / TEXT 1.1917; 10: 25.8 / 72.9 / 1.1864; 20: 24.2 / 79.2 /
+  1.1783; 40: 29.2 / 66.7 / 1.4148; 80: 92.5 / 68.8 / 1.7422; 150: 95.8 / 66.7 / 1.9153. + replay: 40: 32.5 / 75.0 / 1.2776;
+  80: 73.3 / 68.8 / 1.6281; 150: 85.0 / 66.7 / 2.4986. **No point learns without forgetting**: the new facts land between
+  40 and 80 steps, and text is already damaged by then. Parametric continual learning stays unsolved; the forgetting-free
+  route of this architecture is learning by READING (facts in context or in recall's store, weights unchanged).
+- Self-improvement round 0 (run85 396k): hard lookup 49.8 / 46.4 / 40.0 / 39.0% at 10 / 30 / 60 / 120 facts (+-4.4).
+- The final phase's mix under absolute progress (12 sources, 499k-401k): main corpora rising from the floor to 1.4-3.7%
+  each, needles 0.6 -> 4.3%, instruction sources ~80% (qa 23, sense 21, math 20, chat 13%); main held-out creeping up
+  (dclm 2.719 -> 2.721). Watching.
+- `2026-10-06 12:24:21 UTC` **train** (0.7 min) FAILED: TorchRuntimeError('RuntimeError when making fake tensor call\n  Explanation: Dynamo failed to run FX node with fake tensors: call_function <function cross_entropy at 0x72a391b2d760>(*(FakeTensor(..., device=\'cuda:0\', size=(1025, 8192), grad_fn=<ToCopyBackward0>), FakeTensor(..., device=\'cuda:0\', size=(1024,), dtype=torch.int64)), **{\'reduction\': \'sum\'}): got ValueError(\'Expected input batch_size (1025) to match target batch_size (1024).\')\n  Hint: Your code may result in an error when running in eager. Please double check that your code doesn\'t contain a similar error when actually running eager/uncompiled. You can do this by removing the `torch.compile` call, or by using `torch.compiler.set_stance("force_eager")`. \n\n  Developer debug context: \n\n For more details about this graph break, please visit: https://meta-pytorch.github.io/compile-graph-break-site/gb/gb4315.html\n\nfrom user code:\n   File "/opt/code/membrae/src/model.py", line 350, in _head_piece_eager\n    return F.cross_entropy(lg.float(), yc, reduction="sum")\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\nSet TORCHDYNAMO_VERBOSE=1 for the internal stack trace (please do this especially if you\'re reporting a bug to PyTorch). For even more developer context, set TORCH_LOGS="+dynamo"\n')
+  d256 L4 mlp4 ctx1024 B4 700 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261006-122341-train.log`, seed 3)
+- `2026-10-06 12:26:00 UTC` **train** (1.4 min) ok
+  d256 L4 mlp4 ctx1024 B4 700 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261006-122434-train.log`, seed 3)
+- `2026-10-06 12:27:48 UTC` **train** (1.4 min) ok
+  d256 L4 mlp4 ctx1024 B4 700 steps -> /mnt/kv_cache/rc_smoke2
+  (log `logs/20261006-122621-train.log`, seed 3)
+- 2026-10-06 12:28 UTC **First final-phase checkpoint (400,000):** recall gates moving per head (born -4; now -3.1 to -4.9: some heads
+  opening, some closing). The held-out per source said the mix was still wrong: main corpora +0.006-0.007 nats over 4,000
+  steps (dclm 2.719 -> 2.726, arxiv 2.390 -> 2.397), needles WORSE (2.338 -> 2.348), instruction sets much better (math 1.706
+  -> 1.603). (The trainer's bits/byte, 0.8496, sampled the new mix; it now uses the original main-corpora weights again.)
+  **The mix now follows GRADIENT ALIGNMENT (DoGE, Fan et al. 2023):** every 500 steps each source's weight is how well a step
+  on its training data (4 fresh rows of 2,048) agrees with the gradient that lowers the held-out loss AVERAGED over all 12
+  sources (4 held-out rows each), via torch.autograd.grad (the graphs' .grad untouched); negative alignment gets the floor;
+  smoothed 0.8/0.2. Smoke test: balanced (12.6-15.9% each). Restarted from 400,000 (run85_s400000_f.pt).
+- 2026-10-06 13:10 UTC **Self-improvement ROUND 1 (eval/si_rounds.sh): the model's own labels lift hard lookup.** From run85 396k,
+  1,000 documents of 20-80 invented facts labelled by the model (>= 2 of 3 orderings agree), fine-tuned on its answers:
+  10 / 30 / 60 / 120 facts **49.8 / 46.4 / 40.0 / 39.0 -> 60.6 / 58.6 / 47.8 / 37.8%** (+-4.4; held-out test with other names,
+  other wording, every distractor from the same context). Round 2 (80-160 facts, labelled by the round-1 model) running.
+- **Goal 6, memory at size (eval/grow_mem.py):** the trained 396k model grown by its own function-preserving operators (same
+  predictions: bits/byte 1.033-1.040 throughout), weights bf16, 1,048,576 tokens of context, peak GPU memory PyTorch
+  allocated: 98M 0.83 GiB; 168M 1.16; 319M 1.62; **706M 2.84 GiB**; 1,244M 4.34 GiB; 2,454M over the 6 GiB cap. A 0.7B-parameter
+  model holds a million-token context inside 4 GB; past ~1B the weights need int8.
+- **The final phase under the alignment mix (402,800):** shares moved toward the main corpora and needles (fineweb-edu 13.4,
+  arxiv 12.3, needle 11.9, farneedle 10.1, wikipedia 10.0%; instruction sources 7-8% each; instr_qa's alignment stays
+  negative, -2 to -10). But the held-out of the main corpora and needles is STILL creeping up (dclm 2.728 -> 2.734, needle 2.352
+  -> 2.358 since 400,000). This trend began at 368,000 in run85e (trainer bits/byte 1.0371 -> 1.0488 by 396,000, no recall, no
+  instruction data), so it is not the final phase's doing. Under investigation; the next trainer bits/byte (404,000, original
+  main-corpora weights again) is comparable with 1.0371.
+
+## 2026-10-07 06:00 UTC: the final phase degraded the model; reverted (user approved)
+- **Monitoring gap (my failure):** at 13:41 UTC yesterday I ended a turn without scheduling the next check; the session sat
+  until the user asked at 05:56 UTC. The final phase trained unwatched for ~16 hours.
+- **SELF-IMPROVEMENT COMPOUNDS (eval/si_rounds.sh, finished 16:15 UTC yesterday).** Hard lookup (held-out: other names, other
+  wording, every distractor from the same context), 10 / 30 / 60 / 120 facts, +-4.4:
+  round 0 (run85 396k)  49.8 / 46.4 / 40.0 / 39.0
+  round 1 (20-80 facts)  60.6 / 58.6 / 47.8 / 37.8   (labels 73.1% right, checked afterwards)
+  round 2 (80-160)       76.2 / 72.2 / 58.6 / 51.2   (labels 61.7% right)
+  round 3 (160-320)      **81.0 / 77.2 / 65.6 / 57.2**   (labels 51.9% right)
+  Every round on harder documents than the last, labelled by the previous round's model: +31 points at 10 facts, +18 at 120.
+  Goal 3: shown, and it compounds (the 2026-10-03 second round at the same difficulty did not).
+- **THE FINAL PHASE DEGRADED GENERAL TEXT ~10%.** The trainer's bits/byte on the main corpora (original weights): 368k 1.0372
+  (best) -> 392k 1.0451 -> 396k 1.0488 -> 400k 1.0529 -> 404k 1.0791 -> 500k 1.1423 -> 520k 1.1382 (plateau). Per-source
+  held-out at 524k vs 396k: dclm 2.719 -> 2.875, wikipedia 2.330 -> 2.572, arxiv 2.390 -> 2.575, needle 2.338 -> 2.551 (worse);
+  instr_math 1.706 -> 0.872, instr_chat 1.744 -> 1.398; the two TINY sources collapsed: instr_qa 2.48 -> 8.10 and instr_sense
+  2.79 -> 8.18 nats on their held-out slices (2.2M and 4.8M tokens repeated thousands of times). Part of the decline predates the
+  final phase (368k -> 396k, no recall, no instruction data): unexplained.
+- **Decision (user):** stop the final phase (checkpoint kept: run85_s524000_finalphase.pt); the final model is built from the
+  best checkpoint (368k) with SHORT targeted steps: **eval/final_recall.sh** (started 06:03 UTC): 6,000 steps of full-strength
+  recall 16 from 368k (the A/B recipe that gave needles 92% at 32k / 79% at 64k), run85's data (main + 25% retrieval documents,
+  no instruction data), step size held, no trials, held-out and a kept checkpoint every 2,000 steps; then the Q&A fine-tune,
+  abstention by self-consistency, self-improvement rounds; meanwhile the card investigates why longer training degrades.
+- The 416k scorecard was killed by its guard in the long-generation section (6.77 GiB > 6.5); the 496k one is running.
+- 2026-10-07 06:28 UTC final_recall at 370,000 (2,000 steps of recall from 368k): trainer bits/byte **1.0369** (368k: 1.0372): recall costs general text nothing so far. Needles on it running. The 496k scorecard was killed by its guard in nine.py again (6.77 GiB; the cap-6 allocations plus CUDA context): periodic scorecards now run under a 7 GiB guard (allocations still capped at 6).
+- `2026-10-07 06:46:33 UTC` **train** (46.9 min) ok
+  d512 L12 mlp4 ctx8192 B2 374000 steps -> /mnt/kv_cache/final_recall
+  (log `logs/20261007-055936-train.log`, seed 22)
+- 2026-10-07 07:15 UTC **final_recall (step size HELD at 9.69e-4) does not learn recall:** needles with k=16 at 2k / 4k / 8k /
+  16k / 32k: 370k 95.8 / 37.5 / 4.2 / 4.2 / 4.2%; **374k 100 / 29.2 / 0 / 0 / 0%** (worse than recall UNTRAINED on run85 352k,
+  69 / 56 / 38 / 31% at 4-32k): at this step size training teaches the model to IGNORE far keys. Bits/byte 1.0369 / 1.0375 /
+  1.0391 (370k / 372k / 374k: the slow drift again, +0.002 per 4,000 steps). Checked the evaluation is not at fault: the A/B's
+  recall arm re-measured with today's code: 95.8 / 100 / 91.7% at 4k / 8k / 32k (as on 2026-10-05). The difference is the
+  step size: the A/B arm's rose 2.73e-3 -> 3.30e-3 (Prodigy free, from the high-step branch). **final_recall2** (started
+  07:16 UTC): the same 4,000 steps from the clean 368k with the step size FREE; then compare it with the A/B arm (bits/byte
+  1.0530; needles 96-100% to 16k, 92% at 32k, 79% at 64k) and keep the better.
+- `2026-10-07 07:22:50 UTC` **train** (28.5 min) ok
+  d512 L12 mlp4 ctx8192 B2 372000 steps -> /mnt/kv_cache/final_recall2
+  (log `logs/20261007-065417-train.log`, seed 22)
+- 2026-10-07 07:35 UTC final_recall2 ("step size free") retraced final_recall exactly (bits/byte 1.0369 / 1.0375; d stayed
+  9.69e-4: Prodigy did not raise it; the A/B arm's 2.73e-3 came from a resume artifact). **final_recall3**: the same 4,000
+  steps from the clean 368k with the step size SET to 2.73e-3 (Prodigy's own value in that branch; a deliberate intervention,
+  recorded) and held. Diagnostic of the slow drift: the schedule-free iterate z scores 6.31 / 5.14 bits/byte at 368k / 396k
+  (the average x: 1.0372 / 1.0488): z wanders, as it does in schedule-free; not informative. The drift stays unexplained;
+  the final model is built from the best checkpoint with short targeted phases, so it matters less.
+- `2026-10-07 07:54:59 UTC` **train** (29.5 min) ok
+  d512 L12 mlp4 ctx8192 B2 372000 steps -> /mnt/kv_cache/final_recall3
+  (log `logs/20261007-072528-train.log`, seed 22)
+- 2026-10-07 08:05 UTC **final_recall3 (step 2.73e-3 set, from clean 368k): worse on both counts** -- bits/byte 1.0484 (370k) ->
+  1.0598 (372k); needles 29.2 / 37.5 / 58.3 / 29.2% at 4k / 8k / 32k / 64k. Three recall runs from the clean 368k failed to
+  match the A/B's recall arm. **The final base is the A/B recall arm (rc1, /mnt/kv_cache/rc1/ckpt.pt, step 372,000):**
+  needles 95.8-100% to 16k, 91.7% at 32k, 79.2% at 64k (re-measured today with the current code); open-book 66 / 61% at 2k /
+  8k; 32k streams -0.034 nats/token vs its control; trainer bits/byte 1.0530 (best checkpoint 1.0372: 1.5% worse).
+  eval/final_pipeline.sh launched on it (self-improvement rounds -> fine-tunes -> scorecard -> self-consistency -> open book).
+- `2026-10-07 08:16:48 UTC` **train** (15.3 min) ok
+  d512 L12 mlp4 ctx8192 B2 373000 steps -> /mnt/kv_cache/consumer_demo
+  (log `logs/20261007-080130-train.log`, seed 23)
+- 2026-10-07 08:30 UTC **GOAL 6, TRAINING ON A CONSUMER GPU: shown.** eval/consumer_demo.sh: the flagship's exact recipe (98M,
+  carried 8,192-token windows, recall 16, schedule-free Prodigy, batch 2 x 4) under a 22 GiB cap for 1,000 steps from the
+  final base: **peak process GPU memory 20,146 MiB (nvidia-smi)** -- inside an RTX 4090's 24 GB; 67-85 ktok/s on the shared
+  card. (Inference: a 0.7B model holds a 1M-token context in 2.84 GiB; eval/grow_mem.txt.)
+- Final base (rc1) self-improvement round 0: hard lookup 60.8 / 57.2 / 52.6 / 48.8% at 10 / 30 / 60 / 120 facts (run85 396k:
+  49.8 / 46.4 / 40.0 / 39.0): recall reads better before any self-improvement. Rounds running.
+- 2026-10-07 09:45 UTC **Benchmark suite, final base (eval/bench_suite_final.txt; 500 items, +-4):** final base (rc1) / best-text
+  368k / GPT-2 124M / SmolLM2-135M: HellaSwag 30.2 / 29.8 / 32.0 / 45.2; PIQA 61.6 / 61.0 / 63.4 / 69.0; ARC-Easy 39.8 / 40.0 /
+  39.8 / 59.2; ARC-Challenge **24.6** / 23.4 / 22.0 / 29.8; OpenBookQA **29.0** / 27.2 / 25.6 / 32.4; LAMBADA 16.6 / 15.2 / 16.2 /
+  22.2; GSM8K 0.8 / 2.8 / 0.8 / 0.4; facts 66.7 / 64.6 / 79.2 / 91.7; arithmetic 4-way 15.0 / 16.7 / 35.0 / 36.7; reasoning probe
+  42.2 / 45.0 / 61.2 / 53.2. GPT-2 level on the standard benchmarks (within +-4 everywhere; ahead on ARC-Challenge and
+  OpenBookQA), behind on the probes; SmolLM2 ahead on everything but GSM8K.
+- `2026-10-07 10:05:17 UTC` **train** (20.7 min) ok
+  d512 L12 mlp4 ctx8192 B2 372000 steps -> /mnt/kv_cache/drift_A
+  (log `logs/20261007-094432-train.log`, seed 24)
+- `2026-10-07 10:23:37 UTC` **train** (18.3 min) ok
+  d512 L12 mlp4 ctx8192 B2 372000 steps -> /mnt/kv_cache/drift_B
+  (log `logs/20261007-100522-train.log`, seed 24)
+- 2026-10-07 10:50 UTC **The slow drift is NOT the retrieval documents** (eval/drift_test.sh, 4,000 steps from 368k each, recall off,
+  step size held; trainer bits/byte at 369k / 370k / 371k / 372k): A main corpora only 1.0372 / 1.0373 / 1.0375 / 1.0376; B + 25%
+  retrieval documents 1.0372 / 1.0373 / 1.0375 / 1.0377. The same small creep (+0.0004 per 4,000 steps) either way: intrinsic
+  to continued training at this stage; run85e's ~3x faster drift came with its trials and stream restarts. Final model:
+  built from the best checkpoint with short phases (as decided).
+- Final base self-improvement round 1: labels **81.4% right** (396k's round 1: 73.1%); fine-tuning.
+- 2026-10-07 10:51 UTC (my error) launched a duplicate learning-by-reading run while the first was already running under the lock; the duplicate killed by verified PID; its launch truncated eval/learn_by_reading.txt, the original keeps writing to it.
+- 2026-10-07 11:32 UTC learning-by-reading (first run) held the side lock 86 min with no output and blocked the pipeline's fine-tune: stopped by verified PID; relaunched in the free trainer slot (MEMBRAE_NOLOCK) at 100 questions per cell, distances 0 / 8k / 32k, printing each cell as it finishes. The final base's self-improvement round 1 fine-tune is running.
+- 2026-10-07 12:30 UTC **Learning by reading (eval/learn_by_reading.py; 30 invented facts read once, D tokens of prose, a 4-way
+  question with every distractor another answer from the same facts; 100 per cell, +-10):** 368k no recall: D=0 87.0, 8k 23.0,
+  32k 24.0%; final base (recall): **91.0** / 24.0 / 22.0%; with 64 far keys per query: 8k 22.0, 32k 26.0%. Reading lasts only
+  inside the window: recall carries one distinctive needle to 32k (92%) and a relevant paragraph to 8k (61%), not one fact among
+  thirty look-alikes. (The first two runs hung: two-syllable names are only 900 and the generator demanded global uniqueness.)
+  The final base's self-improvement round 1: hard lookup 60.8 / 57.2 / 52.6 / 48.8 -> **67.0 / 61.6 / 55.6 / 55.0%** (labels 81.4%).
+- **Far-lookup training (eval/far_lookup_run.sh, started 12:35 UTC):** eval/build_recall.py farlookup: 20,000 documents (100M
+  tokens, mean 5,001): 10-60 invented facts, 1k-12k tokens of real prose, then questions (other syllables than any test). The
+  final base + 3,000 steps with them as a 4th retrieval source (data2 25%), its own step size held (3.30e-3), every checkpoint
+  kept; then reading at 8k / 32k, needles and bits/byte decide whether it replaces rc1.
+- `2026-10-07 12:49:26 UTC` **train** (32.7 min) ok
+  d512 L12 mlp4 ctx8192 B2 375000 steps -> /mnt/kv_cache/far_lookup
+  (log `logs/20261007-121645-train.log`, seed 25)
+- 2026-10-07 13:00 UTC **LEARNING BY READING NOW LASTS (goals 7, 9).** The final base + 3,000 steps with far-lookup documents
+  (eval/far_lookup_run.sh): 30 invented facts read once, then D tokens of prose, 4-way hard (100 per cell, +-10): **D=0 86.0,
+  D=8,192 81.0, D=32,768 70.0%** (before: 91.0 / 24.0 / 22.0%). Trainer bits/byte 1.0532 / 1.0530 / **1.0522** at 373k / 374k /
+  375k (the base: 1.0530): no cost. Facts read once, weights unchanged: learning without forgetting by construction, now
+  lasting 32k tokens. The rc1 pipeline stopped (base superseded); 3,000 more far-lookup steps (375k -> 378k); needles and
+  open-book on 375k.
+- `2026-10-07 13:27:25 UTC` **train** (30.3 min) ok
+  d512 L12 mlp4 ctx8192 B2 378000 steps -> /mnt/kv_cache/far_lookup2
+  (log `logs/20261007-125705-train.log`, seed 25)
+- `2026-10-07 13:35 UTC` **final base chosen: far-lookup 375k** (`/mnt/kv_cache/final_base_far.pt`, a copy of
+  `/mnt/kv_cache/far_lookup/ckpt_s375000.pt`). 378k (3,000 more far-lookup steps) lost held-out BPB 1.0522 -> 1.0562 and
+  read about the same (learning by reading, 100 questions per cell: 378k 79.0% at 8k / 79.0% at 32k vs 375k 81 / 70, +-10
+  per cell). 375k: needles 100% at 4k/8k/32k/64k (k=16); open-book SciQ closed 48.0, D0 79.3, 2k 66.7, 8k 65.3, 32k 48.7.
+  Launching eval/final_pipeline.sh on it (tag `far`): self-improvement rounds -> factual fine-tune + abstention-tune +
+  scorecard -> self-consistency abstention -> open-book. Note: generation with recall on takes the ungraphed decode
+  path, so labelling runs ~0.1 document/s at 80-160 facts (rc1 round 2); the whole pipeline is ~12 h.
+- `2026-10-07 15:10 UTC` **needles on the final base (far-lookup 375k, recall k=16)**: 131,072 tokens 91.7% (22/24; one
+  miss wrote "3089" for 308933), 262,144 tokens 91.7% (22/24). The first 256k attempt was killed by its own guard set EQUAL to
+  the cap (14 GiB cap + the CUDA context passed 14.5 GiB): a guard must sit above the cap. The 512k cell was cut by the
+  session ending; rerun with 512k and 1M as eval/needles_long.sh (detached, trainer slot, cap 20 / 24). The final pipeline is
+  in self-improvement round 1 (round 0: 62.8 / 59.2 / 56.4 / 51.4% at 10/30/60/120 facts).
+- `2026-10-07 15:50 UTC` **Recall's store in host memory (src/model.py FarStore / Attn._recall_far; RECALL_OFFLOAD=1 via
+  src/recall.enable): retrieval at any length with GPU memory independent of the length (goals 6 + 9).** The model runs in
+  float32 at inference, so the GPU store is ~19 KB a token (18 GiB at 1M tokens; the 512k GPU run peaked at 17.6 GiB).
+  Offloaded: keys and values older than the GPU tail (window + up to 8,192 slack) live in pinned host memory; each call
+  streams the host keys through the GPU in chunks of 65,536, finds each query's best by the same exact two-stage
+  `_far_topk` per chunk and keeps the running best, takes the tail's far keys with the staircase, then gathers only the
+  chosen keys/values (host ones on the host), 1,024 queries at a time. **Checked:** one layer against the GPU path on
+  random keys (past 20,000 / 5,000; 2,048 / 256 / 1 queries): max |diff| 0 to 7.6e-6. End to end at 40k tokens of
+  Wikipedia: the same 8 generated tokens; next-token log-prob max diff 0.022 (near-ties among real keys picked differently by
+  different matmul shapes); peak allocated 2.02 GiB vs 2.65, 16 s vs 24 s. The GPU 512k needle run (17.6 GiB, 40 min in) was
+  stopped by verified PIDs and replaced by eval/needles_long.sh with the store offloaded, PyTorch capped at 3.5 GiB, guard 4:
+  512k and 1M tokens, 12 needles each.
+- `2026-10-07 16:45 UTC` **Open-book SciQ on the final base with a different recall k at inference (trained at 16), 150
+  questions per cell:** k=64: 8k 66.0, 32k 52.0; k=16 (earlier): 65.3, 48.7; k=4: 64.7, 48.0; closed book 48.0. Retrieval
+  capacity is not what limits reading REAL text far back (all within +-8): the model does not use a paragraph 32k back.
+  **Far reading data (eval/build_recall.py farread):** SQuAD v1.1 TRAIN (18,891 Wikipedia paragraphs, crowd questions in
+  other words), 1-6 paragraphs, 512-16,000 tokens of wikipedia/fineweb-edu prose, then 3-8 of their questions with
+  answers; 40M tokens, 7,696 documents (`/mnt/kv_cache/tokfarread/farread.bin`; data2 dir
+  `/mnt/kv_cache/tokneedle_far2` = the 4 retrieval sources + farread). **eval/far_read_run.sh launched:** 375k + 3,000
+  steps, data2 25%, step size held, cap 24 (beside the pipeline and the offloaded needles: prod ~55 + 7 + 4.5 + 24 < 96).
+- `2026-10-07 17:25:32 UTC` **train** (40.8 min) ok
+  d512 L12 mlp4 ctx8192 B2 378000 steps -> /mnt/kv_cache/far_read
+  (log `logs/20261007-164442-train.log`, seed 26)
+
+## 2026-10-08 06:30 UTC: overnight results; far-read beats the final base everywhere; a decode bug hid DRY from every recall model
+- **Monitoring gap:** no check between 17:40 UTC yesterday and 06:10 UTC today (the scheduled wakeups did not fire while
+  the session sat idle). Every job ran to completion; nothing was harmed; the GPU sat idle ~4 h after the pipeline ended.
+- **Offloaded needles on the final base (far-lookup 375k, store in host memory, eval/needles_long.txt):** 524,288 tokens
+  **66.7%** (8/12), 1,048,576 tokens **33.3%** (4/12); peak GPU allocated **2.38 GiB** (3.37 GiB by nvidia-smi, the CUDA
+  context included) at a million tokens. Misses are often a truncated number (wanted 925199, wrote 9259).
+- **Far-read 378k (eval/far_read_eval.txt) beats far-lookup 375k on every measure:** held-out BPB 1.0517 / 1.0511 /
+  **1.0506** at 376k / 377k / 378k (375k 1.0522); open-book SciQ closed 49.3, D0 84.0, 2k **72.0**, 8k **71.3**, 32k 51.3
+  (375k: 48.0 / 79.3 / 66.7 / 65.3 / 48.7); learning by reading 8k **90.0**, 32k **89.0** (375k 81 / 70); needles 8k 100,
+  32k 100, 64k 95.8.
+- **The final pipeline on 375k (eval/final_pipeline_far.txt, done 01:52 UTC):**
+  - Self-improvement rounds on the hard lookup test (10/30/60/120 facts): start 62.8/59.2/56.4/51.4; r1 (labels 80.7%
+    right) 70.0/68.4/64.2/58.0; r2 (80.1%) 75.8/75.8/69.0/56.2; r3 (77.4%) 75.8/76.6/68.0/54.8. Compounds to round 2.
+  - Scorecard (eval/scorecard_final_far.txt): fine-tuned Q&A everyday **39.6%** (368k: 22.9; GPT-2 16.7; SmolLM2 62.5),
+    SciQ 9.1 (2.2 / 12.7), ARC 39.8 (33.8 / 48.4); abstention-tuned everyday 37.5 right / 50.0 wrong / 12.5 declined, SciQ
+    4.1 / 28.0 / 67.9. Context rot BPB 1.1507 at 512 -> 1.0670 at 8,192 (GPT-2 1.2167 / 1.2249 at 1,024). Facts 34/48 (GPT-2
+    33), calibration +0.152 (+0.186), induction 99.2% (98.5). Decode 59 tok/s at 1.07 GiB: recall models decode eagerly.
+  - Self-consistency abstention: everyday greedy 39.6% right -> answers 35.4%, **64.7% right when it answers** (consistency
+    0.46 when right, 0.21 when wrong); SciQ 9.1 -> 33.3% right when it answers (89% declined).
+  - Open-book: the self-improved model 46.0 / 82.0 / 70.7 / 67.3 / 53.3 (base 48.0 / 79.3 / 66.7 / 65.3 / 48.7; GPT-2 48.0 /
+    77.3 / 43.3 / 45.3 / 42.7). SmolLM2's row was killed by its guard (6.7 > 6 GiB; its earlier row: 72.7 / 93.3 / 80.7 /
+    74.0 / 72.0).
+  - **Long generation collapsed (18/24 segments in loops, "plain" and "DRY 0.4" rows identical): A BUG.** The eager decode
+    in src/bench.py (every recall model decodes there) sampled plain: DRY and the frequency penalty lived only in the graphed
+    decode. **Fixed** (the same penalties in both loops); eval/nine.py's json dump fixed (numpy floats).
+- **Running:** eval/lg_check.py (16k tokens x 3 prompts, temp 0.85, DRY 0.4, recall off / on / self-improved); far-read 2
+  (eval/far_read_run2.sh: 378k -> 384k, cap 28) with eval/far_read_eval2.sh waiting on it.
+- `2026-10-08 07:04:30 UTC` **train** (52.2 min) ok
+  d512 L12 mlp4 ctx8192 B2 384000 steps -> /mnt/kv_cache/far_read2
+  (log `logs/20261008-061218-train.log`, seed 27)
+- `2026-10-08 07:10 UTC` **Learning by reading, GPT-2 and SmolLM2 (eval/learn_by_reading.py hf:..., the same facts, filler and
+  questions; each sees its own window):** GPT-2 124M D=0 29.0, 2k 22.0, 8k 19.0, 32k 24.0; SmolLM2-135M 32.0 / 25.0 / 22.0 /
+  25.0 -- **chance (25%) even with the 30 facts in plain view**; ours (far-read 378k) 90.0 at 8k and 89.0 at 32k, 375k 86-91 at
+  D=0. **Long generation with DRY now applied (eval/lg_check.txt, 16k x 3 prompts, temp 0.85, DRY 0.4):** far-read 378k
+  recall off 0/12 segments collapsed (median GPT-2 score 1.09; real text 0.95-1.19), recall on 0/12 (median 1.05); the
+  self-improved 375k model running. **Far-read 2:** BPB 380k 1.0494, 382k **1.0483**, 384k 1.0487; open-book + reading
+  running on 384k (eval/far_read_eval2.sh) and 382k (eval/far_read_eval382.txt).
+- `2026-10-08 07:35 UTC` **FINAL BASE: far-read 382k** (`/mnt/kv_cache/final_base_fr382.pt`). The candidates (open-book SciQ
+  closed / D0 / 2k / 8k / 32k, 150 per cell; learning by reading 8k / 32k, 100 per cell; held-out BPB):
+  378k 49.3 / 84.0 / 72.0 / 71.3 / 51.3, 90 / 89, 1.0506; **382k 51.3 / 84.0 / 72.7 / 76.0 / 50.0, 87 / 89, 1.0483**;
+  384k 50.7 / 84.7 / 75.3 / 78.0 / 52.0, 76 / 85, 1.0487 (needles 100 / 100 / 95.8 at 8k / 32k / 64k for 378k and 384k).
+  382k: the best BPB (the most precise measure) with reading intact. Long generation with DRY applied: the self-improved
+  375k model 8/12 segments in band, 0/12 collapsed (median 1.11). Launched: eval/final_pipeline2.sh (side slot) and
+  eval/final_base_evals.sh (trainer slot) on 382k, tag `fr`.
+- `2026-10-08 08:05 UTC` **REPORT.md rewritten** for the final base (far-read 382k): goal by goal, head to head against GPT-2 and
+  SmolLM2, how the final model was built, what was fixed this week, retractions, what remains; numbers from the previous
+  base's final pipeline are marked and will be replaced when the 382k pipeline lands. **Million tokens, 382k, recall off
+  (eval/million_fr382.txt, running):** 8k 1.0358, 32k 1.0362, 131k 1.0515 bits/byte (one 256-token passage).
+  Committed and pushed on the user's request.

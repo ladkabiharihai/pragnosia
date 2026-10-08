@@ -1,0 +1,81 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 29.0 GiB free on the card
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 8382.60it/s]
+
+============================================================================================
+1. CONTEXT ROT: bits per byte on held-out text as the window grows
+============================================================================================
+  window         ours        GPT-2
+     512       1.1244       1.2167
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (1187 > 1024). Running this sequence through the model will result in indexing errors
+    1024       1.0856       1.2249
+    2048       1.0804   (max 1024)
+    4096       1.0646   (max 1024)
+    8192       1.0495   (max 1024)
+
+============================================================================================
+3. INFERENCE EFFICIENCY: decode rate and the memory held while decoding
+============================================================================================
+  ours               142 tok/s   peak   1189.6 MiB
+  GPT-2 124M         124 tok/s   peak   1219.1 MiB
+
+============================================================================================
+6. FACTS and CALIBRATION: four-way, scored by total log-probability
+============================================================================================
+  ours           31/48   confidence when right 0.772, when wrong 0.542, separation +0.230
+  GPT-2 124M     33/48   confidence when right 0.737, when wrong 0.550, separation +0.186
+
+============================================================================================
+9. INDUCTION on material no model can have memorised (random consonant-vowel pairs), no prompt cue
+============================================================================================
+  ours            99.0%   (n=400, chance 25%)
+  GPT-2 124M      98.5%   (n=400, chance 25%)
+
+============================================================================================
+78. GENERATION QUALITY and LONG-GENERATION HORIZON, judged by the other model
+============================================================================================
+  the band: real held-out text scores 1.072 under GPT-2 (10-90%: 0.954-1.188)
+  ours at temperature 0.7: 0.448 (mean of 3 prompts)
+  ours at temperature 0.8: 0.885 (mean of 3 prompts)
+  ours at temperature 0.9: 1.233 (mean of 3 prompts)
+  ours at temperature 1.0: 1.746 (mean of 3 prompts)
+  ours at temperature 1.1: 2.042 (mean of 3 prompts)
+  -> best temperature 0.9, scoring 1.233
+
+  32,768 tokens at temperature 0.9 from 'The history of the city begins', in band while:
+          0-4,096     1.315          commonest token  4.1% ' the'
+      4,096-8,192     1.298          commonest token  4.9% ' the'
+      8,192-12,288    1.192          commonest token  4.4% ' the'
+     12,288-16,384    1.017 in band  commonest token  5.3% ' the'
+     16,384-20,480    1.066 in band  commonest token  5.4% ' the'
+     20,480-24,576    1.002 in band  commonest token  5.2% ' the'
+     24,576-28,672    1.041 in band  commonest token  4.1% ' the'
+     28,672-32,768    1.047 in band  commonest token  6.0% ' the'
+
+  32,768 tokens at temperature 0.9 from 'In this paper we study', in band while:
+          0-4,096     1.025 in band  commonest token  7.1% ' the'
+      4,096-8,192     1.038 in band  commonest token  7.2% ' the'
+      8,192-12,288    1.137 in band  commonest token  6.7% ' model'
+     12,288-16,384    0.227          commonest token 23.9% '\xa0'
+     16,384-20,480    1.639          commonest token 42.1% '\xa0'
+     20,480-24,576    1.304          commonest token 27.3% '\xa0'
+     24,576-28,672    1.235          commonest token  5.9% ' –'
+     28,672-32,768    1.223          commonest token  7.3% ' –'
+
+  32,768 tokens at temperature 0.9 from 'The river rises in the mountains', in band while:
+          0-4,096     1.375          commonest token  6.2% ' the'
+      4,096-8,192     1.013 in band  commonest token  6.1% ' the'
+      8,192-12,288    1.052 in band  commonest token  4.5% ' the'
+     12,288-16,384    1.752          commonest token  5.8% '\n'
+     16,384-20,480    1.075 in band  commonest token  6.5% '\n'
+     20,480-24,576    1.311          commonest token  5.0% '\n'
+     24,576-28,672    1.351          commonest token  4.7% '.'
+     28,672-32,768    1.262          commonest token 25.4% '\xa0'
+  HORIZON: 0 tokens in band (median of 3 prompts: 0, 12,288, 0)
+
+  START: ' of Barbados, and is part of the Jurassic period. It characterized the upper and lower parts of the Comoros. It makes an important contribution on the Sardinian-Crema mission.\n\nUpper Crema\n\nA palaeo-interior of the lower Crema site is visib'
+
+  MIDDLE: 'ards\n\nAlthough they just prefix all the positions on the page, the output does not have to be copied and pasted to the CBT course.\n\n\nProbably the best way to design a scheme is to have thought of averages matches each letter. For example a '
+
+wrote /mnt/kv_cache/nine_axes.json
+GUARD: peak 5706 MiB of 6 GiB (.venv/bin/python -u eval/nine.py /mnt/kv_cache/run85_s368000_c.pt)
+NINE_DONE 04:59 UTC

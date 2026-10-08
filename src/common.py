@@ -86,9 +86,12 @@ def cap_gpu(gib: float) -> None:
     A cap is not the same as checking free VRAM before launching: free VRAM is a race against every other
     process on a shared card, and a cap is a guarantee. Measure what the job needs first; a cap chosen by guess
     gets discovered by crashing, which happened three times in one afternoon."""
-    import torch
+    import torch, os
     if not torch.cuda.is_available():
         raise RuntimeError("no CUDA device")
+    # MEMBRAE_CAP_MAX clamps every cap in a process tree: jobs that run BESIDE the training (the 6-hourly scorecard) must
+    # keep prod + the trainer's cap + their own under the card (2026-10-05: a side job's cap filled the card to 243 MiB)
+    if os.environ.get("MEMBRAE_CAP_MAX"): gib = min(gib, float(os.environ["MEMBRAE_CAP_MAX"]))
     total = torch.cuda.get_device_properties(0).total_memory / 2**30
     torch.cuda.set_per_process_memory_fraction(min(1.0, gib / total), 0)
     print(f"[gpu] capped at {gib:.1f} GiB of {total:.0f} GiB; {gpu_free_gib():.1f} GiB free on the card",

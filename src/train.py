@@ -3,7 +3,8 @@
 Run:  .venv/bin/python -m src.train --steps 120000 --out /mnt/kv_cache/run1
 """
 from __future__ import annotations
-import argparse, gc, json, math, os, time
+import argparse, gc, json, math, os, time, faulthandler
+faulthandler.enable()          # a segfault prints the Python stack into the log (two silent SIGSEGV exits, 2026-10-05)
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -102,19 +103,21 @@ class Streams:
         self.src, self.extra, self.extra_p = (bins, ks, ps), extra, extra_p
         self.B, self.T, self.N, self.rng = B, T, N, rng
         self.k = [(g * N) // groups for g in range(groups)]; self.rows = [None] * groups
+        self.reg, self.reg_id = [], {}             # rows hold corpus INDICES, so a snapshot (deep-copied) never copies a corpus
     def _start(self, g):
         rows = []
         for _ in range(self.B):
             bn, kn, pn = self.extra if (self.extra is not None and self.rng.random() < self.extra_p) else self.src
             arr = bn[kn[self.rng.choice(len(kn), p=pn)]]
-            rows.append([arr, int(self.rng.integers(0, len(arr) - self.N * self.T - 2))])
+            if id(arr) not in self.reg_id: self.reg_id[id(arr)] = len(self.reg); self.reg.append(arr)
+            rows.append([self.reg_id[id(arr)], int(self.rng.integers(0, len(arr) - self.N * self.T - 2))])
         self.rows[g] = rows
     def next(self, g):
         fresh = self.rows[g] is None or self.k[g] % self.N == 0
         if fresh: self._start(g)
         o = np.empty((self.B, self.T + 1), dtype=np.int64)
         for b, row in enumerate(self.rows[g]):
-            o[b] = row[0][row[1]:row[1] + self.T + 1]; row[1] += self.T
+            o[b] = self.reg[row[0]][row[1]:row[1] + self.T + 1]; row[1] += self.T
         self.k[g] += 1
         return torch.from_numpy(o).pin_memory().cuda(non_blocking=True), fresh
 
@@ -133,6 +136,9 @@ def main():
     ap.add_argument("--sources", default="", help="comma-separated subset of the mix (long-context phase)")
     ap.add_argument("--data2", default="", help="a second corpus directory, sampled for --data2-frac of the sequences")
     ap.add_argument("--data2-frac", type=float, default=0.0)
+    ap.add_argument("--mix-auto", type=int, default=0,
+                    help="THE MODEL CHOOSES ITS DATA MIX (every N steps; 0 off): each source's weight follows how fast the "
+                         "model's loss on a held-out slice of that source is falling (learning progress)")
     ap.add_argument("--ul", type=float, default=0.0, help="unlikelihood weight on recently emitted tokens (0 = off)")
     ap.add_argument("--optim", default="fabric", choices=["fabric", "psf", "sfp"],
                     help="psf: schedule-free Prodigy (Defazio 2024; Mishchenko & Defazio 2023), every setting at its "
@@ -150,7 +156,7 @@ def main():
                     help="with --grow-auto: length of each branch of a growth TRIAL (grow vs stay, same batches); the "
                          "model grows only if growing reduced held-out loss more per unit of compute. A measurement "
                          "window, not a threshold")
-    ap.add_argument("--deepen-init", default="zero", choices=["zero", "copy", "gate"],
+    ap.add_argument("--deepen-init", default="zero", choices=["zero", "copy", "gate", "memory"],
                     help="new layers at a deepen: zero = exact (outputs start at zero); copy = stacking, each new layer "
                          "a copy of the nearest trained layer of its type, with its optimizer memory")
     ap.add_argument("--sf-restart", type=int, default=0,
@@ -199,6 +205,11 @@ def main():
                     help="keep the learned position table at N entries while windows run longer; positions wrap modulo N "
                          "inside a window, the condition inference meets at every window boundary (0: table = window)")
     ap.add_argument("--attn-window", type=int, default=512, help="the windowed attention layers' window")
+    ap.add_argument("--recall-gated", type=int, default=1,
+                    help="recall switched on (--recall or growth op M) with a learnable per-head gate born at -4 (a smooth start)")
+    ap.add_argument("--recall", type=int, default=-1,
+                    help="RECALL (model.py Attn._recall): each sliding attention query also attends to its top-k keys older than "
+                         "the window (k; 0 off). -1: as the checkpoint has it. Growth op M turns it on (16) or doubles it")
     ap.add_argument("--set-window", default="",
                     help="layer:window[,layer:window] -- set individual attention layers' windows after load (an experiment "
                          "on one long-range layer); saved in the checkpoint as attn_windows")
@@ -252,13 +263,14 @@ def main():
         _A0.FUSED_PROJ = True
     # THE GROWTH SCHEDULE: step -> widen to N, and steps at which to double the depth. The older single-event
     # flags fold into it.
-    grow_w, grow_d, grow_a, grow_r = {}, set(), {}, set()
+    grow_w, grow_d, grow_a, grow_r, grow_m = {}, set(), {}, set(), set()
     for ev in [e for e in a.grow_schedule.split(",") if e]:
         st_, op_ = ev.split(":")
         if op_ == "d": grow_d.add(int(st_))
         elif op_.startswith("a"): grow_a[int(st_)] = int(op_[1:])
         elif op_.startswith("w"): grow_w[int(st_)] = int(op_[1:])
         elif op_ == "R": grow_r.add(int(st_))                    # reach: double the attention window
+        elif op_ == "M": grow_m.add(int(st_))                    # recall: far keys on (16) or doubled
         else: raise ValueError(f"unknown growth op {op_!r} in --grow-schedule")
     # sfp: the same schedule-free Prodigy as psf, fused into Fabric's compiled, CUDA-graphed step (goal: training
     # efficiency; psf's per-tensor Python update cost 15% of step time at 46M). SF marks behaviour shared by both.
@@ -282,13 +294,29 @@ def main():
         assert tok.get_vocab_size() == a.vocab, (tok.get_vocab_size(), a.vocab)
         bins, ks, ps = loaders(a.data, only=[x for x in a.sources.split(",") if x] or None)
         r.log(f"corpora {ks}")
+        mix_dev = {}
+        if a.mix_auto:
+            # THE MIX BY LEARNING PROGRESS (2026-10-06, goal 8: the data-mix fractions were the last hand-set numbers). Each
+            # source's held-out slice is cut from its END and never trained on (a small source repeated many times would
+            # otherwise look like fast progress by being memorised); 4 rows of the training window from it are the probe.
+            for k_ in ks:
+                n_ = len(bins[k_]); dl_ = min(n_ // 10, max(4 * (a.ctx + 1) * 2, n_ // 100))
+                full_ = bins[k_]; bins[k_] = full_[:n_ - dl_]; dv_ = np.asarray(full_[n_ - dl_:])
+                st_ = np.linspace(0, len(dv_) - a.ctx - 2, 4).astype(int)
+                mix_dev[k_] = torch.from_numpy(np.stack([dv_[j_:j_ + a.ctx + 1].astype(np.int64) for j_ in st_])).cuda()
+            # the trainer's bits-per-byte stays on the ORIGINAL main-corpora weights, comparable with every run before
+            ps_eval = np.array([MIX.get(k_, 0.0) for k_ in ks]); ps_eval = ps_eval / ps_eval.sum() if ps_eval.sum() > 0 else ps.copy()
+            ps[:] = 1.0 / len(ks)              # no prior: every source equal until the model's first look (a checkpoint's mix wins)
+            r.log(f"mix chosen by the model every {a.mix_auto} steps, from {len(ks)} sources (held-out slices cut off), "
+                  f"starting equal")
         extra = None
         if a.data2:
             extra = loaders(a.data2)
             r.log(f"second corpus {a.data2} at {a.data2_frac:.0%}: {extra[1]}")
         PT = a.pos_table or a.ctx                     # position table size; a.ctx stays the longest window
         m = LM(vocab=a.vocab, d=a.d, layers=a.layers, mlp_mult=a.mlp, ctx=PT, mixer=a.mixer, norm=a.norm,
-               short_conv=a.short_conv, attn_window=a.attn_window, attn_sliding=bool(a.attn_sliding)).cuda()
+               short_conv=a.short_conv, attn_window=a.attn_window, attn_sliding=bool(a.attn_sliding),
+               recall_k=max(0, a.recall), recall_gated=bool(a.recall_gated and a.recall > 0 and not a.resume)).cuda()
         if a.fused_scan:
             import src.assoc as _A
             _A.FUSED_SCAN = True
@@ -463,10 +491,16 @@ def main():
                 micro()
             for p_ in m.parameters(): p_.grad.zero_()
             return g, xs, out["loss"]
+        def train_span():
+            """recall's carried store in training: the previous context window (a fixed shape for the graphs); held-out and
+            every loader keep the whole past (span 0)"""
+            for mx_ in m.mix:
+                if getattr(mx_, "recall_k", 0): mx_.recall_span = a.ctx
         def capture_carry():
             """two graphs over one buffer of layer states: FRESH (a stream's first window: no state in) and CONTINUED (the
             state in); both write the window's final states back into the buffer after the backward pass, which may
             still read the incoming state (the scan recomputes chunk states from it)"""
+            train_span()
             T, B = a.ctx, a.batch
             xs = torch.empty((B, T + 1), dtype=torch.long, device="cuda")
             xs.copy_(batch(bins, ks, ps, np.random.default_rng(11), B, T, extra, a.data2_frac))
@@ -546,6 +580,23 @@ def main():
             if sd["cfg"].get("attn_windows"):
                 for k_, v_ in sd["cfg"]["attn_windows"].items(): m.mix[int(k_)].window = int(v_)
                 m.attn_windows = {int(k_): int(v_) for k_, v_ in sd["cfg"]["attn_windows"].items()}
+            # the checkpoint's recall wins when it has one (the model may have grown it by trial; an automatic resume repeats
+            # the launch's --recall and must not undo that); --recall applies to a checkpoint without recall
+            rk_ = sd["cfg"].get("recall_k", 0) or max(0, a.recall)
+            gt_ = sd["cfg"].get("recall_gated", False) if sd["cfg"].get("recall_k", 0) else bool(a.recall_gated)
+            # a checkpoint WITHOUT gates that this run will gate: weights and optimizer load exactly as saved first, the
+            # gates are added after (gates_after_ below), so nothing is missing from the state and the optimizer stays warm
+            gates_after_ = bool(gt_ and not sd["cfg"].get("recall_gated", False))
+            if gates_after_: gt_ = False
+            if rk_ or getattr(m, "recall_k", 0):
+                had_ = {id(p_) for p_ in m.parameters()}
+                m.set_recall(rk_, gated=gt_)
+                if any(id(p_) not in had_ for p_ in m.parameters()):
+                    # the gates are parameters: the optimizer must list them (in the model's order) before its saved
+                    # state is loaded, or the state does not fit and the resumed run starts cold (smoke test, 2026-10-06)
+                    opt = make_opt(m); base = [g["lr"] for g in opt.param_groups]
+                r.log(f"recall: each sliding attention query also attends to its {rk_} best keys older than its window"
+                      + (" (from the checkpoint)" if sd["cfg"].get("recall_k", 0) else " (--recall)"))
             conv_added = bool(a.short_conv) and not any(k_.endswith(".sconv") for k_ in sd["model"])
             if conv_added:
                 # the checkpoint has no short convolutions: they are added here as the identity, so the function is
@@ -587,6 +638,17 @@ def main():
                     r.log(f"optimizer state present but not loadable ({type(e).__name__}: {str(e)[:300]}); starting cold")
             else:
                 r.log("WARNING: checkpoint carries no optimizer state; the first steps will be a shock")
+            if a.mix_auto and sd.get("mix"):
+                for j_, k_ in enumerate(ks):
+                    if k_ in sd["mix"]: ps[j_] = sd["mix"][k_]
+                ps[:] = ps / ps.sum()
+                r.log("the model's data mix from the checkpoint: " + " ".join(f"{k_} {100 * ps[j_]:.1f}%" for j_, k_ in enumerate(ks)))
+            if gates_after_:
+                m.set_recall(rk_, gated=True)
+                for g_o, g_n in zip(opt.param_groups, m.param_groups(lr=a.lr, new_lr=a.new_lr)):
+                    g_o["params"] = list(g_n["params"])
+                opt._graph = None; opt._warm = False
+                r.log(f"recall gates added after the resume (born at -4; the optimizer state of every other weight kept)")
             r.log(f"resumed from {a.resume} at step {start}, loss {sd['loss']:.4f}")
         # TOKENS ACTUALLY PROCESSED per optimizer step, averaged over the lengths the mix draws. Counting every step
         # at batch x ctx overstated a mixed-length run 2.5x (2026-09-22) and 4x once the window stopped shrinking
@@ -628,8 +690,7 @@ def main():
                     x_c, f_c = streams.next(g_c); out_.append((x_c, f_c, g_c))
             return out_
         if a.carry:
-            assert len(shapes) == 1 and a.graph_step and a.compile and not a.grow_auto and not a.grow_schedule, \
-                "--carry needs one window length, captured graphs, and no growth events"
+            assert len(shapes) == 1 and a.graph_step and a.compile, "--carry needs one window length and captured graphs"
             carry_g = capture_carry(); graphs = {(a.batch, a.ctx): None}; set_none = False
             r.log(f"CARRIED-STATE training: {NG} stream groups x {a.batch} streams in rotation, each restarted every "
                   f"{a.carry} windows (up to {a.carry * a.ctx:,} tokens of history)"
@@ -693,6 +754,8 @@ def main():
         # the history starts EMPTY (NaN), not at zero: a zero slot drags the median down, the guard then rejects
         # more steps, each rejection leaves another zero slot, and the run locks itself out (2026-09-23)
         hist = torch.full((1000,), float("nan"), device="cuda"); g0 = start; grown_at = -10**9
+        C_ = None; grown_ = None                      # (names the step loop and a widening bind; install/roomy clear them)
+        mix_prev, mix_prog, mix_share = [None], {}, [None]   # the auto-mix's last losses, smoothed progress, shares since
         skips_t = torch.zeros((), device="cuda"); skips_t = torch.zeros((), device="cuda"); ema_t = None
         nonfin = torch.zeros((), device="cuda"); nf_prev = 0
         marks = []; bpbs = []; skipped = 0; stopped_early = None
@@ -730,20 +793,36 @@ def main():
             def run_():
                 if SF: opt.eval()
                 m.eval()
-                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                # recall reads the WHOLE past on the held-out streams, as at inference (training keeps one window of it);
+                # put back in `finally`: an out-of-memory retry (roomy) once saw the zeroed span as the one to restore
+                for mx_ in m.mix:
+                    if getattr(mx_, "recall_k", 0): mx_.recall_span = 0
+                try:
+                  with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                     # through the trunk and the chunked loss: the full logits of a large model were what ran a trial out
                     # of memory at the cap (run70, 2026-09-30)
                     if a.heldout_long:
-                        # every token of the streams, window by window, the states carried: the loss as the model is used
-                        st_, tot_ = None, 0.0
-                        for w0 in range(0, HT, a.ctx):
-                            h_, st_ = m.trunk(xs_eval[:, w0:w0 + a.ctx], st_, True)
-                            tot_ += m.loss(h_, xs_eval[:, w0 + 1:w0 + a.ctx + 1], chunks=4).item() * min(a.ctx, HT - w0)
+                        # every token of the streams, window by window, the states carried: the loss as the model is used.
+                        # WITH RECALL, ONE STREAM AT A TIME: the whole past is kept, ~1.25 GiB per 32k stream, and all
+                        # eight at once beside a recall branch's graphs (27 GiB) passed the 34 GiB cap; the failure inside a
+                        # kernel killed the trainer twice with SIGSEGV (2026-10-05). The mean over rows is unchanged.
+                        nr_ = xs_eval.shape[0]
+                        sub_ = 1 if any(getattr(mx_, "recall_k", 0) for mx_ in m.mix) else nr_
+                        tot_ = 0.0
+                        for r0_ in range(0, nr_, sub_):
+                            st_ = None; xr_ = xs_eval[r0_:r0_ + sub_]
+                            for w0 in range(0, HT, a.ctx):
+                                h_, st_ = m.trunk(xr_[:, w0:w0 + a.ctx], st_, True)
+                                tot_ += (m.loss(h_, xr_[:, w0 + 1:w0 + a.ctx + 1], chunks=4).item() * min(a.ctx, HT - w0)
+                                         * xr_.shape[0] / nr_)
+                            del st_, h_
                         l_ = tot_ / HT
                     else:
                         l_ = m.loss(m.trunk(xs_eval[:, :HT]), xs_eval[:, 1:HT + 1], chunks=4).item()
-                m.train()
-                if SF: opt.train()
+                finally:
+                    train_span()
+                    m.train()
+                    if SF: opt.train()
                 return l_
             return roomy(run_)
         def to_dev(o, dev):
@@ -753,11 +832,26 @@ def main():
             return o
         def snapshot(): return roomy(snapshot_)
         def snapshot_():
-            mc = _copy.deepcopy(m).to("cpu")       # deepcopy is made on the card first: out-of-graph memory
+            # STRAIGHT TO THE CPU (2026-10-06): deepcopy made the whole model -- and the grads it held -- again on the card,
+            # and the widened branch's snapshot (168M) passed the 34 GiB cap at the end of its trial, twice. Every
+            # parameter and buffer is copied to the CPU through deepcopy's memo, so the card holds no second copy
+            memo_ = {}
+            for p_ in m.parameters():
+                memo_[id(p_)] = torch.nn.Parameter(p_.detach().to("cpu", copy=True), requires_grad=p_.requires_grad)
+            for b_ in m.buffers():
+                memo_[id(b_)] = b_.detach().to("cpu", copy=True)
+            mc = _copy.deepcopy(m, memo_).to("cpu")
             for p_ in mc.parameters(): p_.grad = None
-            return dict(m=mc, opt=to_dev(opt.state_dict(), "cpu"), rng=_copy.deepcopy(rng.bit_generator.state),
-                        nxt=[x.clone() for x in nxt], shapes=list(shapes), accum=a.accum, batch=a.batch,
-                        auto=_copy.deepcopy(auto_events))
+            S_ = dict(m=mc, opt=to_dev(opt.state_dict(), "cpu"), rng=_copy.deepcopy(rng.bit_generator.state),
+                      nxt=[(t[0].clone(),) + tuple(t[1:]) if isinstance(t, tuple) else t.clone() for t in nxt],
+                      shapes=list(shapes), accum=a.accum, batch=a.batch, auto=_copy.deepcopy(auto_events))
+            if carry_g is not None:
+                # CARRIED TRAINING: both branches of a trial must continue the same streams from the same states (2026-10-05):
+                # each stream's corpus and position, each group's step count, and every group's carried layer states
+                S_["streams"] = (list(streams.k), [[[row[0], row[1]] for row in g_rows] if g_rows else None
+                                                   for g_rows in streams.rows], cursor[0])
+                S_["saved"] = [[tuple(t.detach().to("cpu") for t in b_) for b_ in grp] for grp in carry_g["saved"]]
+            return S_
         def capture_all():
             """(Re)capture every window's graph. If the model does not fit under the cap -- a grown model can outgrow it
             -- split the micro-step (half the rows, twice the accumulation: the same tokens per update) and try again,
@@ -767,7 +861,14 @@ def main():
                 saved_ = carry_g["saved"] if carry_g else None
                 carry_g = None; gc.collect(); torch.cuda.empty_cache()
                 carry_g = capture_carry()
-                if saved_: carry_g["saved"] = saved_
+                if saved_ and len(saved_[0]) == len(carry_g["buf"]) and all(
+                        tuple(t.shape for t in a_) == tuple(t.shape for t in b_) for a_, b_ in zip(saved_[0], carry_g["buf"])):
+                    carry_g["saved"] = saved_
+                else:
+                    # the model's layers changed (a growth): the carried states no longer fit; every stream restarts
+                    streams.rows = [None] * len(streams.rows)
+                    if trial is not None and trial.get("phase") == "grow": trial["restarted"] = True
+                    r.log("    carried streams restarted: the layer states changed shape")
                 return
             while True:
                 try:
@@ -791,7 +892,7 @@ def main():
             ~0.3 GiB to spare (2026-09-30), as a run had at its first eval on 2026-09-22: each was patched at the call
             site, never as a class. Now if such work does not fit, the graphs are released for it and recaptured
             after (seconds, and only when needed): room is measured by trying, not set by hand."""
-            nonlocal gs, g_
+            nonlocal gs, g_, carry_g, C_
             try:
                 roomy_calls[0] += 1                 # test hook (eval/oom_test.sh): MEMBRAE_TEST_OOM=N fails the Nth call once
                 if roomy_calls[0] == int(os.environ.get("MEMBRAE_TEST_OOM", "0")):
@@ -799,17 +900,38 @@ def main():
                 return fn()
             except torch.OutOfMemoryError:
                 pass                               # leaving the except block frees the failed attempt's tensors
-            graphs.clear(); gs = None; g_ = None; gc.collect(); torch.cuda.empty_cache()
+            graphs.clear(); gs = None; g_ = None
+            # CARRIED TRAINING's graphs are released too (2026-10-06: they were not, so the retry ran beside the same pool and
+            # failed again); the streams' carried states are kept and handed back after the recapture
+            sv_ = None
+            if carry_g is not None:
+                sv_ = [[tuple(t.detach().to("cpu") for t in b_) for b_ in grp] for grp in carry_g["saved"]]
+                rows_kept_ = [[[r_[0], r_[1]] for r_ in g_r] if g_r else None for g_r in streams.rows]
+                carry_g = None; C_ = None
+            gc.collect(); torch.cuda.empty_cache()
             r.log(f"    out-of-graph work did not fit beside the captured graphs under the cap: released them for it")
             out = fn()
             with torch.enable_grad():              # a capture inside a caller's no_grad would record no backward
                 capture_all()
+            if sv_ is not None and carry_g is not None and len(sv_[0]) == len(carry_g["buf"]) and all(
+                    tuple(t.shape for t in a_) == tuple(t.shape for t in b_) for a_, b_ in zip(sv_[0], carry_g["buf"])):
+                carry_g["saved"] = [[tuple(t.to("cuda") for t in b_) for b_ in grp] for grp in sv_]
+                streams.rows = rows_kept_          # the streams continue where they were (capture_all restarted them)
             return out
         def install(S):
             """make snapshot S the live model: optimizer rebuilt from its state, graphs recaptured"""
-            nonlocal m, opt, fwd, trunk, gs, g_, base, set_none, shapes, nxt
+            nonlocal m, opt, fwd, trunk, gs, g_, base, set_none, shapes, nxt, carry_g, C_, grown_
             graphs.clear(); gs = None; g_ = None
+            # RELEASE THE OUTGOING BRANCH FIRST (2026-10-06): its carried-training graphs (their memory pool), its model and
+            # its optimizer were still on the card while the snapshot was loaded, and after the widened branch (168M, 1.3 GiB
+            # of optimizer state) that passed the 34 GiB cap three times. The snapshot restores the streams and their states
+            # ...and every other name that held them: the step loop's own handle on the carried graphs (C_ kept the whole
+            # ~20 GiB pool alive after carry_g was dropped: the fourth failure, 06:10 UTC) and a widening's map of old to new
+            # parameters
+            carry_g = None; C_ = None; grown_ = None; m = None; opt = None
             fwd = trunk = None; torch._dynamo.reset(); gc.collect(); torch.cuda.empty_cache()
+            r.log(f"    install: {torch.cuda.memory_allocated() / 2**30:.2f} GiB still allocated after releasing the outgoing "
+                  f"branch ({torch.cuda.memory_reserved() / 2**30:.2f} reserved)")
             shapes = S["shapes"]; a.accum = S["accum"]; a.batch = S["batch"]
             rng.bit_generator.state = S["rng"]; nxt = S["nxt"]
             m = S["m"].to("cuda")
@@ -819,10 +941,19 @@ def main():
             opt = make_opt(m)
             opt.load_state_dict(to_dev(S["opt"], "cuda"))
             if SF: opt.train()
+            if a.share_d: opt.share_d = True          # the rebuilt optimizer keeps one step size, as the run does
+            if a.freeze_d:
+                for g_f in opt.param_groups: g_f["freeze_d"] = True
             base = [g["lr"] for g in opt.param_groups]; set_none = False if SF else not opt.cuda_graph
             fwd = torch.compile(m) if a.compile else m
             trunk = torch.compile(m.trunk) if a.compile else m.trunk
             capture_all()
+            if "streams" in S:
+                # the snapshot's streams and carried states, AFTER the recapture (which restarts streams when shapes change)
+                k_, rows_, cur_ = S["streams"]
+                streams.k = list(k_); streams.rows = [[[r_[0], r_[1]] for r_ in g_r] if g_r else None for g_r in rows_]
+                cursor[0] = cur_
+                carry_g["saved"] = [[tuple(t.to("cuda") for t in b_) for b_ in grp] for grp in S["saved"]]
         def nparams(): return sum(p_.numel() for p_ in m.parameters())
         def check_loss():
             """the growth exactness check: the same light row before and after an event"""
@@ -833,9 +964,16 @@ def main():
         for i in range(start, a.steps):
             if trial is not None and i == trial["end"] - trial["K"] // 2:
                 trial["Lg_mid" if trial["phase"] == "grow" else "Ls_mid"] = heldout()
+                torch.cuda.synchronize(); trial["t_mid"] = time.time()
             if trial is not None and i == trial["end"]:
+                # COMPUTE IS TIME (2026-10-05). The trials priced compute as parameters x steps, so an option that adds
+                # time per step without parameters (a longer window R, recall M) looked free. The second half of each
+                # branch is now also timed (wall clock between the mid-point held-out and the end, synchronised), and the
+                # decision compares held-out gain per SECOND; parameters x steps is still logged beside it
+                torch.cuda.synchronize(); tsec_ = time.time() - trial.pop("t_mid", float("nan"))
                 if trial["phase"] == "grow":
-                    res_ = dict(ev=trial["ev"], Lg_mid=trial.pop("Lg_mid", None), Lg=heldout(), Pg=nparams(), G=snapshot())
+                    res_ = dict(ev=trial["ev"], Lg_mid=trial.pop("Lg_mid", None), Lg=heldout(), Pg=nparams(), G=snapshot(),
+                                Tg=tsec_)
                     trial["res"].append(res_)
                     r.log(f"    TRIAL {'+'.join(res_['ev'])}: grown branch {trial['L0']:.4f} -> {res_['Lg']:.4f} over "
                           f"{trial['K']} steps at {res_['Pg']/1e6:.1f}M")
@@ -848,6 +986,7 @@ def main():
                             if op_ == "d": grow_d.add(i)
                             elif op_ == "W": grow_w[i] = m.d + 256
                             elif op_ == "R": grow_r.add(i)
+                            elif op_ == "M": grow_m.add(i)
                             elif op_.startswith("w"): grow_w[i] = int(op_[1:])
                             elif op_.startswith("a"): grow_a[i] = int(op_[1:])
                         trial["end"] = i + trial["K"]
@@ -865,22 +1004,35 @@ def main():
                     if not continue_trial:
                         hist.fill_(float("nan")); g0 = i
                         trial["phase"], trial["end"] = "stay", i + trial["K"]
-                        r.log(f"    TRIAL: now the same {trial['K']} steps unchanged")
+                        if a.carry and trial.get("restarted"):
+                            # THE SAME BATCHES FOR EVERY BRANCH: a growth that changes the layer states' shapes restarts
+                            # every carried stream (capture_all), so the unchanged branch restarts them too; the restored
+                            # generator then draws the same new streams (review, 2026-10-05: the stay branch had kept the
+                            # snapshot's streams while every grown branch restarted)
+                            streams.rows = [None] * len(streams.rows)
+                        r.log(f"    TRIAL: now the same {trial['K']} steps unchanged"
+                              + (" (carried streams restarted, as in the grown branches)" if a.carry and trial.get("restarted") else ""))
                 else:
-                    Ls, Ps = heldout(), nparams()
+                    Ls, Ps = heldout(), nparams(); Ts = tsec_
                     # THE BEST ALTERNATIVE: highest marginal held-out gain per unit compute over the second half of its
                     # trial among those not behind the unchanged branch (by total gain per compute if no mid-points)
                     half_ = trial["K"] // 2
+                    unit_, mul_ = "unit compute (x1e9)", 1e9
+                    timed_ = math.isfinite(Ts) and Ts > 0 and all(math.isfinite(rr.get("Tg", float("nan"))) and rr["Tg"] > 0
+                                                                for rr in trial["res"])
                     def score_(rr):
                         if SF and rr["Lg_mid"] is not None and "Ls_mid" in trial:
+                            if timed_: return ((rr["Lg"] <= Ls), (rr["Lg_mid"] - rr["Lg"]) / rr["Tg"])
                             return ((rr["Lg"] <= Ls), (rr["Lg_mid"] - rr["Lg"]) / (rr["Pg"] * half_))
                         return (True, (trial["L0"] - rr["Lg"]) / rr["Pg"])
                     for rr in trial["res"]:
                         ok_, sc_ = score_(rr)
+                        ps_ = (rr["Lg_mid"] - rr["Lg"]) / (rr["Pg"] * half_) if rr["Lg_mid"] is not None else float("nan")
                         r.log(f"    TRIAL {'+'.join(rr['ev'])}: {'ahead of' if rr['Lg'] <= Ls else 'behind'} unchanged "
-                              f"({rr['Lg']:.4f} vs {Ls:.4f}), marginal gain per 1e12 param-steps {sc_*1e12:.4f}")
+                              f"({rr['Lg']:.4f} vs {Ls:.4f}), marginal gain per 1e12 param-steps {ps_*1e12:.4f}"
+                              + (f", per hour {sc_*3600:.4f} ({rr['Tg']/half_:.3f} s/step vs unchanged {Ts/half_:.3f})" if timed_ else ""))
                     best_ = max(trial["res"], key=lambda rr: score_(rr))
-                    trial.update(ev=best_["ev"], Lg=best_["Lg"], Pg=best_["Pg"], G=best_["G"])
+                    trial.update(ev=best_["ev"], Lg=best_["Lg"], Pg=best_["Pg"], G=best_["G"], Tg=best_.get("Tg", float("nan")))
                     if best_["Lg_mid"] is not None: trial["Lg_mid"] = best_["Lg_mid"]
                     gg = (trial["L0"] - trial["Lg"]) / trial["Pg"]; gs_ = (trial["L0"] - Ls) / Ps
                     # THE DECISION, PENALTY-FREE (2026-09-27). Restarting the schedule-free average costs both branches
@@ -899,11 +1051,17 @@ def main():
                         # long test (eval/growth_long.txt) showed growth's lead growing steadily (0.0006 at +4k steps,
                         # 0.0098 at +20k), so the question is when its marginal rate overtakes, not whether it leads early.
                         half = trial["K"] // 2
-                        slope_g = (trial["Lg_mid"] - trial["Lg"]) / (trial["Pg"] * half)
-                        slope_s = (trial["Ls_mid"] - Ls) / (Ps * half)
+                        if timed_:
+                            slope_g = (trial["Lg_mid"] - trial["Lg"]) / trial["Tg"]
+                            slope_s = (trial["Ls_mid"] - Ls) / Ts
+                            unit_, mul_ = "hour", 3600
+                        else:
+                            slope_g = (trial["Lg_mid"] - trial["Lg"]) / (trial["Pg"] * half)
+                            slope_s = (trial["Ls_mid"] - Ls) / (Ps * half)
+                            unit_, mul_ = "1e12 param-steps", 1e12
                         grow_now = slope_g > slope_s and trial["Lg"] <= Ls
-                        r.log(f"    TRIAL {'+'.join(trial['ev'])}: marginal held-out gain per 1e12 param-steps over the last "
-                              f"{half} steps: grown {slope_g*1e12:.4f} vs unchanged {slope_s*1e12:.4f}; grown "
+                        r.log(f"    TRIAL {'+'.join(trial['ev'])}: marginal held-out gain per {unit_} over the last "
+                              f"{half} steps: grown {slope_g*mul_:.4f} vs unchanged {slope_s*mul_:.4f}; grown "
                               f"{'ahead' if trial['Lg'] <= Ls else 'behind'} ({trial['Lg']:.4f} vs {Ls:.4f})")
                         gg, gs_ = slope_g, slope_s
                     elif SF:
@@ -926,13 +1084,13 @@ def main():
                         stage_t0[0], stage_next[0] = i, 4 * a.trial_steps
                         hist.fill_(float("nan")); g0 = i
                         if not SF: stage_rate[0] = opt.rates()[0]
-                        r.log(f"    DECISION at step {i}: GROW ({'+'.join(trial['ev'])}). Held-out gain per unit compute "
-                              f"{gg*1e9:.3f} grown vs {gs_*1e9:.3f} unchanged ({trial['L0']:.4f} -> {trial['Lg']:.4f} vs "
+                        r.log(f"    DECISION at step {i}: GROW ({'+'.join(trial['ev'])}). Held-out gain per {unit_} "
+                              f"{gg*mul_:.4f} grown vs {gs_*mul_:.4f} unchanged ({trial['L0']:.4f} -> {trial['Lg']:.4f} vs "
                               f"-> {Ls:.4f}); continuing from the grown branch at {nparams()/1e6:.1f}M")
                     else:
                         if not SF: stage_rate[0] = opt.rates()[0]
-                        r.log(f"    DECISION at step {i}: STAY. Held-out gain per unit compute {gs_*1e9:.3f} unchanged vs "
-                              f"{gg*1e9:.3f} grown ({trial['L0']:.4f} -> {Ls:.4f} vs -> {trial['Lg']:.4f}); "
+                        r.log(f"    DECISION at step {i}: STAY. Held-out gain per {unit_} {gs_*mul_:.4f} unchanged vs "
+                              f"{gg*mul_:.4f} grown ({trial['L0']:.4f} -> {Ls:.4f} vs -> {trial['Lg']:.4f}); "
                               + ("will reconsider when this stage's length doubles again" if SF else "will reconsider after the rate anneals another e-fold"))
                     trial = None
                     mark[0] = (i, heldout(), nparams())
@@ -978,6 +1136,35 @@ def main():
                     r.log(f"    REACH doubled to a {m.attn_window}-token window at step {i}: same-row loss {lb:.4f} -> {la:.4f}")
                     if SF: opt.train()
                     hist.fill_(float("nan")); g0 = i
+            if i in grow_m:
+                # RECALL (goal 9: retrieval past the window; model.py Attn._recall): each sliding attention query also
+                # attends to its top-k keys older than the window, by its own q.k. Untrained it took needles at 1-32k from
+                # 0% to 100-31% but cost prediction past the first context window (+0.11 at 16-32k); the trial says whether,
+                # trained, it pays on the long held-out streams. No parameters: NOT exact, the event's cost is logged.
+                if SF: opt.eval()
+                xg = batch(bins, ks, ps, np.random.default_rng(7), 1, 2048)
+                lb = roomy(check_loss)
+                had_ = {id(p_) for p_ in m.parameters()}
+                m.set_recall(16 if not getattr(m, "recall_k", 0) else 2 * m.recall_k, gated=bool(a.recall_gated))
+                if any(id(p_) not in had_ for p_ in m.parameters()):
+                    # THE GATES ARE NEW PARAMETERS: the optimizer's groups are re-listed in the model's own order (as a
+                    # rebuilt model lists them on resume, so the saved state maps back), the new ones initialised lazily
+                    # with their averaging clock where their group's stands; the captured step is rebuilt
+                    for g_o, g_n in zip(opt.param_groups, m.param_groups(lr=a.lr, new_lr=a.new_lr)):
+                        g_o["params"] = list(g_n["params"])
+                    opt._graph = None; opt._warm = False
+                    for p_ in m.parameters():
+                        if p_.grad is None: p_.grad = torch.zeros_like(p_)
+                graphs.clear(); gs = None; g_ = None; gc.collect()
+                fwd = trunk = None; torch._dynamo.reset(); torch.cuda.empty_cache()
+                fwd = torch.compile(m) if a.compile else m
+                trunk = torch.compile(m.trunk) if a.compile else m.trunk
+                capture_all()
+                la = roomy(check_loss)
+                r.log(f"    RECALL on at step {i}: each query also attends to its {m.recall_k} best keys older than the "
+                      f"{m.attn_window}-token window; same-row loss {lb:.4f} -> {la:.4f}")
+                if SF: opt.train()
+                hist.fill_(float("nan")); g0 = i
             if i in grow_w and m.d < grow_w[i]:
                 # GROWTH (vision goal 7): widen in place, function preserved, optimizer state carried. The
                 # loss right before and right after is logged so the cost of the event is a number.
@@ -1006,6 +1193,7 @@ def main():
                 r.log(f"    GREW to d={m.d} at step {i}: {P/1e6:.1f}M params, same batch loss {lb:.4f} -> {la:.4f}, "
                       f"optimizer state {opt.state_bytes()/2**20:.0f} MiB carried")
                 if SF: opt.train()
+                grown_ = None                         # it held every old AND new parameter alive (2026-10-06)
                 hist.fill_(float("nan")); g0 = i      # the grown model's gradient norm is its own; re-learn it
                 restart_rates()
             if i in grow_d:
@@ -1017,7 +1205,17 @@ def main():
                 xg = batch(bins, ks, ps, np.random.default_rng(7), 1, 2048)   # the exactness check: one row, light
                 lb = roomy(check_loss)
                 old_m = m
-                big = old_m.deepen(init=a.deepen_init)
+                if a.deepen_init == "memory":
+                    # ONE CARRIER LAYER ON TOP built to hold for long and to write only what it learns to (2026-10-05):
+                    # every head at the long end of the decay range, writes CLOSED by default, output zero (exact). The
+                    # same as eval/deepen.py memory, here with every existing weight's optimizer state carried
+                    big = old_m.add_layers(1)
+                    nm_ = big.mix[big.new_layers[0]]
+                    assert hasattr(nm_, "theta"), "the added layer must be a carrier"
+                    with torch.no_grad():
+                        nm_.A.fill_(math.log(1e-4 / 0.69)); nm_.wb.bias.fill_(-6.0)
+                else:
+                    big = old_m.deepen(init=a.deepen_init)
                 if a.fused_scan:
                     for _mx in big.mix:
                         if hasattr(_mx, "need_sent"): _mx.need_sent = False
@@ -1079,6 +1277,9 @@ def main():
                 graphs.clear(); gs = None; g_ = None; gc.collect()
                 if SF and a.sf_restart: sf_restart(opt2)
                 m, opt = big, opt2
+                if a.share_d: opt.share_d = True          # the rebuilt optimizer keeps ONE step size, as before the growth
+                if a.freeze_d:
+                    for g_f in opt.param_groups: g_f["freeze_d"] = True
                 del old_m, opt2, big, pairs      # pairs held every shallow parameter (and its grad) alive
                 base = [g["lr"] for g in opt.param_groups]
                 set_none = False if SF else not opt.cuda_graph   # psf: graphs write into fixed grad buffers
@@ -1227,6 +1428,7 @@ def main():
                             if op_ == "d": grow_d.add(i + 1)
                             elif op_ == "W": grow_w[i + 1] = m.d + 256        # widen one step, no size written down
                             elif op_ == "R": grow_r.add(i + 1)                # double the attention window's reach
+                            elif op_ == "M": grow_m.add(i + 1)                # recall past the window: on, or doubled
                             elif op_.startswith("w"): grow_w[i + 1] = int(op_[1:])
                             elif op_.startswith("a"): grow_a[i + 1] = int(op_[1:])
                         why = (f"this stage's length has doubled to {i+1-stage_t0[0]} steps" if SF else
@@ -1258,6 +1460,48 @@ def main():
                     r.log(f"    DIVERGED: {nsk} skips, {nsk - marks[-4][1]} of them within the last 600 steps, and the loss "
                           f"is not falling ({marks[-4][2]:.4f} -> {ema:.4f}); stopping")
                     stopped_early = "diverged"; break
+            if a.mix_auto and (i + 1) % a.mix_auto == 0 and trial is None:
+                def mix_losses_():
+                    if SF: opt.eval()
+                    m.eval(); out_ = {}
+                    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                        for k_, x_ in mix_dev.items():
+                            out_[k_] = m.loss(m.trunk(x_[:, :a.ctx]), x_[:, 1:a.ctx + 1], chunks=4).item()
+                    m.train()
+                    if SF: opt.train()
+                    return out_
+                Lm_ = roomy(mix_losses_)
+                def mix_align_():
+                    # THE MIX BY GRADIENT ALIGNMENT (2026-10-06; DoGE, Fan et al. 2023). Learning progress, even absolute and
+                    # per share, let the main corpora and the needles get WORSE (dclm 2.719 -> 2.726, needle 2.338 -> 2.348 in
+                    # 4,000 steps) while the new instruction sets improved fast. The objective is the model's held-out loss
+                    # AVERAGED OVER EVERY SOURCE: each source's weight is how well a gradient step on its training data
+                    # (fresh rows) agrees with the gradient that lowers that average (the held-out slices). A source whose
+                    # training would hurt the others gets only the floor. torch.autograd.grad leaves the graphs' .grad alone.
+                    params_ = [p_ for p_ in m.parameters() if p_.requires_grad]; Tg = min(2048, a.ctx)
+                    gT = [torch.zeros_like(p_, dtype=torch.float32) for p_ in params_]
+                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                        for k_, x_ in mix_dev.items():
+                            l_ = m.loss(m.trunk(x_[:, :Tg]), x_[:, 1:Tg + 1], chunks=1)      # all 4 held-out rows
+                            for t_, g_ in zip(gT, torch.autograd.grad(l_, params_, allow_unused=True)):
+                                if g_ is not None: t_.add_(g_.float(), alpha=1.0 / len(mix_dev))
+                        dots_ = {}; rr_ = np.random.default_rng(i)
+                        for k_ in ks:
+                            a_ = bins[k_]                                               # 4 fresh training rows
+                            x_ = torch.from_numpy(np.stack([np.asarray(a_[j_:j_ + Tg + 1]).astype(np.int64)
+                                                            for j_ in rr_.integers(0, len(a_) - Tg - 2, 4)])).cuda()
+                            l_ = m.loss(m.trunk(x_[:, :Tg]), x_[:, 1:Tg + 1], chunks=1)
+                            gs_ = torch.autograd.grad(l_, params_, allow_unused=True)
+                            dots_[k_] = float(sum((g_.float() * t_).sum() for g_, t_ in zip(gs_, gT) if g_ is not None))
+                    del gT
+                    return dots_
+                D_ = roomy(mix_align_)
+                pos_ = np.array([max(0.0, D_[k_]) for k_ in ks])
+                if pos_.sum() > 0:
+                    w_ = pos_ + pos_.mean() / len(ks); w_ /= w_.sum()
+                    ps[:] = 0.8 * ps + 0.2 * w_; ps[:] = ps / ps.sum()   # smoothed: 4 rows of 2,048 per source are still noisy
+                r.log("    MIX " + " ".join(f"{k_} {100 * ps[j_]:.1f}% ({Lm_[k_]:.3f}, {D_[k_]:+.2e})" for j_, k_ in enumerate(ks)))
+                mix_prev[0] = Lm_; mix_share[0] = ps.copy()
             if (i + 1) % a.eval_every == 0:
                 # BITS PER BYTE, not loss per token. Per-token loss depends on the vocabulary and is
                 # comparable to nothing; bits per byte removes the tokenizer and is the only number that can
@@ -1269,7 +1513,7 @@ def main():
                 torch.cuda.empty_cache()
                 def bpb_():
                     if SF: opt.eval()      # measured at the averaged weights, which are the model
-                    b_ = eval_bpb(m, tok, bins, ks, ps, np.random.default_rng(1234),
+                    b_ = eval_bpb(m, tok, bins, ks, ps_eval if a.mix_auto else ps, np.random.default_rng(1234),
                                   n_batches=8, B=4, T=min(a.ctx, 8192), vocab=a.vocab)
                     if SF: opt.train()
                     return b_
@@ -1302,9 +1546,12 @@ def main():
                                             **({"short_conv": m.short_conv} if getattr(m, "short_conv", 0) else {}),
                                             **({"attn_window": m.attn_window, "attn_sliding": m.attn_sliding}
                                                if (m.attn_window, m.attn_sliding) != (512, False) else {}),
-                                            **({"attn_windows": dict(m.attn_windows)} if getattr(m, "attn_windows", None) else {})),
+                                            **({"attn_windows": dict(m.attn_windows)} if getattr(m, "attn_windows", None) else {}),
+                                            **({"recall_k": m.recall_k} if getattr(m, "recall_k", 0) else {}),
+                                            **({"recall_gated": True} if getattr(m, "recall_gated", False) else {})),
                                 "new_layers": list(getattr(m, "new_layers", [])),
-                                "stage": (stage_t0[0], stage_next[0]) if a.grow_auto else None},
+                                "stage": (stage_t0[0], stage_next[0]) if a.grow_auto else None,
+                                "mix": {k_: float(ps[j_]) for j_, k_ in enumerate(ks)} if a.mix_auto else None},
                                f"{a.out}/ckpt.pt")
                 if SF: opt.train()
         if ema_t is None:

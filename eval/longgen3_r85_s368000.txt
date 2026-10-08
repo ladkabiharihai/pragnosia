@@ -1,0 +1,24 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 17.3 GiB free on the card
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 8983.72it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (1231 > 1024). Running this sequence through the model will result in indexing errors
+real text: 4-gram repeat rate 0.131 (median of 9 spans; 0.048-0.338); GPT-2 band 1.113 (0.965-1.205)  /mnt/kv_cache/run85_s368000_c.pt
+  temp 0.85 DRY 0.00: 4-gram repeat 0.224 (real 0.131), GPT-2 score at the start 0.992
+  temp 0.85 DRY 0.40: 4-gram repeat 0.056 (real 0.131), GPT-2 score at the start 0.988
+  temp 0.85 DRY 0.80: 4-gram repeat 0.028 (real 0.131), GPT-2 score at the start 1.109
+  temp 0.85 DRY 1.60: 4-gram repeat 0.017 (real 0.131), GPT-2 score at the start 1.138
+  temp 0.90 DRY 0.00: 4-gram repeat 0.351 (real 0.131), GPT-2 score at the start 0.936
+  temp 0.90 DRY 0.40: 4-gram repeat 0.025 (real 0.131), GPT-2 score at the start 1.083
+  temp 0.90 DRY 0.80: 4-gram repeat 0.014 (real 0.131), GPT-2 score at the start 1.100
+  temp 0.90 DRY 1.60: 4-gram repeat 0.010 (real 0.131), GPT-2 score at the start 1.167
+    temp 0.85 DRY 0.0 'The history of the city ': horizon 0; segments 0.92 1.23 0.93 0.61 1.57 0.70 0.28 1.01; repeat 0.457
+    temp 0.85 DRY 0.0 'In this paper we study': horizon 4,096; segments 1.05 1.28 1.11 1.04 0.83 0.77 0.11 0.14; repeat 0.511
+    temp 0.85 DRY 0.0 'The river rises in the m': horizon 4,096; segments 1.03 0.54 0.04 0.02 0.61 1.10 1.15 1.15; repeat 0.454
+  CHOSEN-BY-DATA temp 0.85 DRY 0.0: HORIZON median 4,096 (0, 4,096, 4,096)
+  sample: ' frog is found in the area of the frog. The frog is found in the area of the frog. The frog is found in the area of the frog. The frog is found in the area of the frog. The species of frog is found in the area of the frog. The frog is found in the area of the frog. The frog is found in the area of the frog. The frog is found in the area of the frog. The frog is found in the area of the frog. The fro'
+    temp 0.85 DRY 0.4 'The history of the city ': horizon 0; segments 0.94 1.26 1.18 1.14 0.99 1.06 1.29 1.15; repeat 0.040
+    temp 0.85 DRY 0.4 'In this paper we study': horizon 0; segments 0.93 1.10 1.56 1.36 1.15 1.08 0.89 0.92; repeat 0.128
+    temp 0.85 DRY 0.4 'The river rises in the m': horizon 8,192; segments 1.12 1.05 1.23 1.07 1.02 1.09 1.06 1.21; repeat 0.038
+  CHOSEN-BY-DATA temp 0.85 DRY 0.4: HORIZON median 0 (0, 0, 8,192)
+  sample: ' to be involved.\nThe next committee will review the EIAA program.\n- Solar Energy Storage and Conservation EIAA\nSolutions are being developed to provide an efficient and environmentally-friendly energy storage system for the energy grid. The EIAA also provides industry representatives with guidance on the storage and use of electricity.\n- Dave Center Energy Efficiency Standards\nThe Dave Center EIAA site is developed as an international standard and represents the implementation with regards to the wood and paper standard.\n-'
+GUARD: peak 4440 MiB of 6 GiB (.venv/bin/python -u eval/longgen3.py /mnt/kv_cache/run85_s368000_c.pt)
+LONGGEN3_DONE 07:21 UTC

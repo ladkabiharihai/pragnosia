@@ -1,0 +1,12 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 21.2 GiB free on the card
+LEARNING BY READING: 30 invented facts read once, then D tokens of unrelated prose, then a question (4-way, every wrong option another answer from the same facts; chance 25%); 100 questions per cell
+model                                  D=0     D=2,048     D=8,192    D=32,768
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 5661.98it/s]
+GPT-2 124M                           29.0%[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (1938 > 1024). Running this sequence through the model will result in indexing errors
+       22.0%       19.0%       24.0%
+Loading weights:   0%|          | 0/272 [00:00<?, ?it/s]Loading weights: 100%|██████████| 272/272 [00:00<00:00, 8039.43it/s]
+SmolLM2-135M                         32.0%       25.0%[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (8776 > 8192). Running this sequence through the model will result in indexing errors
+       22.0%       25.0%
+(95% interval about +-10 points per cell)
+GUARD: peak 5692 MiB of 8 GiB (.venv/bin/python -u eval/learn_by_reading.py hf:gpt2=GPT-2 124M hf:HuggingFaceTB/SmolLM2-135M=SmolLM2-135M)

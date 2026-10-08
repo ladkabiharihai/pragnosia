@@ -1,0 +1,36 @@
+GROWN MEMORY LAYER (writes closed by default) vs control, from run83, 2026-10-05 06:49 UTC
+######## mem: [   406.7s]   eval step 339000: BPB 1.0420  (952k bytes) [  1391.5s]   eval step 342000: BPB 1.0411  (952k bytes) 
+/mnt/kv_cache/ml_mem/ckpt.pt  window 102
+distance = filler tokens between the nee
+ distance   READ (nats)   STORED (relati
+      128   +23.784 +-2.024   L0:0.034 L
+      512   +23.227 +-1.828   L0:0.010 L
+    1,024    +0.022 +-0.043   L0:0.002 L
+    2,048    +0.003 +-0.032   L0:0.001 L
+    4,096    +0.010 +-0.039   L0:0.001 L
+    8,192    -0.005 +-0.021   L0:0.001 L
+   16,384    +0.020 +-0.030   L0:0.001 L
+  distance   1024 tokens:   0.0% (0/24)
+  distance   2048 tokens:   0.0% (0/24)
+  distance   4096 tokens:   0.0% (0/24)
+  distance   7000 tokens:   0.0% (0/24)
+      8,192 tokens of context: 1.1401 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.1388 bits/byte over 24 passages; vs 8,192: -0.0013 +- 0.0007
+######## ctrl: [   335.8s]   eval step 339000: BPB 1.0428  (952k bytes) [  1385.9s]   eval step 342000: BPB 1.0494  (952k bytes) 
+/mnt/kv_cache/ml_ctrl/ckpt.pt  window 10
+distance = filler tokens between the nee
+ distance   READ (nats)   STORED (relati
+      128    +9.544 +-1.058   L0:0.041 L
+      512    +9.701 +-1.060   L0:0.016 L
+    1,024    +0.009 +-0.028   L0:0.006 L
+    2,048    +0.032 +-0.025   L0:0.002 L
+    4,096    +0.005 +-0.020   L0:0.001 L
+    8,192    -0.011 +-0.031   L0:0.001 L
+   16,384    +0.010 +-0.041   L0:0.001 L
+  distance   1024 tokens:   0.0% (0/24)
+  distance   2048 tokens:   0.0% (0/24)
+  distance   4096 tokens:   0.0% (0/24)
+  distance   7000 tokens:   0.0% (0/24)
+      8,192 tokens of context: 0.9862 bits/byte over 24 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 0.9866 bits/byte over 24 passages; vs 8,192: +0.0003 +- 0.0003
+MEMLAYER_DONE 2026-10-05 08:04 UTC

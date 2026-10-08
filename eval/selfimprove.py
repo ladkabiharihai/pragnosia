@@ -46,9 +46,11 @@ if len(sys.argv) > 1 and sys.argv[1] == "lookup":
         ids = o.encode(" ".join(facts) + "\n\nQuestion: " + q + " Answer:")
         t = o.decode(o.generate(ids, 10, temp=0.0, stop=8191))
         return t.strip().split("\n")[0].strip().rstrip(".").strip()
-    docs, n_lab = [], 0; right = asked = 0; t0 = time.time()
+    docs, n_lab = [], 0; right = asked = 0; t0 = time.time(); sft_docs = []
     for d in range(ND):
-        n = rr.choice([20, 40, 80]); facts, used = [], set()
+        # SI_FACTS (2026-10-06): the round's difficulty. Round 2 at round 1's difficulty added nothing (2026-10-03); a CURRICULUM
+        # moves each round to documents with more facts than the last, where the improved model's own labels still hold
+        n = rr.choice([int(v) for v in os.environ.get("SI_FACTS", "20,40,80").split(",")]); facts, used = [], set()
         while len(facts) < n:
             k = rr.randrange(len(KINDS_)); x = nm(rr.choice([2, 3]))
             if x in used: continue
@@ -62,14 +64,33 @@ if len(sys.argv) > 1 and sys.argv[1] == "lookup":
             top, c = Counter(ans).most_common(1)[0]
             asked += 1
             if c >= 2 and top:
-                qa.append(f"Question: {q} Answer: {top}"); n_lab += 1; right += (top == y)   # gold: diagnostic only
+                qa.append((q, top)); n_lab += 1; right += (top == y)   # gold: diagnostic only
         if qa:
-            order = sent[:]; rr.shuffle(order); docs.append(" ".join(order) + "\n\n" + "\n".join(qa))
+            order = sent[:]; rr.shuffle(order)
+            docs.append(" ".join(order) + "\n\n" + "\n".join(f"Question: {q_} Answer: {a_}" for q_, a_ in qa))
+            sft_docs.append((" ".join(order) + "\n\n", qa))
         if (d + 1) % 100 == 0:
             print(f"  {d+1}/{ND} documents: {n_lab}/{asked} questions self-labelled ({100*n_lab/asked:.0f}%), "
                   f"labels right {100*right/max(1,n_lab):.1f}%  ({(d+1)/(time.time()-t0):.2f} doc/s)", flush=True)
     arr = np.concatenate([np.array(e.ids + [8191], dtype=np.uint16) for e in tk.encode_batch(docs)])
     arr.tofile(f"{OUT}/selflabel.bin")
+    # FINE-TUNE FORMAT TOO (2026-10-06): the same documents, the loss on the self-labelled ANSWERS only, packed in rows of
+    # SI_ROW tokens (src/sft.py --row): self-improvement rounds that fit beside the training (a fine-tune, not a 34 GiB arm)
+    ROW_ = int(os.environ.get("SI_ROW", "4097")); toks_, msk_ = [], []
+    for ctx_, qa_ in sft_docs:
+        t_, k_ = tk.encode(ctx_).ids, None; mk_ = [0] * len(t_)
+        for q_, a_ in qa_:
+            pq = tk.encode(f"Question: {q_} Answer:").ids; pa = tk.encode(f" {a_}\n").ids
+            t_ += pq + pa; mk_ += [0] * len(pq) + [1] * len(pa)
+        t_ += [8191]; mk_ += [0]
+        if len(t_) > ROW_: continue
+        if len(toks_) % ROW_ + len(t_) > ROW_:                     # start a new row rather than split a document
+            pad = ROW_ - len(toks_) % ROW_; toks_ += [8191] * pad; msk_ += [0] * pad
+        toks_ += t_; msk_ += mk_
+    n_ = len(toks_) // ROW_ * ROW_; rows_ = n_ // ROW_; nv_ = max(1, rows_ // 20)
+    T_ = np.array(toks_[:n_], dtype=np.uint16).reshape(rows_, ROW_); M_ = np.array(msk_[:n_], dtype=np.uint8).reshape(rows_, ROW_)
+    T_[nv_:].tofile(f"{OUT}/train.bin"); M_[nv_:].tofile(f"{OUT}/train.mask"); T_[:nv_].tofile(f"{OUT}/val.bin"); M_[:nv_].tofile(f"{OUT}/val.mask")
+    print(f"fine-tune format: {rows_ - nv_} train + {nv_} val rows of {ROW_} tokens, {100 * M_.mean():.1f}% of tokens carry loss", flush=True)
     print(f"done: {len(docs):,} documents, {n_lab:,} of {asked:,} questions self-labelled by >= 2 of 3 orderings; "
           f"checked afterwards against gold, {100*right/max(1,n_lab):.1f}% right; {len(arr):,} tokens -> {OUT}/selflabel.bin")
     sys.exit(0)

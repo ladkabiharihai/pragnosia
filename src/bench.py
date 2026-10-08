@@ -34,6 +34,57 @@ import torch.nn.functional as F
 
 
 # --------------------------------------------------------------------------------- model wrappers
+
+MIN_P = float(__import__("os").environ.get("MEMBRAE_MIN_P", "0"))   # 0: plain temperature sampling (every score so far)
+# FREQUENCY PENALTY over the last FREQ_WIN generated tokens (logit -= FREQ_PEN x count), 0 = off (every score so far).
+# 2026-10-06: run85's long generations collapse into loops after a few thousand tokens; the strength is CHOSEN by matching
+# real text's own repetition rate (eval/longgen2.py), as the temperature is chosen by matching real text's surprise
+FREQ_PEN = float(__import__("os").environ.get("MEMBRAE_FREQ_PEN", "0"))
+FREQ_WIN = 2048
+# DRY ("don't repeat yourself"): only a token that would EXTEND a sequence already seen in the last DRY_WIN tokens is
+# penalised, by DRY_MULT x DRY_BASE^(length - DRY_ALLOWED); ordinary words are untouched (the frequency penalty above
+# also hit "the" and "of", and its long generations drifted too surprising). 0 = off. Strength chosen by eval/longgen2.py.
+DRY_MULT = float(__import__("os").environ.get("MEMBRAE_DRY", "0"))
+DRY_BASE, DRY_ALLOWED, DRY_WIN = 1.75, 2, 4096
+
+
+class _Dry:
+    """the bigram index of a generation, to find every earlier place the last tokens occurred and what followed them"""
+    def __init__(self, seq):
+        self.s = list(seq); self.ix = {}
+        for i in range(1, len(self.s)): self.ix.setdefault((self.s[i - 1], self.s[i]), []).append(i)
+    def penalties(self):
+        s = self.s; n = len(s); pen = {}
+        if n < 2: return pen
+        for j in self.ix.get((s[n - 2], s[n - 1]), ()):
+            if j >= n - 1 or n - 1 - j > DRY_WIN: continue
+            L = 2
+            while L < 64 and j - L >= 0 and s[j - L] == s[n - 1 - L]: L += 1
+            c = s[j + 1]
+            if L >= DRY_ALLOWED: pen[c] = max(pen.get(c, 0.0), DRY_MULT * DRY_BASE ** (L - DRY_ALLOWED))
+        return pen
+    def push(self, t):
+        self.s.append(t); n = len(self.s)
+        if n >= 2: self.ix.setdefault((self.s[n - 2], self.s[n - 1]), []).append(n - 1)
+
+
+def _dry_logits(lg, dry):
+    pen = dry.penalties()
+    if not pen: return lg
+    lg = lg.clone(); idx = torch.tensor(list(pen.keys()), device=lg.device)
+    lg[idx] -= torch.tensor(list(pen.values()), device=lg.device, dtype=lg.dtype)
+    return lg
+
+
+def _sample(lg, temp, g):
+    """greedy at temp 0; else a sample at temperature temp, optionally MIN-P (Nguyen et al. 2024): tokens below MIN_P x the
+    most likely one's probability are dropped first (2026-10-06, the long-generation horizon: runs of filler after ~12k
+    tokens at plain temperature)"""
+    if temp == 0: return int(lg.argmax())
+    p = torch.softmax(lg.float() / temp, -1)
+    if MIN_P > 0: p = torch.where(p >= MIN_P * p.max(), p, torch.zeros_like(p))
+    return int(torch.multinomial(p, 1, generator=g))
+
 class Ours:
     """One of our checkpoints. Long contexts go through the carried state, window by window."""
     def __init__(self, path, tok_path, device="cuda"):
@@ -87,6 +138,44 @@ class Ours:
         return out                                   # (1, last window, V)
 
     @torch.no_grad()
+    def prefix(self, ids):
+        """READ ONCE, SCORE MANY (2026-10-06): the prefix consumed window by window from the start, exactly as generate()
+        reads a prompt; returns (states, position in the last window, log-probabilities of the next token)."""
+        w = self.ctx; states = [None] * self.m.layers; pw = 0; lp = None
+        # FULL WINDOWS, THEN PIECES OF 256 (2026-10-06): the fused carrier kernel tunes itself for every new sequence length
+        # (~2.3 s each), so documents of arbitrary length cost seconds apiece; pieces bound the lengths it ever sees to
+        # 8,192, 256 and the remainder (1-255), each tuned once. The state carries exactly across pieces.
+        s0 = 0
+        while s0 < len(ids):
+            n_ = w if len(ids) - s0 >= w - pw and pw == 0 else min(256, len(ids) - s0, w - pw)
+            x = torch.tensor([ids[s0:s0 + n_]], device=self.device)
+            h = self.m.e(x) + self.m.p(torch.arange(pw, pw + n_, device=self.device) % self.m.p.num_embeddings)
+            for i, (mx, mp) in enumerate(zip(self.m.mix, self.m.mlp)):
+                h, states[i] = mx(h, states[i]); h = mp(h)
+            lp = F.linear(self.m.n(h[:, -1:]), self.m.e.weight)[0, -1].float().log_softmax(-1)
+            s0 += n_; pw = (pw + n_) % w
+        return states, pw, lp
+
+    @torch.no_grad()
+    def continuation_lp(self, pre, cont):
+        """summed log-probability of the tokens `cont` after a prefix read by prefix(); the prefix's states are not changed
+        (every layer returns new state tensors), so one prefix serves any number of continuations"""
+        states, pw, lp0 = pre; w = self.ctx; states = list(states)
+        tot = float(lp0[cont[0]]); k = 0
+        feed = cont[:-1]
+        while k < len(feed):
+            take = min(len(feed) - k, w - pw if pw else w)
+            x = torch.tensor([feed[k:k + take]], device=self.device)
+            h = self.m.e(x) + self.m.p(torch.arange(pw, pw + take, device=self.device) % self.m.p.num_embeddings)
+            for i, (mx, mp) in enumerate(zip(self.m.mix, self.m.mlp)):
+                h, states[i] = mx(h, states[i]); h = mp(h)
+            lp = F.linear(self.m.n(h), self.m.e.weight)[0].float().log_softmax(-1)
+            y = torch.tensor(cont[k + 1:k + 1 + take], device=self.device)
+            tot += float(lp.gather(-1, y.unsqueeze(-1)).sum())
+            k += take; pw = (pw + take) % w
+        return tot
+
+    @torch.no_grad()
     def state_bytes(self, B=1, T=None):
         """Bytes of state for one sequence. For a carrier this is constant; for the attention control it is a
         KV cache that grows with the window, so the number is reported at a full window."""
@@ -110,6 +199,7 @@ class Ours:
 
         Positions restart at each window boundary, as in training; the state carries across the boundary."""
         g = torch.Generator(device=self.device).manual_seed(seed)
+        self._prompt_ids = list(prompt_ids[-DRY_WIN:])
         w = self.ctx
         states = [None] * self.m.layers
         lg = None; pw = 0
@@ -122,11 +212,21 @@ class Ours:
             lg = F.linear(self.m.n(h[:, -1:]), self.m.e.weight)[0, -1].float()
             pw = nn_ % w
         out = []
-        if self.graphable and n > 8:
+        if self.graphable and n > 8 and not getattr(self.m, "recall_k", 0) and not getattr(self.m, "_no_graph", False):   # recall's store grows: not graphable
             return out + self._generate_graphed(states, pw, lg, n, temp, g, stop)
+        # THE SAME PENALTIES AS THE GRAPHED DECODE (2026-10-08): this eager loop -- every recall model decodes here -- sampled
+        # plain, so "DRY 0.4" in the final scorecard was silently plain sampling (18/24 segments collapsed in both rows)
+        cnt = torch.zeros_like(lg, dtype=torch.float32) if FREQ_PEN > 0 else None
+        dry = _Dry(getattr(self, "_prompt_ids", [])) if DRY_MULT > 0 else None
         for _ in range(n):
-            nxt = int(lg.argmax()) if temp == 0 else int(torch.multinomial(torch.softmax(lg / temp, -1), 1, generator=g))
+            c_ = lg - FREQ_PEN * cnt if cnt is not None else lg
+            if dry is not None: c_ = _dry_logits(c_, dry)
+            nxt = _sample(c_, temp, g)
             out.append(nxt)
+            if dry is not None: dry.push(nxt)
+            if cnt is not None:
+                cnt[nxt] += 1
+                if len(out) > FREQ_WIN: cnt[out[-FREQ_WIN - 1]] -= 1
             if nxt == stop: break
             if pw == 0 and self.mixer == "attn":
                 states = [None] * self.m.layers          # the window ended; attention keeps nothing across it
@@ -199,10 +299,18 @@ class Ours:
             for a, b in zip(s_, f_): a.copy_(b)
         pos.fill_(pw)
         out = []; cur = lg
+        cnt = torch.zeros_like(lg, dtype=torch.float32) if FREQ_PEN > 0 else None
+        dry = _Dry(getattr(self, "_prompt_ids", [])) if DRY_MULT > 0 else None
         for _ in range(n):
-            nxt = int(cur.argmax()) if temp == 0 else int(torch.multinomial(torch.softmax(cur / temp, -1), 1, generator=g))
+            c_ = cur - FREQ_PEN * cnt if cnt is not None else cur
+            if dry is not None: c_ = _dry_logits(c_, dry)
+            nxt = _sample(c_, temp, g)
             out.append(nxt)
+            if dry is not None: dry.push(nxt)
             if nxt == stop: break              # the answer ended: HF's generate stops at EOS, and so must this
+            if cnt is not None:
+                cnt[nxt] += 1
+                if len(out) > FREQ_WIN: cnt[out[-FREQ_WIN - 1]] -= 1
             tok.fill_(nxt)
             graph.replay()
             cur = out_lg
@@ -249,7 +357,7 @@ class GPT2:
         past = o.past_key_values; lg = o.logits[0, -1].float()
         out = []
         for _ in range(n):
-            nxt = int(lg.argmax()) if temp == 0 else int(torch.multinomial(torch.softmax(lg / temp, -1), 1, generator=g))
+            nxt = _sample(lg, temp, g)
             out.append(nxt)
             ids.append(nxt)
             if len(ids) > self.max_ctx:               # the cache is full: it must re-read a truncated window

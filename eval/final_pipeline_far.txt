@@ -1,0 +1,28 @@
+FINAL PIPELINE far from /mnt/kv_cache/final_base_far.pt, 2026-10-07 13:33 UTC
+10                          75.8% +- 3.8 (n=500)
+30                          76.6% +- 3.7 (n=500)
+60                          68.0% +- 4.1 (n=500)
+120                         54.8% +- 4.4 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  50.8% +- 9.0   early-mid  54.8% +- 8.4   late-mid  53.6% +- 8.7   latest  59.8% +- 8.7
+SI_ROUNDS_DONE 2026-10-07 20:45 UTC
+== the self-improved model: /mnt/kv_cache/si_far_r3_ft/ckpt.pt
+1564 right + 1564 I-don't-know
+GUARD: peak 6668 MiB of 7 GiB (eval/eval_ckpt.sh /mnt/kv_cache/si_far_r3_ft/ckpt.pt final_far)
+SELF-CONSISTENCY ABSTENTION, no labels, no threshold set by hand: /mnt/kv_cache/final_far_sft/ckpt.pt, K=6 samples at temperature 1
+  EVERYDAY  greedy, always answers                       right  39.6%  WRONG  60.4%  declined   0.0%  -> accuracy when it answers  39.6%
+  EVERYDAY  self-consistent (>= half of 6 samples agree) right  22.9%  WRONG  12.5%  declined  64.6%  -> accuracy when it answers  64.7%
+  EVERYDAY  consistency when right 0.46, when wrong 0.21
+  SCIQ      greedy, always answers                       right   9.1%  WRONG  90.9%  declined   0.0%  -> accuracy when it answers   9.1%
+  SCIQ      self-consistent (>= half of 6 samples agree) right   3.6%  WRONG   7.2%  declined  89.2%  -> accuracy when it answers  33.3%
+  SCIQ      consistency when right 0.37, when wrong 0.12
+GUARD: peak 1798 MiB of 6 GiB (.venv/bin/python -u eval/selfcons.py /mnt/kv_cache/final_far_sft/ckpt.pt 6)
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book         D=0     D=2,048     D=8,192    D=32,768
+base-far (recall-trained)                48.0%       79.3%       66.7%       65.3%       48.7%
+self-improved-far (recall-trained)       46.0%       82.0%       70.7%       67.3%       53.3%
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (2094 > 1024). Running this sequence through the model will result in indexing errors
+GPT-2 124M                               48.0%       77.3%       43.3%       45.3%       42.7%
+GUARD 01:52:31 UTC: 6702 MiB > 6 GiB; killing  3526828   (.venv/bin/python -u eval/openbook.py /mnt/kv_cache/final_base_far.pt=base-far /mnt/kv_cache/si_far_r3_ft/ckpt.pt=self-improved-far)
+   pid 3526828 6702 MiB: .venv/bin/python -u eval/openbook.py /mnt/kv_cache/final_base_far.pt=base-far /m
+FINAL_PIPELINE_DONE 2026-10-08 01:52 UTC

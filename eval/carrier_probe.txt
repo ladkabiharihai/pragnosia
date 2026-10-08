@@ -1,0 +1,168 @@
+CARRIER PROBE, 2026-10-04 07:48 UTC
+/mnt/kv_cache/run82_final.pt  window 1024  carrier layers [0, 1, 2, 4, 5, 6, 8, 9, 10]
+per carrier layer: each head's median half-life in tokens (ln 2 / -la), sorted; and its median write strength
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/carrier_probe.py", line 58, in <module>
+    "   beta " + " ".join(f"{v:.2f}" for v in bt.median(0).values.cpu().numpy()))
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: Got unsupported ScalarType BFloat16
+/mnt/kv_cache/run82_final.pt  window 1024  carrier layers [0, 1, 2, 4, 5, 6, 8, 9, 10]
+distance = filler tokens between the needle and the question; 12 pairs (3 phrasings x 4) per distance
+ distance   READ (nats)   STORED (relative state difference, per carrier layer)
+      128   +23.747 +-2.422   L0:0.031 L1:0.004 L2:0.023 L4:0.007 L5:0.008 L6:0.015 L8:0.013 L9:0.071 L10:0.048
+      512   +22.675 +-2.782   L0:0.012 L1:0.004 L2:0.013 L4:0.006 L5:0.007 L6:0.010 L8:0.008 L9:0.067 L10:0.036
+    1,024    +7.905 +-5.618   L0:0.004 L1:0.004 L2:0.011 L4:0.006 L5:0.007 L6:0.007 L8:0.007 L9:0.036 L10:0.019
+    2,048    +1.463 +-1.705   L0:0.001 L1:0.004 L2:0.011 L4:0.006 L5:0.007 L6:0.007 L8:0.007 L9:0.015 L10:0.010
+    4,096    +0.403 +-0.490   L0:0.001 L1:0.003 L2:0.011 L4:0.005 L5:0.006 L6:0.006 L8:0.007 L9:0.007 L10:0.007
+    8,192    +0.017 +-0.045   L0:0.001 L1:0.003 L2:0.011 L4:0.006 L5:0.007 L6:0.007 L8:0.007 L9:0.006 L10:0.007
+   16,384    +0.020 +-0.029   L0:0.001 L1:0.004 L2:0.011 L4:0.006 L5:0.007 L6:0.007 L8:0.007 L9:0.006 L10:0.008
+/mnt/kv_cache/run83_final.pt  window 1024  carrier layers [0, 1, 2, 4, 5, 6, 8, 9, 10]
+per carrier layer: each head's median half-life in tokens (ln 2 / -la), sorted; and its median write strength
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/carrier_probe.py", line 58, in <module>
+    "   beta " + " ".join(f"{v:.2f}" for v in bt.median(0).values.cpu().numpy()))
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: Got unsupported ScalarType BFloat16
+/mnt/kv_cache/run83_final.pt  window 1024  carrier layers [0, 1, 2, 4, 5, 6, 8, 9, 10]
+distance = filler tokens between the needle and the question; 12 pairs (3 phrasings x 4) per distance
+ distance   READ (nats)   STORED (relative state difference, per carrier layer)
+      128   +25.359 +-2.414   L0:0.034 L1:0.005 L2:0.015 L4:0.007 L5:0.008 L6:0.011 L8:0.010 L9:0.011 L10:0.016
+      512   +24.966 +-1.784   L0:0.010 L1:0.004 L2:0.007 L4:0.006 L5:0.007 L6:0.009 L8:0.009 L9:0.009 L10:0.012
+    1,024    +0.025 +-0.029   L0:0.002 L1:0.004 L2:0.006 L4:0.007 L5:0.007 L6:0.007 L8:0.008 L9:0.007 L10:0.008
+    2,048    +0.031 +-0.042   L0:0.001 L1:0.004 L2:0.006 L4:0.006 L5:0.007 L6:0.007 L8:0.008 L9:0.006 L10:0.008
+    4,096    -0.033 +-0.042   L0:0.001 L1:0.004 L2:0.006 L4:0.006 L5:0.007 L6:0.007 L8:0.008 L9:0.006 L10:0.008
+    8,192    +0.009 +-0.024   L0:0.001 L1:0.004 L2:0.006 L4:0.006 L5:0.007 L6:0.007 L8:0.008 L9:0.007 L10:0.008
+   16,384    -0.009 +-0.030   L0:0.001 L1:0.004 L2:0.007 L4:0.006 L5:0.007 L6:0.007 L8:0.008 L9:0.007 L10:0.008
+/mnt/kv_cache/r98r/ckpt.pt  window 512  carrier layers [0, 1, 2, 4, 5, 6, 8, 9, 10]
+per carrier layer: each head's median half-life in tokens (ln 2 / -la), sorted; and its median write strength
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/carrier_probe.py", line 58, in <module>
+    "   beta " + " ".join(f"{v:.2f}" for v in bt.median(0).values.cpu().numpy()))
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: Got unsupported ScalarType BFloat16
+/mnt/kv_cache/r98r/ckpt.pt  window 512  carrier layers [0, 1, 2, 4, 5, 6, 8, 9, 10]
+distance = filler tokens between the needle and the question; 12 pairs (3 phrasings x 4) per distance
+ distance   READ (nats)   STORED (relative state difference, per carrier layer)
+      128   +10.207 +-0.995   L0:0.024 L1:0.004 L2:0.009 L4:0.006 L5:0.007 L6:0.020 L8:0.021 L9:0.032 L10:0.039
+      512    +4.626 +-1.094   L0:0.010 L1:0.004 L2:0.008 L4:0.006 L5:0.007 L6:0.013 L8:0.009 L9:0.027 L10:0.029
+    1,024    +3.564 +-0.719   L0:0.004 L1:0.004 L2:0.007 L4:0.006 L5:0.007 L6:0.008 L8:0.007 L9:0.017 L10:0.020
+    2,048    +3.019 +-0.866   L0:0.001 L1:0.003 L2:0.007 L4:0.006 L5:0.007 L6:0.007 L8:0.007 L9:0.016 L10:0.016
+    4,096    +1.312 +-0.478   L0:0.001 L1:0.003 L2:0.007 L4:0.005 L5:0.007 L6:0.006 L8:0.007 L9:0.007 L10:0.009
+    8,192    +0.026 +-0.026   L0:0.001 L1:0.003 L2:0.007 L4:0.005 L5:0.006 L6:0.006 L8:0.007 L9:0.006 L10:0.007
+   16,384    -0.001 +-0.027   L0:0.001 L1:0.003 L2:0.007 L4:0.005 L5:0.006 L6:0.006 L8:0.007 L9:0.006 L10:0.007
+PROBE_DONE 2026-10-04 07:51 UTC
+/mnt/kv_cache/run82_final.pt  window 1024  carrier layers [0, 1, 2, 4, 5, 6, 8, 9, 10]
+per carrier layer: each head's median half-life in tokens (ln 2 / -la), sorted; and its median write strength
+  layer  0: half-life        0        2       14       41     4068 40786832   beta 0.32 0.95 0.62 0.27 0.00 0.13
+  layer  1: half-life        1        1        4        9        9       15   beta 1.00 0.62 0.61 0.74 0.94 0.83
+  layer  2: half-life        2        2       23       54      968   672311   beta 0.97 0.87 0.91 0.62 1.00 0.01
+  layer  4: half-life        1        8       17       27      191      623   beta 0.79 0.62 0.70 0.59 0.58 0.88
+  layer  5: half-life        1        3        6        8      178     1454   beta 0.03 0.90 0.75 0.70 0.00 0.33
+  layer  6: half-life        3       17       32     3536   161438   510191   beta 0.96 0.28 0.08 0.11 0.00 0.01
+  layer  8: half-life        1        3       21       42      474    56017   beta 0.98 0.71 0.51 0.17 0.36 0.00
+  layer  9: half-life       12       21       35       83      153 10033509   beta 0.79 0.60 0.77 0.04 0.30 0.61
+  layer 10: half-life        2        3       54       80      127   214676   beta 0.99 0.86 0.79 0.27 0.31 0.00
+  heads with half-life >    512 tokens: 12 of 54
+  heads with half-life >  1,024 tokens: 10 of 54
+  heads with half-life >  4,096 tokens: 7 of 54
+  heads with half-life > 16,384 tokens: 7 of 54
+/mnt/kv_cache/run83_final.pt  window 1024  carrier layers [0, 1, 2, 4, 5, 6, 8, 9, 10]
+per carrier layer: each head's median half-life in tokens (ln 2 / -la), sorted; and its median write strength
+  layer  0: half-life        0        1        8       20     6885 11861119   beta 0.33 0.96 0.73 0.29 0.00 0.25
+  layer  1: half-life        1        1        3        6        7       12   beta 1.00 0.63 0.65 0.76 0.96 0.88
+  layer  2: half-life        1        1       20       76      739     1060   beta 0.98 0.90 0.94 0.66 1.00 0.01
+  layer  4: half-life        1        8        9       19      171     1154   beta 0.78 0.65 0.72 0.61 0.60 0.91
+  layer  5: half-life        1        3        5        7       99     2741   beta 0.03 0.92 0.79 0.73 0.00 0.39
+  layer  6: half-life        3       11       39     1581     3834    25459   beta 0.96 0.32 0.14 0.12 0.00 0.01
+  layer  8: half-life        1        2       18       27      190     4862   beta 0.98 0.72 0.54 0.19 0.44 0.01
+  layer  9: half-life        9       18       25       82       86   278492   beta 0.82 0.64 0.80 0.03 0.39 0.64
+  layer 10: half-life        2        2       49       63       79     8724   beta 0.99 0.87 0.81 0.35 0.36 0.00
+  heads with half-life >    512 tokens: 12 of 54
+  heads with half-life >  1,024 tokens: 11 of 54
+  heads with half-life >  4,096 tokens: 6 of 54
+  heads with half-life > 16,384 tokens: 3 of 54
+/mnt/kv_cache/r98r/ckpt.pt  window 512  carrier layers [0, 1, 2, 4, 5, 6, 8, 9, 10]
+per carrier layer: each head's median half-life in tokens (ln 2 / -la), sorted; and its median write strength
+  layer  0: half-life        0        5       57       83     4284 72767120   beta 0.31 0.96 0.63 0.26 0.00 0.04
+  layer  1: half-life        1        1        6        9       15       17   beta 1.00 0.61 0.59 0.73 0.78 0.75
+  layer  2: half-life        2        2       21       39      144   141207   beta 0.96 0.84 0.87 0.59 0.55 0.06
+  layer  4: half-life        1        8       22       30      141      153   beta 0.79 0.60 0.68 0.55 0.57 0.78
+  layer  5: half-life        1        3        6        9       59      354   beta 0.03 0.88 0.72 0.66 0.00 0.35
+  layer  6: half-life        3       16       18     5704   333510  2099871   beta 0.96 0.25 0.08 0.10 0.00 0.01
+  layer  8: half-life        1        4       23       47      810   218407   beta 0.98 0.70 0.50 0.16 0.35 0.00
+  layer  9: half-life       13       18       43       59      206 46562088   beta 0.77 0.57 0.73 0.05 0.27 0.59
+  layer 10: half-life        2        3       52       56      150  1646978   beta 0.99 0.86 0.77 0.21 0.31 0.00
+  heads with half-life >    512 tokens: 10 of 54
+  heads with half-life >  1,024 tokens: 9 of 54
+  heads with half-life >  4,096 tokens: 9 of 54
+  heads with half-life > 16,384 tokens: 7 of 54
+/mnt/kv_cache/r98r/ckpt.pt  window 512  carrier layers [0, 1, 2, 4, 5, 6, 8, 9, 10]
+oracle long heads: L0:[2, 3] L1:[] L2:[4] L4:[] L5:[] L6:[1, 2, 3] L8:[3] L9:[3] L10:[3]
+distance = filler tokens between the needle and the question; 12 pairs (3 phrasings x 4) per distance
+ distance   READ (nats)   STORED (relative state difference, per carrier layer)
+    1,024   +15.197 +-1.781   L0:0.103 L1:0.073 L2:0.110 L4:0.083 L5:0.099 L6:0.143 L8:0.153 L9:0.120 L10:0.178
+    2,048   +14.648 +-2.373   L0:0.048 L1:0.065 L2:0.102 L4:0.076 L5:0.090 L6:0.105 L8:0.140 L9:0.111 L10:0.163
+    4,096   +15.807 +-2.234   L0:0.008 L1:0.044 L2:0.071 L4:0.053 L5:0.064 L6:0.070 L8:0.093 L9:0.075 L10:0.129
+    8,192    +9.985 +-1.254   L0:0.000 L1:0.005 L2:0.030 L4:0.008 L5:0.009 L6:0.011 L8:0.021 L9:0.017 L10:0.055
+   16,384    +3.294 +-1.122   L0:0.000 L1:0.002 L2:0.023 L4:0.005 L5:0.006 L6:0.008 L8:0.008 L9:0.007 L10:0.027
+/mnt/kv_cache/run82_final.pt  window 1024  carrier layers [0, 1, 2, 4, 5, 6, 8, 9, 10]
+oracle long heads: L0:[2, 3] L1:[] L2:[4] L4:[] L5:[] L6:[1, 2, 3] L8:[3] L9:[3] L10:[3]
+distance = filler tokens between the needle and the question; 12 pairs (3 phrasings x 4) per distance
+ distance   READ (nats)   STORED (relative state difference, per carrier layer)
+    1,024   +19.788 +-2.345   L0:0.105 L1:0.072 L2:0.123 L4:0.080 L5:0.090 L6:0.104 L8:0.119 L9:0.108 L10:0.194
+    2,048   +20.225 +-4.921   L0:0.036 L1:0.056 L2:0.101 L4:0.067 L5:0.073 L6:0.080 L8:0.095 L9:0.088 L10:0.170
+    4,096   +12.435 +-7.124   L0:0.004 L1:0.023 L2:0.076 L4:0.031 L5:0.035 L6:0.036 L8:0.036 L9:0.039 L10:0.121
+    8,192    +4.241 +-3.250   L0:0.000 L1:0.004 L2:0.061 L4:0.014 L5:0.015 L6:0.015 L8:0.013 L9:0.021 L10:0.056
+   16,384    +0.849 +-1.170   L0:0.000 L1:0.000 L2:0.060 L4:0.012 L5:0.013 L6:0.013 L8:0.011 L9:0.012 L10:0.024
+== SURPRISE_TOP=0.05
+/mnt/kv_cache/r98r/ckpt.pt  window 512
+ distance   READ (nats)   STORED (rela
+   (N=1024) the code's tokens in the t
+    1,024    +3.951 +-1.131   L0:0.042
+   (N=2048) the code's tokens in the t
+    2,048    +2.981 +-0.840   L0:0.034
+   (N=4096) the code's tokens in the t
+    4,096    +1.359 +-0.468   L0:0.029
+   (N=8192) the code's tokens in the t
+    8,192    +0.135 +-0.199   L0:0.021
+   (N=16384) the code's tokens in the 
+   16,384    +0.011 +-0.073   L0:0.038
+== SURPRISE_TOP=0.05
+/mnt/kv_cache/run82_final.pt  window 1
+ distance   READ (nats)   STORED (rela
+   (N=1024) the code's tokens in the t
+    1,024    +0.039 +-0.083   L0:0.026
+   (N=2048) the code's tokens in the t
+    2,048    -0.013 +-0.026   L0:0.037
+   (N=4096) the code's tokens in the t
+    4,096    +0.035 +-0.041   L0:0.022
+   (N=8192) the code's tokens in the t
+    8,192    -0.015 +-0.054   L0:0.031
+   (N=16384) the code's tokens in the 
+   16,384    -0.008 +-0.040   L0:0.020
+== SURPRISE_TOP=0.02
+/mnt/kv_cache/r98r/ckpt.pt  window 512
+ distance   READ (nats)   STORED (rela
+   (N=1024) the code's tokens in the t
+    1,024    +3.019 +-0.863   L0:0.033
+   (N=2048) the code's tokens in the t
+    2,048    +2.159 +-0.465   L0:0.020
+   (N=4096) the code's tokens in the t
+    4,096    +1.710 +-0.603   L0:0.031
+   (N=8192) the code's tokens in the t
+    8,192    +0.058 +-0.101   L0:0.013
+   (N=16384) the code's tokens in the 
+   16,384    -0.030 +-0.119   L0:0.033
+== SURPRISE_TOP=0.02
+/mnt/kv_cache/run82_final.pt  window 1
+ distance   READ (nats)   STORED (rela
+   (N=1024) the code's tokens in the t
+    1,024    -0.015 +-0.110   L0:0.025
+   (N=2048) the code's tokens in the t
+    2,048    -0.082 +-0.104   L0:0.025
+   (N=4096) the code's tokens in the t
+    4,096    +0.034 +-0.103   L0:0.020
+   (N=8192) the code's tokens in the t
+    8,192    +0.061 +-0.166   L0:0.058
+   (N=16384) the code's tokens in the 
+   16,384    -0.021 +-0.036   L0:0.021

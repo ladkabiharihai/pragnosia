@@ -1,0 +1,27 @@
+SELF-IMPROVEMENT ROUNDS from /mnt/kv_cache/final_base_rc1.pt, 1000 documents per round, 2026-10-07 08:01 UTC
+== round 0 (the start)
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/final_base_rc1.pt
+facts in context                         Carrier
+10                          60.8% +- 4.3 (n=500)
+30                          57.2% +- 4.3 (n=500)
+60                          52.6% +- 4.4 (n=500)
+120                         48.8% +- 4.4 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  58.5% +- 8.9   early-mid  56.3% +- 8.4   late-mid  41.6% +- 8.6   latest  38.5% +- 8.6
+== round 1: documents of 20,40,80 facts, labelled by the model from /mnt/kv_cache/final_base_rc1.pt
+fine-tune format: 224 train + 11 val rows of 4097 tokens, 4.1% of tokens carry loss
+done: 1,000 documents, 7,295 of 8,000 questions self-labelled by >= 2 of 3 orderings; checked afterwards against gold, 81.4% right; 846,623 tokens -> /mnt/kv_cache/si_rc1_r1/selflabel.bin
+eval/guarded.sh: line 32: one: command not found
+[    47.8s] step 224: answer loss on held-out pairs 0.1353
+[    48.2s] done: 224 steps, final held-out answer loss 0.1353
+== round 1 result
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/si_rc1_r1_ft/ckpt.pt
+facts in context                         Carrier
+10                          67.0% +- 4.1 (n=500)
+30                          61.6% +- 4.3 (n=500)
+60                          55.6% +- 4.4 (n=500)
+120                         55.0% +- 4.4 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  63.6% +- 8.7   early-mid  52.6% +- 8.4   late-mid  51.2% +- 8.8   latest  53.3% +- 8.9
+== round 2: documents of 80,160 facts, labelled by the model from /mnt/kv_cache/si_rc1_r1_ft/ckpt.pt
+  200/1000 documents: 1542/1600 questions self-labelled (96%), labels right 79.5%  (0.10 doc/s)
+  300/1000 documents: 2318/2400 questions self-labelled (97%), labels right 78.5%  (0.09 doc/s)
+  400/1000 documents: 3095/3200 questions self-labelled (97%), labels right 77.6%  (0.09 doc/s)

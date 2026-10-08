@@ -1,0 +1,18 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 21.3 GiB free on the card
+120 invented facts, 360 training sentences, 150 steps, schedule-free Prodigy, no rate; /mnt/kv_cache/r85_s368000_sft/ckpt.pt
+
+                          NEW before  NEW after  OLD before  OLD after  TEXT before  TEXT after
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
+whole model, no rate          26.7%      95.8%      72.9%      68.8%       1.1917      1.9059   (train loss 0.368)
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
+whole + self-rehearsal, no rate      26.7%      81.7%      72.9%      62.5%       1.1917      2.4413   (train loss 0.226)
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
+whole + replay, no rate       26.7%      82.5%      72.9%      70.8%       1.1917      2.4983   (train loss 0.213)
+whole, own step, no rate      26.7%      33.3%      72.9%      54.2%       1.1917      5.3103   (train loss 0.382)
+whole + replay, own step, no rate      26.7%      86.7%      72.9%      52.1%       1.1917      2.6109   (train loss 0.229)
+[ProdigyPlusScheduleFree] Optimiser contains single param_group -- 'split_groups' has been disabled.
++4 layers only, no rate       26.7%      30.0%      72.9%      45.8%       1.1917      2.6182   (train loss 0.941)
+
+Learning without forgetting: NEW rises, OLD and TEXT hold. Chance on NEW is 25%.
+GUARD: peak 4196 MiB of 6 GiB (.venv/bin/python -u eval/continual.py /mnt/kv_cache/r85_s368000_sft/ckpt.pt intrinsic)
+DONE 10:55 UTC

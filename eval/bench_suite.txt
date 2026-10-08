@@ -1,0 +1,68 @@
+CAPABILITY SUITE on run85 step 352,000 vs GPT-2 / SmolLM2, 2026-10-05 09:45 UTC (card shared with training)
+                         words     bpb  variety   (1,024 generated tokens, mean of 5 prompts)
+REAL HELD-OUT TEXT        0.79    1.15     0.99
+ours (run85_s35200) t=0.8    0.82    0.84     0.86
+ours (run85_s35200) t=0.85    0.85    0.97     0.87
+ours (run85_s35200) t=0.9    0.82    1.10     0.98
+GPT-2 124M t=0.8          0.84    0.75     0.99
+GPT-2 124M t=0.9          0.85    0.97     1.00
+GPT-2 124M t=1.0          0.86    1.35     1.00
+
+  a sample from each at its best setting:
+  ours : ' with the ninth century. After that the city was expanded by the architect Mozart who was a famous composer. It is only in the 18th century that the greatest works on a building can be seen in the city. In the early centuries of the Later The combination for the Priya lock is 855879.  Renaissance at the end of'
+  GPT-2: ' with Martin Luther King, Jr. in the early 17th century. King of infinitesimal faith, unknowledgeable within the trance about his enlightenment, used to instruct his followers to begin loving and understanding God. It empowered Millard Fillmore to become a profoundly groundbreaking political thinker with a profound support for civil rights. His vision was a synthesis of radical thought and healing power.\n\nBy'
+BENCH_DONE 2026-10-05 09:46 UTC
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+  [ours-run85] HellaSwag 29.2
+  [ours-run85] PIQA 61.6
+  [ours-run85] ARC-Easy 39.4
+  [ours-run85] ARC-Challenge 23.6
+  [ours-run85] OpenBookQA 26.8
+  [ours-run85] LAMBADA 15.6
+  [ours-run85] GSM8K 3.6 (n=250)
+  [ours-run85] facts 64.6  arithmetic 18.3 / exact 0.0  reasoning 45.5
+  [GPT-2 124M] HellaSwag 32.0
+  [GPT-2 124M] PIQA 63.4
+  [GPT-2 124M] ARC-Easy 39.8
+  [GPT-2 124M] ARC-Challenge 22.0
+  [GPT-2 124M] OpenBookQA 25.6
+  [GPT-2 124M] LAMBADA 16.2
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (1188 > 1024). Running this sequence through the model will result in indexing errors
+  [GPT-2 124M] GSM8K 0.8 (n=250)
+  [GPT-2 124M] facts 79.2  arithmetic 35.0 / exact 0.0  reasoning 61.2
+  [SmolLM2-135M] HellaSwag 45.2
+  [SmolLM2-135M] PIQA 69.0
+  [SmolLM2-135M] ARC-Easy 59.2
+  [SmolLM2-135M] ARC-Challenge 29.8
+  [SmolLM2-135M] OpenBookQA 32.4
+  [SmolLM2-135M] LAMBADA 22.2
+  [SmolLM2-135M] GSM8K 0.8 (n=250)
+  [SmolLM2-135M] facts 91.7  arithmetic 36.7 / exact 0.0  reasoning 53.2
+
+benchmark                 ours-run85      GPT-2 124M    SmolLM2-135M
+HellaSwag                      29.2%           32.0%           45.2%
+PIQA                           61.6%           63.4%           69.0%
+ARC-Easy                       39.4%           39.8%           59.2%
+ARC-Challenge                  23.6%           22.0%           29.8%
+OpenBookQA                     26.8%           25.6%           32.4%
+LAMBADA                        15.6%           16.2%           22.2%
+GSM8K                           3.6%            0.8%            0.8%
+facts (48)                     64.6%           79.2%           91.7%
+arithmetic 4-way               18.3%           35.0%           36.7%
+arithmetic exact                0.0%            0.0%            0.0%
+reasoning (400)                45.5%           61.2%           53.2%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+################ GENERATION QUALITY (genqual2)
+                         words     bpb  variety   (1,024 generated tokens, mean of 5 prompts)
+REAL HELD-OUT TEXT        0.79    1.15     0.99
+ours (run85_s35200) t=0.8    0.82    0.84     0.86
+ours (run85_s35200) t=0.85    0.85    0.97     0.87
+ours (run85_s35200) t=0.9    0.82    1.10     0.98
+GPT-2 124M t=0.8          0.85    0.72     1.00
+GPT-2 124M t=0.9          0.83    1.01     0.99
+GPT-2 124M t=1.0          0.85    1.49     1.00
+
+  a sample from each at its best setting:
+  ours : ' with the ninth century. After that the city was expanded by the architect Mozart who was a famous composer. It is only in the 18th century that the greatest works on a building can be seen in the city. In the early centuries of the Later The combination for the Priya lock is 855879.  Renaissance at the end of'
+  GPT-2: " and ends with a historical event.\n\nThere doormen, slaves, horses, posterity … it's a one-can-see existence that keeps alive both a social and a historical event. And their excellence\n\nwould be forgotten by us.\n\nThe event of its own right would be blotted out by all but the most heroic Americans ; what a villain we must to meet"
+BENCH_DONE 2026-10-05 10:54 UTC

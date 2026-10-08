@@ -264,6 +264,10 @@ class Fabric(Optimizer):
     def load_state_dict(self, sd):
         super().load_state_dict(sd)
         self._graph = None; self._warm = False   # state tensors were replaced; a captured graph is stale
+        # the SHARED step size's device state (one d for the whole model) is rebuilt from the loaded groups too. Kept, it
+        # carried the d (and numerator) of whichever growth-trial branch ran last into the next branch and into the run
+        # after the install, and d only rises: every trial ratcheted it (found 2026-10-05)
+        self._sh = None
         for gp in self.param_groups:
             gp["lr_t"] = None; gp["acc"] = None; gp["sf"] = None
             for p in gp["params"]:
@@ -397,6 +401,12 @@ class Fabric(Optimizer):
         sfs = [gp["sf"] for gp in self.param_groups if gp.get("sfp") and gp.get("sf") is not None]
         if not sfs: return
         sh = self._shared(sfs[0]["d"].device); L = self._live_t(sfs[0]["d"].device)
+        if any(gp.get("freeze_d") for gp in self.param_groups):
+            # --freeze-d: the shared step size held where it stands. This path ignored the flag, so a frozen run under
+            # --share-d kept updating d (found 2026-10-05, when it was needed: a resume-time ratchet, see PROGRESS.md)
+            sh["num"].zero_(); sh["den"].zero_()
+            for f in sfs: f["d"].copy_(sh["d"]); f["dnum"].copy_(sh["dnum"])
+            return
         b3 = self.param_groups[0]["betas"][1] ** 0.5; d0 = 1e-6
         keep = (sh["d"] > d0) | (sh["num"] > 0)
         sh["dnum"].copy_(sh["dnum"] * (1 - L * (1 - b3)) + torch.where(keep, sh["num"], torch.zeros_like(sh["num"])))

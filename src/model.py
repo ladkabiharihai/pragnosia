@@ -20,7 +20,7 @@ from .assoc import AssocCarrier
 
 
 _SWA_MASKS, _SWA_FLEX = {}, None
-def _swa(q, k, v, w):
+def _swa(q, k, v, w, lse=False):
     """TRUE SLIDING-WINDOW causal attention: query i (the last len(q) of the len(k) positions) sees the w positions
     ending at itself, in training and at inference alike. flex_attention with a block mask keeps it fused and linear
     in length; one compiled kernel, one mask per (query length, key length, window)."""
@@ -35,12 +35,107 @@ def _swa(q, k, v, w):
     else:
         if _SWA_FLEX is None: _SWA_FLEX = torch.compile(flex_attention)
         fa = _SWA_FLEX
-    Lq, Lk = q.shape[2], k.shape[2]; off = Lk - Lq
+    Lq, Lk = q.shape[2], k.shape[2]
+    if not torch.compiler.is_compiling() and not torch.is_grad_enabled():
+        return _swa_dense(q, k, v, w, lse)
+    if not torch.compiler.is_compiling() and Lq % 256:
+        # LENGTHS IN BUCKETS OUTSIDE TRAINING (2026-10-06): every new (query, key) length built a new block mask and
+        # compiled kernel, ~2.3 s each, so reading many documents of different lengths cost seconds per document
+        # (0.09 s once built). Queries and keys are padded AT THE END to the next multiple of 256: the causal mask hides
+        # every padded key from every real query, the padded queries' rows are dropped, so the result is exact.
+        pad = 256 - Lq % 256
+        q, k, v = (F.pad(t, (0, 0, 0, pad)) for t in (q, k, v))
+        r = _swa(q, k, v, w, lse)
+        return (r[0][:, :, :Lq], r[1][:, :, :Lq]) if lse else r[:, :, :Lq]
+    off = Lk - Lq
     key = (Lq, Lk, w, q.device)
     if key not in _SWA_MASKS:
         def mm(b, h, qi, ki): return (qi + off >= ki) & (qi + off - ki < w)
         _SWA_MASKS[key] = create_block_mask(mm, B=None, H=None, Q_LEN=Lq, KV_LEN=Lk, device=q.device)
+    if lse: return fa(q, k, v, block_mask=_SWA_MASKS[key], return_lse=True)
     return fa(q, k, v, block_mask=_SWA_MASKS[key])
+
+
+def _far_topk(qc, K, p0, w, kk, blk=64):
+    """EXACT top-kk keys at least w back for the queries at absolute positions p0 .. p0+n-1 (query i sees key j iff
+    p0 + i - j >= w), by q.k. Returns (scores, indices), -inf scores where a query has fewer than kk such keys.
+    FAST (review, 2026-10-05: a top-k over the whole 16,384-key row cost ~3.5x the training step): only the keys that can be
+    far for this chunk are scored, the staircase at their end is masked in place, and the top-k is found in two stages --
+    each 64-key block's maximum, the kk best blocks, then the kk best keys among those blocks' keys. Exact: every key of the
+    true top-kk lies in a block whose maximum is at least the kk-th best score, and at most kk blocks can have that."""
+    B_, H, n, _ = qc.shape; L = K.shape[2]; blk = max(blk, kk)
+    hi = p0 + n - w                                     # keys [0, hi) are far for at least the chunk's last query
+    Lc = min(L, -(-hi // blk) * blk)
+    S = qc @ K[:, :, :Lc].transpose(-1, -2)             # (B, H, n, Lc)
+    lo = max(0, p0 - w + 1)                             # keys below lo are far for every query of the chunk
+    if lo < Lc:
+        jj = torch.arange(lo, Lc, device=qc.device); ii = p0 + torch.arange(n, device=qc.device)
+        S[..., lo:].masked_fill_((ii.unsqueeze(1) - jj.unsqueeze(0)) < w, float("-inf"))
+    if Lc % blk:                                        # (inference lengths) pad to whole blocks with non-keys
+        S = F.pad(S, (0, blk - Lc % blk), value=float("-inf"))
+    nb = S.shape[-1] // blk
+    if nb <= kk:
+        tv, ti = S.topk(kk, dim=-1) if S.shape[-1] >= kk else _pad_topk(S, kk)
+        return tv, ti.clamp_max(L - 1)
+    tb = S.view(B_, H, n, nb, blk).amax(-1).topk(kk, dim=-1).indices                      # the kk best blocks
+    cand = (tb.unsqueeze(-1) * blk + torch.arange(blk, device=qc.device)).flatten(-2)     # their keys, (B, H, n, kk*blk)
+    tv, tl = S.gather(-1, cand).topk(kk, dim=-1)
+    return tv, cand.gather(-1, tl).clamp_max(L - 1)     # a padded index only ever comes with a -inf score (masked)
+
+
+def _pad_topk(S, kk):
+    tv, ti = S.topk(S.shape[-1], dim=-1)
+    pad = kk - S.shape[-1]
+    return (torch.cat([tv, torch.full_like(tv[..., :1], float("-inf")).expand(*tv.shape[:-1], pad)], -1),
+            torch.cat([ti, torch.zeros_like(ti[..., :1]).expand(*ti.shape[:-1], pad)], -1))
+
+
+class FarStore:
+    """RECALL'S STORE IN HOST MEMORY (2026-10-07; goals 6 + 9: retrieval past the window at any length within 4 GB of GPU).
+    On the GPU the store grows ~9 KB a token (three layers, d768, bf16): 9.4 GiB at 1M tokens. Here every key and value
+    older than the GPU tail (the window plus up to one context of slack) lives in pinned host memory, one (heads, n, dh)
+    buffer per layer for keys and one for values, grown by doubling. Append-only: a layer's state is a FarState view
+    (store, n, tail); branches read from one prefix (bench.continuation_lp) each write past n in turn, which is safe
+    because branches are used one after another, never interleaved."""
+    def __init__(self, H, dh, dtype):
+        self.H, self.dh, self.dtype, self.cap = H, dh, dtype, 0
+        self.K = self.V = None
+
+    def write(self, n, k, v):
+        """keys/values (H, s, dh) on the GPU into positions n .. n+s"""
+        s = k.shape[1]
+        if n + s > self.cap:
+            cap = max(65536, self.cap)
+            while cap < n + s: cap *= 2
+            K = torch.empty(self.H, cap, self.dh, dtype=self.dtype, pin_memory=True)
+            V = torch.empty(self.H, cap, self.dh, dtype=self.dtype, pin_memory=True)
+            if self.cap: K[:, :self.cap].copy_(self.K); V[:, :self.cap].copy_(self.V)
+            self.K, self.V, self.cap = K, V, cap
+        self.K[:, n:n + s].copy_(k); self.V[:, n:n + s].copy_(v)
+
+
+class FarState:
+    __slots__ = ("fs", "n", "Kt", "Vt")
+    def __init__(self, fs, n, Kt, Vt): self.fs, self.n, self.Kt, self.Vt = fs, n, Kt, Vt
+
+
+def _swa_dense(q, k, v, w, lse=False, ch=1024):
+    """THE SAME SLIDING WINDOW, EXACT, FOR READING WITHOUT A BACKWARD PASS (2026-10-06): 1,024 queries at a time against
+    only the keys their windows reach. Outside a compiled region flex attention fell back to its reference maths (a full
+    8,192 x 8,192 score block, 3 GiB, which killed a 6 GiB-capped evaluation) and built a new mask for every new length
+    (~2.3 s each); this needs neither. Scores and the softmax in float32."""
+    B_, H, Lq, dh = q.shape; Lk = k.shape[2]; off = Lk - Lq; sc = dh ** -0.5
+    outs, lses = [], []
+    for c0 in range(0, Lq, ch):
+        n = min(ch, Lq - c0); k0 = max(0, c0 + off - w + 1); k1 = c0 + n + off
+        s_ = (q[:, :, c0:c0 + n].float() @ k[:, :, k0:k1].float().transpose(-1, -2)) * sc
+        qi = torch.arange(c0 + off, c0 + off + n, device=q.device).unsqueeze(1)
+        kj = torch.arange(k0, k1, device=q.device).unsqueeze(0)
+        s_ = s_.masked_fill(~((qi >= kj) & (qi - kj < w)), float("-inf"))
+        outs.append((s_.softmax(-1) @ v[:, :, k0:k1].float()).to(v.dtype))
+        if lse: lses.append(s_.logsumexp(-1))
+    o_ = torch.cat(outs, 2)
+    return (o_, torch.cat(lses, 2)) if lse else o_
 
 
 class Attn(nn.Module):
@@ -81,6 +176,7 @@ class Attn(nn.Module):
         # the cache is bounded, which is the only form of attention that can sit in this project without
         # giving back what the carrier was built to win.
         self.window = window
+        self.recall_k = 0; self.recall_span = 0              # see _recall and LM.set_recall
 
     def forward(self, x, h0=None, mem=None):
         """h0 is a KV cache (k, v) from earlier tokens of the SAME window, for incremental decoding.
@@ -99,6 +195,10 @@ class Attn(nn.Module):
         else:
             q, k, v = [t(z).view(B_, T_, self.h, D // self.h).transpose(1, 2) for t in (self.q, self.k, self.v)]
         q, k = self.qn(q), self.kn(k)
+        if self.window and self.sliding and self.recall_k:
+            if getattr(self, "recall_offload", False) and not torch.is_grad_enabled() and B_ == 1:
+                return self._recall_far(x, z, q, k, v, h0)
+            return self._recall(x, z, q, k, v, h0)
         if self.window and self.sliding:
             if h0 is not None:
                 k = torch.cat([h0[0], k], dim=2); v = torch.cat([h0[1], v], dim=2)
@@ -184,6 +284,134 @@ class Attn(nn.Module):
             # take it (2026-09-21)
             k = k[:, :, -self.window:]; v = v[:, :, -self.window:]
         return x + self.o(self._state_read(a, z, mem, B_, T_, D)), (k, v)
+
+    def _recall(self, x, z, q, k, v, h0):
+        """THE WINDOW PLUS EACH QUERY'S TOP-K OLDER KEYS (2026-10-05; user: "retrieval beyond 1k").
+        Past the 1,024-token window exact retrieval was 0%: the carrier's long heads write non-selectively and filler
+        overwrites a needle (eval/carrier_probe.py). Here a sliding layer keeps the keys and values that slid out of its
+        window (h0 holds them: the previous context window in training, the whole past at inference), and each query
+        attends to   {the keys inside its window}  U  {its k best-scoring keys older than the window}   in ONE softmax:
+        the window through flex attention (its log-sum-exp returned), the far keys gathered per query, the two merged
+        exactly by their log-sum-exps. The selection is by the layer's own q.k (no gradient through the choice; the
+        gradient reaches the chosen keys, values and the query). The attention has no rotary positions, so an old key
+        is scored exactly as a key inside the window. Untrained (src/recall.py) it took needles at 1-32k from 0% to
+        100-31% and helped prediction inside the first context window, but hurt it past the first window boundary."""
+        B_, T_, D = x.shape; w, kf, H = self.window, self.recall_k, self.h; dh = D // H
+        K = k if h0 is None else torch.cat([h0[0], k], dim=2)
+        V = v if h0 is None else torch.cat([h0[1], v], dim=2)
+        L = K.shape[2]; P = L - T_; sc = dh ** -0.5
+        if T_ == 1:                                    # decode: the window as two matrix-vector products
+            kl, vl = K[:, :, -w:], V[:, :, -w:]
+            s_ = (q.float() @ kl.float().transpose(-1, -2)) * sc
+            lse_l = s_.logsumexp(-1, keepdim=True); o_l = s_.softmax(-1) @ vl.float()
+        else:
+            lo = max(0, P - w)
+            o_l, lse_l = _swa(q, K[:, :, lo:], V[:, :, lo:], w, lse=True)
+            o_l = o_l.float(); lse_l = lse_l.float().unsqueeze(-1)
+        if L - w > 0 and kf:
+            # per chunk of queries: the choice (each query's kf best keys at least w back; no gradient), then the gathered
+            # keys and values (with gradient). Chunks keep the score block and the gathered block near 0.25 GB each.
+            kk = min(kf, L)
+            ch = max(16, min(T_, (1 << 27) // max(1, B_ * H * L), (1 << 25) // max(1, B_ * H * kk * dh)))
+            lfs, ofs = [], []
+            for c0 in range(0, T_, ch):
+                n = min(ch, T_ - c0); qc = q[:, :, c0:c0 + n]
+                if P + c0 + n - w <= 0:                      # no query of this chunk has a key w or more back
+                    lfs.append(torch.full((B_, H, n, 1), -1e4, device=x.device))
+                    ofs.append(torch.zeros(B_, H, n, dh, device=x.device)); continue
+                with torch.no_grad():
+                    tv, ti = _far_topk(qc, K, P + c0, w, kk)
+                g_ = ti.reshape(B_, H, n * kk, 1).expand(-1, -1, -1, dh)
+                Ks = K.gather(2, g_).view(B_, H, n, kk, dh); Vs = V.gather(2, g_).view(B_, H, n, kk, dh)
+                sf = (qc.unsqueeze(3) @ Ks.transpose(-1, -2)).squeeze(3).float() * sc   # (B, H, n, kk)
+                sf = sf.masked_fill(~torch.isfinite(tv), -1e4)   # finite: a query with no old key gets weight exp(-1e4) = 0
+                lfs.append(sf.logsumexp(-1, keepdim=True))
+                ofs.append((sf.softmax(-1).to(Vs.dtype).unsqueeze(3) @ Vs).squeeze(3).float())
+            lse_f = torch.cat(lfs, 2); o_f = torch.cat(ofs, 2)
+            if hasattr(self, "recall_gate"): lse_f = lse_f + self.recall_gate.float().view(1, H, 1, 1)
+            lse = torch.logaddexp(lse_l, lse_f)
+            a = (o_l * torch.exp(lse_l - lse) + o_f * torch.exp(lse_f - lse)).to(q.dtype)
+        else:
+            a = o_l.to(q.dtype)
+        sp = self.recall_span
+        st = (K, V) if not sp else (K[:, :, -sp:], V[:, :, -sp:])
+        return x + self.o(self._state_read(a, z, None, B_, T_, D)), st
+
+    FAR_CHUNK = 65536                                  # host keys streamed through the GPU at a time (~100 MB at d768)
+
+    def _recall_far(self, x, z, q, k, v, h0):
+        """_recall with the store in HOST memory (FarStore; inference, one sequence, no gradient). The same function:
+        the window over the GPU tail; each query's top-k far keys chosen EXACTLY from (a) the host keys, all of them far
+        for every query of the chunk (the tail keeps >= w keys before it), streamed through the GPU once per call in
+        chunks of FAR_CHUNK, each chunk's best found by _far_topk and the running best kept, and (b) the tail's far keys
+        (_far_topk with its staircase); then only the chosen keys and values are gathered (host ones on the host). GPU
+        memory is the tail, one streamed chunk and its score blocks -- independent of how long the past is."""
+        B_, T_, D = x.shape; w, kf, H = self.window, self.recall_k, self.h; dh = D // H; sc = dh ** -0.5
+        if isinstance(h0, FarState): fs, n, Kt, Vt = h0.fs, h0.n, h0.Kt, h0.Vt
+        elif h0 is None: fs, n, Kt, Vt = FarStore(H, dh, k.dtype), 0, k[:, :, :0], v[:, :, :0]
+        else: fs, n, (Kt, Vt) = FarStore(H, dh, k.dtype), 0, h0      # a GPU store from the ordinary path
+        Kt = torch.cat([Kt, k.to(Kt.dtype)], dim=2); Vt = torch.cat([Vt, v.to(Vt.dtype)], dim=2)
+        Lt = Kt.shape[2]; P = n + Lt - T_; L = n + Lt     # P: the chunk's first absolute position
+        if T_ == 1:
+            kl, vl = Kt[:, :, -w:], Vt[:, :, -w:]
+            s_ = (q.float() @ kl.float().transpose(-1, -2)) * sc
+            lse_l = s_.logsumexp(-1, keepdim=True); o_l = s_.softmax(-1) @ vl.float()
+        else:
+            lo = max(0, P - w) - n                        # >= 0: the tail holds >= w keys before the chunk
+            o_l, lse_l = _swa(q, Kt[:, :, lo:], Vt[:, :, lo:], w, lse=True)
+            o_l = o_l.float(); lse_l = lse_l.float().unsqueeze(-1)
+        if L - w > 0 and kf:
+            kk = min(kf, L)
+            ch = max(16, min(T_, (1 << 28) // max(1, H * max(Lt, self.FAR_CHUNK))))
+            tv = torch.full((1, H, T_, kk), float("-inf"), device=x.device); ti = torch.zeros((1, H, T_, kk), dtype=torch.long, device=x.device)
+            def keep(c0, c1, v_, i_):                     # merge a candidate set into the running best of queries c0..c1
+                av = torch.cat([tv[:, :, c0:c1], v_.float()], -1); ai = torch.cat([ti[:, :, c0:c1], i_], -1)
+                b = av.topk(kk, dim=-1); tv[:, :, c0:c1] = b.values; ti[:, :, c0:c1] = ai.gather(-1, b.indices)
+            for s0 in range(0, n, self.FAR_CHUNK):        # (a) the host keys, every one far for every query here
+                s1 = min(n, s0 + self.FAR_CHUNK)
+                Kc = fs.K[:, s0:s1].to(x.device, non_blocking=True).unsqueeze(0)
+                for c0 in range(0, T_, ch):
+                    c1 = min(T_, c0 + ch)
+                    v_, i_ = _far_topk(q[:, :, c0:c1], Kc, (s1 - s0) + w, w, kk)      # p0 past every key: no staircase
+                    keep(c0, c1, v_, i_ + s0)
+                del Kc
+            for c0 in range(0, T_, ch):                   # (b) the tail's keys, far for some queries (the staircase)
+                c1 = min(T_, c0 + ch)
+                if P + c1 - w <= n: continue              # no tail key is w back from any query of this chunk
+                v_, i_ = _far_topk(q[:, :, c0:c1], Kt, P - n + c0, w, kk)
+                keep(c0, c1, v_, i_ + n)
+            # THE HOST PICKS, EACH (head, key) ONCE: the queries of a window mostly choose the same far keys, so the
+            # unique pairs are gathered on the host once and fanned out on the GPU (the per-pick gather was CPU-bound)
+            Ku = Vu = inv = None
+            if n:
+                hk = (torch.arange(H, device=x.device).view(1, H, 1, 1) * n + ti.clamp_max(n - 1)).view(-1)
+                uq, inv = torch.unique(hk, return_inverse=True); uq = uq.cpu()
+                Ku = fs.K[uq // n, uq % n].to(x.device); Vu = fs.V[uq // n, uq % n].to(x.device)
+                inv = inv.view(H, T_ * kk)
+            lfs, ofs = [], []
+            for c0 in range(0, T_, 1024):                 # gather the chosen keys and values, 1,024 queries at a time
+                c1 = min(T_, c0 + 1024); m_ = c1 - c0
+                g = ti[0, :, c0:c1].reshape(H, m_ * kk); host = g < n
+                Ks = Kt[0].gather(1, (g - n).clamp_min(0).unsqueeze(-1).expand(-1, -1, dh))
+                Vs = Vt[0].gather(1, (g - n).clamp_min(0).unsqueeze(-1).expand(-1, -1, dh))
+                if n and bool(host.any()):
+                    iv = inv[:, c0 * kk:c1 * kk]; hm = host.unsqueeze(-1)
+                    Ks = torch.where(hm, Ku[iv], Ks); Vs = torch.where(hm, Vu[iv], Vs)
+                Ks = Ks.view(1, H, m_, kk, dh); Vs = Vs.view(1, H, m_, kk, dh)
+                sf = (q[:, :, c0:c1].unsqueeze(3) @ Ks.to(q.dtype).transpose(-1, -2)).squeeze(3).float() * sc
+                sf = sf.masked_fill(~torch.isfinite(tv[:, :, c0:c1]), -1e4)
+                lfs.append(sf.logsumexp(-1, keepdim=True))
+                ofs.append((sf.softmax(-1).to(Vs.dtype).unsqueeze(3) @ Vs).squeeze(3).float())
+            lse_f = torch.cat(lfs, 2); o_f = torch.cat(ofs, 2)
+            if hasattr(self, "recall_gate"): lse_f = lse_f + self.recall_gate.float().view(1, H, 1, 1)
+            lse = torch.logaddexp(lse_l, lse_f)
+            a = (o_l * torch.exp(lse_l - lse) + o_f * torch.exp(lse_f - lse)).to(q.dtype)
+        else:
+            a = o_l.to(q.dtype)
+        if Lt > w + 8192:                                 # spill all but the last w keys to the host
+            s = Lt - w
+            fs.write(n, Kt[0, :, :s], Vt[0, :, :s]); n += s; Kt, Vt = Kt[:, :, s:], Vt[:, :, s:]
+        return x + self.o(self._state_read(a, z, None, B_, T_, D)), FarState(fs, n, Kt, Vt)
 
     def _state_read(self, a, z, mem, B_, T_, D):
         """Fold in this layer's read of the carrier's memory, if it has one, and flatten the heads."""
@@ -282,7 +510,7 @@ class GatedLinear(nn.Module):
 
 class LM(nn.Module):
     def __init__(self, vocab=8192, d=768, layers=12, mlp_mult=4, ctx=512, mixer="spin", norm="ln", short_conv=0,
-                 attn_window=512, attn_sliding=False, attn_windows=None):
+                 attn_window=512, attn_sliding=False, attn_windows=None, recall_k=0, recall_gated=False):
         """mixer: "spin" (plain carrier), "gspin" (input and output gates), "fspin" (input and recurrence
         gates: per-token forgetting), "aspin" (associative: content-addressed memory), "attn" (control)."""
         super().__init__()
@@ -375,6 +603,7 @@ class LM(nn.Module):
         # layer for retrieval while the others stay short, so the carrier still has to carry)
         self.attn_windows = {int(k_): int(v_) for k_, v_ in (attn_windows or {}).items()}
         for k_, v_ in self.attn_windows.items(): self.mix[k_].window = v_
+        self.set_recall(recall_k, gated=recall_gated)
         # short causal convolutions on every carrier's q, k, v (AssocCarrier.add_short_conv), identity at birth
         self.short_conv = 0
         if short_conv: self.add_short_conv(short_conv)
@@ -397,6 +626,25 @@ class LM(nn.Module):
             nn.init.normal_(m.weight, 0.0, 0.02)
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
+
+    def set_recall(self, k, span=0, gated=False):
+        """RECALL (2026-10-05, Attn._recall): every sliding attention layer also attends to each query's top-k keys older
+        than its window. span: how many past keys a layer keeps in its carried state; 0 (the default, every loader and
+        inference) = all of them; training sets its window length (train.py train_span: a fixed shape for the graphs).
+        The default was the training span once, so every LM(**cfg) loader kept only the last 8,192 keys (review,
+        2026-10-05). No parameters: the function changes, nothing is added."""
+        self.recall_k = k
+        for mx in self.mix:
+            if isinstance(mx, Attn) and mx.sliding and mx.window:
+                mx.recall_k = k; mx.recall_span = span
+                if gated and k and not hasattr(mx, "recall_gate"):
+                    # A SMOOTH START (2026-10-06, the user's "better initialization instead of starting random"): one
+                    # learnable gate per head is added to the far keys' log-sum-exp, born at -4: the far keys then carry
+                    # ~2% of the weight they would, so switching recall on barely changes the function (ungated it cost
+                    # +0.08 nats and 1,000 trial steps did not win it back), and the model opens each head as far as
+                    # it pays. Registered last in the module, so a checkpoint's parameter order is the same on reload.
+                    mx.recall_gate = nn.Parameter(torch.full((mx.h,), -4.0, device=mx.o.weight.device))
+        if gated and k: self.recall_gated = True
 
     def trunk(self, x, states=None, carry=False):
         """Everything but the output head: the normalised final representation, (B, T, d).
@@ -509,7 +757,7 @@ class LM(nn.Module):
         import math as _m
         d = self.d; k = dn - d
         fresh = LM(self.vocab, dn, self.layers, self.mlp[0].a.weight.shape[0] // d, self.ctx, self.mixer,
-                   norm=getattr(self, "norm", "ln"), attn_window=getattr(self, "attn_window", 512), attn_sliding=getattr(self, "attn_sliding", False))
+                   norm=getattr(self, "norm", "ln"), attn_window=getattr(self, "attn_window", 512), attn_sliding=getattr(self, "attn_sliding", False), recall_k=getattr(self, "recall_k", 0), recall_gated=getattr(self, "recall_gated", False))
         fresh = fresh.to(self.e.weight.device)
         grown = {}
         def put(mod, name, new):
@@ -725,7 +973,7 @@ class LM(nn.Module):
         assert not getattr(self, "short_conv", 0), "growth of a model with short convolutions is not implemented yet"
         L = self.layers
         big = LM(self.vocab, self.d, L + k, self.mlp[0].a.weight.shape[0] // self.d, self.ctx, self.mixer,
-                 norm=getattr(self, "norm", "ln"), attn_window=getattr(self, "attn_window", 512), attn_sliding=getattr(self, "attn_sliding", False)).to(self.e.weight.device)
+                 norm=getattr(self, "norm", "ln"), attn_window=getattr(self, "attn_window", 512), attn_sliding=getattr(self, "attn_sliding", False), recall_k=getattr(self, "recall_k", 0), recall_gated=getattr(self, "recall_gated", False)).to(self.e.weight.device)
         big.e.load_state_dict(self.e.state_dict()); big.p.load_state_dict(self.p.state_dict())
         big.n.load_state_dict(self.n.state_dict())
         for j in range(L):
@@ -755,7 +1003,7 @@ class LM(nn.Module):
         L = self.layers
         assert self.mixer in ("rspin", "grspin"), self.mixer
         big = LM(self.vocab, self.d, 2 * L, self.mlp[0].a.weight.shape[0] // self.d, self.ctx, self.mixer,
-                 norm=getattr(self, "norm", "ln"), attn_window=getattr(self, "attn_window", 512), attn_sliding=getattr(self, "attn_sliding", False))
+                 norm=getattr(self, "norm", "ln"), attn_window=getattr(self, "attn_window", 512), attn_sliding=getattr(self, "attn_sliding", False), recall_k=getattr(self, "recall_k", 0), recall_gated=getattr(self, "recall_gated", False))
         big = big.to(self.e.weight.device)
         # old layer j keeps its type: rspin puts attention at i % 4 == 3 in both stacks
         oldpos, p = [], 0

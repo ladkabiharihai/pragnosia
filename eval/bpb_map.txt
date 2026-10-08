@@ -1,0 +1,9 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 17.9 GiB free on the card
+  run85_s352000.pt             step  352000  window 1024  recall 0: bits/byte 1.0398
+  run85_s360000.pt             step  360000  window 1024  recall 0: bits/byte 1.0394
+  run85_s368000_c.pt           step  368000  window 2048  recall 0: bits/byte 1.0372
+  run85_s392000.pt             step  392000  window 2048  recall 0: bits/byte 1.0451
+  run85_s396000_e.pt           step  396000  window 2048  recall 0: bits/byte 1.0488
+  run85_s400000_f.pt           step  400000  window 2048  recall 16: bits/byte 1.0529
+GUARD: peak 5348 MiB of 6 GiB (.venv/bin/python -u /tmp/claude-1000/-opt-code-membrae/ab0dd831-724a-4bd0-be9e-dd7e1ea6f491/scratchpad/bpb_map.py /mnt/kv_cache/run85_s352000.pt /mnt/kv_cache/run85_s360000.pt /mnt/kv_cache/run85_s368000_c.pt /mnt/kv_cache/run85_s392000.pt /mnt/kv_cache/run85_s396000_e.pt /mnt/kv_cache/run85_s400000_f.pt)
+DONE

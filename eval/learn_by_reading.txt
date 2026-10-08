@@ -1,0 +1,7 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 38.6 GiB free on the card
+LEARNING BY READING: 30 invented facts read once, then D tokens of unrelated prose, then a question (4-way, every wrong option another answer from the same facts; chance 25%); 100 questions per cell
+model                                  D=0     D=8,192    D=32,768
+368k-no-recall                       87.0%       23.0%       24.0%
+final-base-recall                    91.0%       24.0%       22.0%
+(95% interval about +-10 points per cell)
+GUARD: peak 6460 MiB of 6 GiB (.venv/bin/python -u eval/learn_by_reading.py /mnt/kv_cache/run85_s368000_c.pt=368k-no-recall /mnt/kv_cache/final_base_rc1.pt=final-base-recall)

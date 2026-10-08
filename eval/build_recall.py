@@ -114,6 +114,59 @@ if len(sys.argv) > 3 and sys.argv[3] == "needle":
     arr = np.concatenate(out)[:target]; arr.tofile(f"{OUT}/needle.bin")
     print(f"done: {len(arr):,} tokens -> {OUT}/needle.bin; {len(out):,} documents, mean {len(arr)/len(out):.0f} tokens")
     sys.exit(0)
+if len(sys.argv) > 3 and sys.argv[3] == "farread":
+    # FAR READING (2026-10-07): 1-6 real paragraphs (SQuAD v1.1 TRAIN: Wikipedia paragraphs with crowd-written questions
+    # in OTHER words than the paragraph), then 512-16,000 tokens of unrelated prose, then 3-8 of their questions with
+    # answers. Far lookup taught invented facts read far back (learning by reading 81 / 70% at 8k / 32k) but open-book
+    # SciQ at 32k stayed at closed-book level (48.7 vs 48.0): no training document asked, in other words, about real text
+    # read far back. Nothing of SciQ, ARC or any test split is used.
+    import datasets
+    sq = datasets.load_dataset("rajpurkar/squad", split="train")
+    byctx = {}
+    for x in sq:
+        if x["answers"]["text"]: byctx.setdefault(x["context"], []).append((x["question"].strip(), x["answers"]["text"][0].strip()))
+    ctxs = list(byctx)
+    src = [np.memmap(f"/mnt/kv_cache/tokfull_v8192/{s_}.bin", dtype=np.uint16, mode="r") for s_ in ("wikipedia", "fineweb-edu")]
+    rn = np.random.default_rng(20261008)
+    while total < target:
+        ps_ = r.sample(ctxs, r.choice([1, 2, 3, 4, 6]))
+        body = tok.encode("\n\n".join(ps_) + "\n\n").ids
+        qs = [qa for c in ps_ for qa in byctx[c]]; asked = r.sample(qs, min(len(qs), r.choice([3, 5, 8])))
+        qa = tok.encode("\n\n" + "\n".join(r.choice(QA).format(q=q_, a=a_) for q_, a_ in asked)).ids
+        D = int(np.exp(rn.uniform(np.log(512), np.log(16000))))
+        sb = src[r.randrange(2)]; o = int(rn.integers(0, len(sb) - 3 * D))
+        fill = np.asarray(sb[o:o + 3 * D]); fill = fill[fill != EOD][:D].tolist()
+        doc = body + fill + qa + [EOD]
+        out.append(np.array(doc, dtype=np.uint16)); total += len(doc)
+        if len(out) % 2000 == 0: print(f"  {total/1e6:.1f}M tokens", flush=True)
+    arr = np.concatenate(out)[:target]; arr.tofile(f"{OUT}/farread.bin")
+    print(f"done: {len(arr):,} tokens -> {OUT}/farread.bin; {len(out):,} documents, mean {len(arr)/len(out):.0f} tokens; "
+          f"{len(ctxs):,} SQuAD train paragraphs")
+    sys.exit(0)
+if len(sys.argv) > 3 and sys.argv[3] == "farlookup":
+    # FAR LOOKUP (2026-10-07): a list of 10-60 invented facts, then 1k-12k tokens of real prose, then questions about the
+    # facts. Recall learned single far needles (92% at 32k) but not a fact among 30 look-alikes past its window (22-26%,
+    # eval/learn_by_reading.py): no training document ever asked about a list from far away.
+    src = [np.memmap(f"/mnt/kv_cache/tokfull_v8192/{s_}.bin", dtype=np.uint16, mode="r") for s_ in ("wikipedia", "fineweb-edu")]
+    rn = np.random.default_rng(20261007)
+    while total < target:
+        n = r.choice([10, 20, 30, 40, 60]); facts, used = [], set()
+        while len(facts) < n:
+            k = r.randrange(len(KINDS)); x = name(r.choice([2, 3]))
+            if x in used: continue
+            used.add(x); facts.append((k, x, value(k)))
+        body = tok.encode(" ".join(r.choice(KINDS[k][0]).format(X=x, Y=y) for k, x, y in facts) + "\n\n").ids
+        asked = r.sample(facts, min(len(facts), r.choice([5, 10])))
+        qa = tok.encode("\n\n" + "\n".join(r.choice(QA).format(q=r.choice(KINDS[k][1]).format(X=x), a=y) for k, x, y in asked)).ids
+        D = int(np.exp(rn.uniform(np.log(1024), np.log(12000))))
+        sb = src[r.randrange(2)]; o = int(rn.integers(0, len(sb) - 3 * D))
+        fill = np.asarray(sb[o:o + 3 * D]); fill = fill[fill != EOD][:D].tolist()
+        doc = body + fill + qa + [EOD]
+        out.append(np.array(doc, dtype=np.uint16)); total += len(doc)
+        if len(out) % 2000 == 0: print(f"  {total/1e6:.1f}M tokens", flush=True)
+    arr = np.concatenate(out)[:target]; arr.tofile(f"{OUT}/farlookup.bin")
+    print(f"done: {len(arr):,} tokens -> {OUT}/farlookup.bin; {len(out):,} documents, mean {len(arr)/len(out):.0f} tokens")
+    sys.exit(0)
 while total < target:
     docs = [document() for _ in range(2000)]
     for e in tok.encode_batch(docs):

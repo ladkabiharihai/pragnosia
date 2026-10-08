@@ -1,0 +1,23 @@
+FAR READ EVAL /mnt/kv_cache/far_read/ckpt_s378000.pt, 2026-10-07 17:27 UTC
+[   853.8s]   eval step 376000: BPB 1.0517  (952k bytes)
+[  1627.6s]   eval step 377000: BPB 1.0511  (952k bytes)
+[  2449.0s]   eval step 378000: BPB 1.0506  (952k bytes)
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book         D=0     D=2,048     D=8,192    D=32,768
+far-read-378k (recall-trained)           49.3%       84.0%       72.0%       71.3%       51.3%
+(95% interval about +-8 points per cell; GPT-2 sees the last 1,024 tokens, SmolLM2 the last 8,192)
+GUARD: peak 4158 MiB of 7 GiB (.venv/bin/python -u eval/openbook.py /mnt/kv_cache/far_read/ckpt_s378000.pt=far-read-378k)
+LEARNING BY READING: 30 invented facts read once, then D tokens of unrelated prose, then a question (4-way, every wrong option another answer from the same facts; chance 25%); 100 questions per cell
+model                              D=8,192    D=32,768
+far-read-378k                        90.0%       89.0%
+(95% interval about +-10 points per cell)
+GUARD: peak 4810 MiB of 7 GiB (.venv/bin/python -u eval/learn_by_reading.py /mnt/kv_cache/far_read/ckpt_s378000.pt=far-read-378k)
+/mnt/kv_cache/far_read/ckpt_s378000.pt (step 378000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance      k=16   (k = far keys each query may recall; 0 = trained)
+    8,192    100.0%   (peak GPU allocated 1.58 GiB)
+   32,768    100.0%   (peak GPU allocated 2.03 GiB)
+   (D=65536 k=16 miss: wanted 284759, wrote ' 28475 introduction the first time,')
+   65,536     95.8%   (peak GPU allocated 2.75 GiB)
+GUARD: peak 6274 MiB of 7 GiB (.venv/bin/python -u eval/recall_test.py /mnt/kv_cache/far_read/ckpt_s378000.pt needle)
+FAR_READ_EVAL_DONE 2026-10-07 17:51 UTC

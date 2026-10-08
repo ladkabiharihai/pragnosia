@@ -5,8 +5,10 @@
 # Prodigy (no rate). usage: eval/eval_ckpt.sh <pretrained ckpt> <tag>       output: eval/scorecard_<tag>.txt
 set -u
 cd "$(dirname "$0")/.."
+# beside the training: every job capped so prod (~51 GiB) + the trainer (32) + this (8) stay under the card (93), 2026-10-05
+export MEMBRAE_CAP_MAX=${MEMBRAE_CAP_MAX:-8}
 CK=$1; TAG=$2; P=.venv/bin/python
-$P -m src.sft --init $CK --out /mnt/kv_cache/${TAG}_sft --data /mnt/kv_cache/sft_factual_v8192 --optim psf --epochs 2 --cap 30 > logs/sft_${TAG}.out 2>&1
+$P -m src.sft --init $CK --out /mnt/kv_cache/${TAG}_sft --data /mnt/kv_cache/sft_factual_v8192 --optim psf --epochs 2 --batch 4 --cap 30 > logs/sft_${TAG}.out 2>&1
 $P -u eval/rtune.py /mnt/kv_cache/${TAG}_sft/ckpt.pt /mnt/kv_cache/rtune_${TAG}.jsonl > logs/rtune_${TAG}.out 2>&1
 $P - "$TAG" <<'PY'
 import json, random, sys
@@ -19,7 +21,7 @@ with open(f"/mnt/kv_cache/rtune_{t}_bal.jsonl", "w") as f:
 print(f"{len(right)} right + {min(len(right), len(idk))} I-don't-know")
 PY
 SFT_MIX=factual SFT_DROP=sciq,arc SFT_EXTRA=/mnt/kv_cache/rtune_${TAG}_bal.jsonl $P eval/build_sft.py /mnt/kv_cache/sft_rtune_${TAG} > logs/build_rtune_${TAG}.out 2>&1
-$P -m src.sft --init /mnt/kv_cache/${TAG}_sft/ckpt.pt --out /mnt/kv_cache/${TAG}_abst --data /mnt/kv_cache/sft_rtune_${TAG} --optim psf --epochs 1 --cap 30 > logs/sft_${TAG}_abst.out 2>&1
+$P -m src.sft --init /mnt/kv_cache/${TAG}_sft/ckpt.pt --out /mnt/kv_cache/${TAG}_abst --data /mnt/kv_cache/sft_rtune_${TAG} --optim psf --epochs 1 --batch 4 --cap 30 > logs/sft_${TAG}_abst.out 2>&1
 cp eval/scorecard.txt eval/scorecard_prev.txt 2>/dev/null
 eval/scorecard.sh $CK /mnt/kv_cache/${TAG}_sft/ckpt.pt /mnt/kv_cache/${TAG}_abst/ckpt.pt > logs/scorecard_${TAG}.out 2>&1
 cp eval/scorecard.txt eval/scorecard_${TAG}.txt

@@ -1,0 +1,31 @@
+[gpu] capped at 6.0 GiB of 93 GiB; 28.8 GiB free on the card
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 8495.03it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (1231 > 1024). Running this sequence through the model will result in indexing errors
+real text: 4-gram repeat rate 0.131 (median of 9 spans; 0.048-0.338); GPT-2 band 1.113 (0.965-1.205)  /mnt/kv_cache/run85_s368000_c.pt
+  temp 0.85 penalty 0.00: 4-gram repeat 0.224 (real 0.131), GPT-2 score at the start 0.992
+  temp 0.85 penalty 0.05: 4-gram repeat 0.086 (real 0.131), GPT-2 score at the start 1.117
+  temp 0.85 penalty 0.10: 4-gram repeat 0.024 (real 0.131), GPT-2 score at the start 1.100
+  temp 0.85 penalty 0.20: 4-gram repeat 0.019 (real 0.131), GPT-2 score at the start 1.142
+  temp 0.85 penalty 0.40: 4-gram repeat 0.009 (real 0.131), GPT-2 score at the start 1.389
+  temp 0.90 penalty 0.00: 4-gram repeat 0.351 (real 0.131), GPT-2 score at the start 0.936
+  temp 0.90 penalty 0.05: 4-gram repeat 0.037 (real 0.131), GPT-2 score at the start 1.147
+  temp 0.90 penalty 0.10: 4-gram repeat 0.015 (real 0.131), GPT-2 score at the start 1.240
+  temp 0.90 penalty 0.20: 4-gram repeat 0.007 (real 0.131), GPT-2 score at the start 1.212
+  temp 0.90 penalty 0.40: 4-gram repeat 0.009 (real 0.131), GPT-2 score at the start 1.330
+  temp 1.00 penalty 0.00: 4-gram repeat 0.014 (real 0.131), GPT-2 score at the start 1.427
+  temp 1.00 penalty 0.05: 4-gram repeat 0.008 (real 0.131), GPT-2 score at the start 1.560
+  temp 1.00 penalty 0.10: 4-gram repeat 0.003 (real 0.131), GPT-2 score at the start 1.662
+  temp 1.00 penalty 0.20: 4-gram repeat 0.002 (real 0.131), GPT-2 score at the start 1.906
+  temp 1.00 penalty 0.40: 4-gram repeat 0.001 (real 0.131), GPT-2 score at the start 1.866
+    temp 0.85 penalty 0.05 'The history of the city ': horizon 4,096; segments 0.98 1.28 1.21 1.53 1.19 1.40 1.36 1.39; repeat 0.044
+    temp 0.85 penalty 0.05 'In this paper we study': horizon 0; segments 1.37 1.27 1.41 1.31 1.29 1.59 1.45 1.53; repeat 0.172
+    temp 0.85 penalty 0.05 'The river rises in the m': horizon 32,768; segments 1.00 1.04 1.15 1.02 1.14 1.13 1.12 1.07; repeat 0.031
+  CHOSEN-BY-DATA temp 0.85 penalty 0.05: HORIZON median 4,096 (4,096, 0, 32,768)
+  sample: ' to be concerned about all sorts of things but only if you had a basic understanding of what you want to do and where you are going – so he discovers things happen permanently but only when he is part of it first… the rest of his life is up for grabs… his loyalties are weakened so much despite all his intelligence, experience and knowledge that nothing…\nThis is exactly what he did! He was told by someone to stay away from him so he could just see what everyone else was doing with him Then came the woodsmen – family, friends'
+    temp 0.85 penalty 0.0 'The history of the city ': horizon 0; segments 0.92 1.23 0.93 0.61 1.57 0.70 0.28 1.01; repeat 0.457
+    temp 0.85 penalty 0.0 'In this paper we study': horizon 4,096; segments 1.05 1.28 1.11 1.04 0.83 0.77 0.11 0.14; repeat 0.511
+    temp 0.85 penalty 0.0 'The river rises in the m': horizon 4,096; segments 1.03 0.54 0.04 0.02 0.61 1.10 1.15 1.15; repeat 0.454
+  CHOSEN-BY-DATA temp 0.85 penalty 0.0: HORIZON median 4,096 (0, 4,096, 4,096)
+  sample: ' frog is found in the area of the frog. The frog is found in the area of the frog. The frog is found in the area of the frog. The frog is found in the area of the frog. The species of frog is found in the area of the frog. The frog is found in the area of the frog. The frog is found in the area of the frog. The frog is found in the area of the frog. The frog is found in the area of the frog. The fro'
+GUARD: peak 4440 MiB of 6 GiB (.venv/bin/python -u eval/longgen2.py /mnt/kv_cache/run85_s368000_c.pt)
+LONGGEN2_DONE 06:42 UTC

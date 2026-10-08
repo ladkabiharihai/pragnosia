@@ -1,0 +1,14 @@
+/mnt/kv_cache/run85_s352000.pt (step 352000)  attention window 1024  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 16 per cell
+ distance       k=0      k=16   (k = far keys each query may recall; 0 = trained)
+      512    100.0%    100.0%
+    1,024      0.0%    100.0%
+    2,048      0.0%    100.0%
+   (D=4096 k=16 miss: wanted 865228, wrote ' 86522 introduction the first time.')
+    4,096      0.0%     68.8%
+   (D=8192 k=16 miss: wanted 382292, wrote ' 89169 introduction\n\nRe')
+    8,192      0.0%     56.2%
+   (D=16384 k=16 miss: wanted 547104, wrote ' 54710 introduction, and the first')
+   16,384      0.0%     37.5%
+   (D=32768 k=16 miss: wanted 557847, wrote ' 567847\n\nJohn')
+   32,768      0.0%     31.2%

@@ -466,6 +466,10 @@ class AssocCarrier(nn.Module):
         else:
             la = self.logalpha(z).transpose(1, 2)                                 # (B,H,T)
             bt = torch.sigmoid(self.wb(z)).transpose(1, 2) if self.delta else None # (B,H,T)
+        # beta_scale (B,H,T), set from outside for one call: a DIAGNOSTIC multiplier on the write strength
+        # (eval/carrier_probe.py oracle: long heads write only on chosen tokens). Unset in training and inference.
+        if getattr(self, "beta_scale", None) is not None and bt is not None:
+            bt = bt * self.beta_scale.to(bt.dtype)
         mm = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") and x.is_cuda else None
         if self.delta and self.write_all:
             # beta = 1 is NOT a safe way to say "write everything": the delta rule's chunk inverse is
@@ -506,3 +510,24 @@ class AssocCarrier(nn.Module):
         self.sent = sent
         out = x + F.linear(o, self.o.weight * torch.sigmoid(self.gate))
         return out, ((S, p0 + T, cc) if sc else (S, p0 + T))
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def fused_scan(model):
+    """The fused scan (flash-linear-attention's chunk kernel, the path training uses) for work with a backward pass. The
+    python chunk scan's BACKWARD allocates ~10 GiB outside PyTorch's capped allocator (measured 2026-10-06: a fine-tune under
+    a 7 GiB cap held 15.9 GiB on the card; at batch 2, 11.3 GiB with 1.7 GiB reserved by PyTorch; fused: 3.0 GiB), so a
+    capped side job could fill the card beside prod. Restores the previous mode on exit."""
+    global FUSED_SCAN
+    prev = FUSED_SCAN; ns = [(mx, mx.need_sent) for mx in model.mix if hasattr(mx, "need_sent")]
+    FUSED_SCAN = True
+    for mx, _ in ns: mx.need_sent = False
+    try:
+        yield
+    finally:
+        FUSED_SCAN = prev
+        for mx, v in ns: mx.need_sent = v
+
