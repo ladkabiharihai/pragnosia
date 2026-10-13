@@ -1,0 +1,13 @@
+OUTLIER-ONLY FAR KEYS (mask, N0=8192) on /mnt/kv_cache/final_base_fr382.pt, 2026-10-08 08:59 UTC
+      8,192 tokens of context: 1.0358 bits/byte     11.8 s to ingest   peak 2.48 GiB
+     32,768 tokens of context: 1.0396 bits/byte      2.8 s to ingest   peak 2.69 GiB
+    131,072 tokens of context: 1.0395 bits/byte     15.9 s to ingest   peak 3.15 GiB
+    524,288 tokens of context: 1.0429 bits/byte    177.3 s to ingest   peak 3.15 GiB
+  1,048,576 tokens of context: 1.0440 bits/byte    641.7 s to ingest   peak 3.15 GiB
+/mnt/kv_cache/final_base_fr382.pt (step 382000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance      k=16   (k = far keys each query may recall; 0 = trained)
+   (D=131072 k=16 miss: wanted 812990, wrote ' 99209 introduction.\n\n')
+  131,072      0.0%   (peak GPU allocated 2.39 GiB, the store in host memory)
+   (D=262144 k=16 miss: wanted 922077, wrote ' 691553 introduction.\n\n')
+GUARD: peak 3414 MiB of 4 GiB (.venv/bin/python -u eval/recall_test.py /mnt/kv_cache/final_base_fr382.pt needle)

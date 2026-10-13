@@ -1,0 +1,15 @@
+MILLION 382k, recall k=16 offloaded, chance-rise correction N0=8192, 08:06 UTC
+checkpoint /mnt/kv_cache/final_base_fr382.pt
+recall store in host memory
+model ctx 8192, state per layer 6 heads
+positions after the first window: wrap
+      8,192 tokens of context: 1.0358 bits/byte      8.4 s to ingest   peak 2.48 GiB
+     32,768 tokens of context: 1.0419 bits/byte      2.1 s to ingest   peak 2.69 GiB
+    131,072 tokens of context: 1.0399 bits/byte     13.0 s to ingest   peak 3.15 GiB
+    524,288 tokens of context: 1.0503 bits/byte    110.6 s to ingest   peak 3.15 GiB
+  1,048,576 tokens of context: 1.0405 bits/byte    402.7 s to ingest   peak 3.15 GiB
+
+  generated after 1,048,576 tokens of context:
+  '. \\c\\m{F} / {1} \\times \\m\\times \\m\\|\\m\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\|\\'
+GUARD: peak 4148 MiB of 4 GiB (.venv/bin/python -u eval/million.py /mnt/kv_cache/final_base_fr382.pt)
+MILLION_EVC_DONE

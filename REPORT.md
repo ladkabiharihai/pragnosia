@@ -1,96 +1,87 @@
 # Membrae — status against the vision
 
-**Revised 2026-10-08 (IST afternoon).** The final base model is **far-read 382k** (`/mnt/kv_cache/final_base_fr382.pt`,
-97.7M parameters). Its final pipeline (self-improvement → fine-tune → abstention → full scorecard) is running and finishes
-around 04:00 IST on 2026-10-09; the numbers marked † below come from the same pipeline on the previous base (far-lookup
-375k, finished 2026-10-08) and will be replaced. Every number comes from a script in `eval/` with its output file named;
-the day-by-day record, failures and retractions included, is `PROGRESS.md`.
+**Revised 2026-10-13 (IST afternoon).** The current model is the **many-kinds run's 604k checkpoint** (168M parameters,
+~39.6B training tokens) and its final pipeline **v3** (finished 2026-10-13 09:57 IST). Every number comes from a script in
+`eval/` with its output file named; the day-by-day record, failures and retractions included, is `PROGRESS.md`.
+**Verdict in one line:** goals 5 and 9 are largely met, 3, 4, 6 and 7 partly, 2 is measured and far from human, 1 and 8
+are not met. Goal 1, as the user defines it — surpass *any* LLM — is not within reach of this hardware this month.
 
 ## The model in one paragraph
 
 A language model whose layers are mostly a **carrier** (a gated delta-rule recurrent memory: one fixed-size state per
 layer, so its memory does not grow with context), with one layer in four a **sliding-window attention** (2,048 tokens, a
 reach the model chose in its own trials). Each attention query also **recalls** its 16 best-matching keys from everything
-older than the window, merged into the same softmax (`src/model.py` `Attn._recall`; a learned per-head gate let it switch
-on smoothly). It was trained with **no hand-set learning rate or schedule** (schedule-free Prodigy) and **grew itself**
-from 46M to 98M parameters when its own trials said growth paid. The last phases taught it to use what it read far back:
-needles and invented-fact lists past the window, then real Wikipedia paragraphs with questions in other words (SQuAD
-*train*), each placed 0.5k–16k tokens before the questions.
+older than the window (`src/model.py` `Attn._recall`; at inference the store can live in host memory, `FarStore`). It is
+trained with **no hand-set learning rate or schedule** (schedule-free Prodigy) and **grows itself** — 46M → 98M → 168M —
+when its own time-priced trials say growth pays on held-out text. Growth stays on in every run.
 
 ## Goal by goal
 
 | # | Goal | Verdict | Evidence |
 |---|---|---|---|
-| 1 | Surpass the LLMs | **On memory and reading: yes, decisively. On world knowledge: no.** | **Reading invented facts** (30 facts read once, a 4-way question, every wrong option another fact's answer; `eval/learn_by_reading.py`): ours **87% after 8k tokens of unrelated text, 89% after 32k**; GPT-2 124M 29% and SmolLM2-135M 32% *with the facts in plain view* (chance 25%). **Open-book SciQ** with the answering paragraph 8k tokens back: ours 76.0%, GPT-2 45.3%, SmolLM2 74.0% (`eval/openbook.py`). **Q&A after fine-tuning**†: everyday 39.6% vs GPT-2 16.7% / SmolLM2 62.5%; ARC 39.8 vs 33.8 / 48.4; SciQ 9.1 vs 2.2 / 12.7. SmolLM2 was trained on ~2 trillion tokens, ours on ~25 billion (382,000 steps x 65,536 tokens): the knowledge gap is data, and does not close before 2026-10-14. |
-| 2 | A cognitive model | **A profile, measured** | Working memory (the carrier's state), long-term memory (recall), learning by reading (7), knowing what it knows and abstaining (4–5), improving itself (3), deciding its own size, reach and rate (8). |
-| 3 | Self-improving | **Yes, on lookup; it compounds** | The model writes its own training labels (the answer at least 2 of 3 orderings of the facts agree on; 77–81% right, checked against gold only afterwards), trains on them, and climbs a curriculum of harder documents. Held-out hard lookup (other names, other wording), 10 / 30 / 60 facts†: 62.8 / 59.2 / 56.4% → round 1 70.0 / 68.4 / 64.2 → round 2 **75.8 / 75.8 / 69.0**; round 3 added nothing. Not shown for general knowledge (its own labels there are mostly wrong). |
-| 4 | Knows what it knows | **Partly** | Its samples agree with each other more when it is right: consistency 0.46 vs 0.21 (everyday), 0.37 vs 0.12 (SciQ)†. Log-probability calibration slightly behind GPT-2 (+0.152 vs +0.186)†. |
-| 5 | Abstains on what it does not know | **Yes, with no labels and no tuned threshold** | It answers only when at least half of 6 samples share an answer word with its greedy answer (`eval/selfcons.py`)†: everyday right-when-it-answers **39.6% → 64.7%**, SciQ **9.1% → 33.3%**; the price is declining 65% / 89% of questions. Training it on its own mistakes lowered wrong answers but also right ones. |
-| 6 | Consumer GPU; inference within 4 GB | **Yes, at the sizes shown** | Training at 20.1 GiB peak under a 22 GiB cap (a 24 GB consumer card). Inference: function-preserving grown copies hold a **million tokens of context** in 0.83 GiB (98M), 1.62 (319M), **2.84 (706M)**; 1.24B needs 4.34 (`eval/grow_mem.txt`). **Retrieval over a million tokens in 2.38 GiB** of GPU memory, the recall store in host memory (`src/model.py` `FarStore`; same function, checked to 1e-6 per layer). Beyond ~1.5B parameters the bf16 weights alone exceed 4 GB. |
-| 7 | Continuous growth and learning | **Growth: yes. Learning by reading: yes, without forgetting. Learning into the weights: still forgets.** | Grew 46M → 98M on its own decisions, each paying on held-out data. Facts read once are answered at 87–89% after 8k–32k tokens of other text, and nothing known is forgotten because the weights do not change. Fine-tuning 120 new facts into the weights: new 25.8% → 89.2%, old 79.2% → 66.7%, general text 1.23 → 1.86 bits/byte† — every variant tried (replay, self-rehearsal, its own step size, new layers only) forgets. |
-| 8 | Everything intrinsic | **Mostly** | No learning rate or schedule anywhere; size, attention reach and growth timing decided by the model's own trials; the decoder's anti-repetition strength chosen by matching real text's repetition rate; abstention by self-agreement with no tuned threshold. **Still hand-set:** the 25% share of retrieval documents in the last phases (the model-chosen data mix degraded general text ~10% and was reverted, 2026-10-07). |
-| 9 | Solve context rot | **Largely; two limits remain** | **Exact retrieval** (needles in real prose): 100% at 8k and 32k, 96% at 64k (378k and 384k); 92% at 128k and 256k, 67% at 512k, 33% at 1M (375k); 382k being measured. **Reading**: invented facts 87–89% at 8k–32k (vs ~91% with no distance). **Real-text open-book**: 84.0 / 72.7 / 76.0% at 0 / 2k / 8k tokens back, but **50.0% at 32k** (closed book 51.3%). **Prediction**: bits per byte fall from 1.15 at 512 tokens to 1.07 at 8k (GPT-2 stops at 1,024). Limits: reading *real* paragraphs past ~16k, and exact retrieval past 256k. |
+| 1 | Surpass the LLMs | **No.** Beats a standard transformer at equal data; GPT-2 on most benchmarks; not SmolLM2. | **Equal tokens** (`eval/bench_pythia.txt`, base models, N=1000): at ~40B tokens ours leads Pythia-160M on 7 of 10 (HellaSwag 31.8 vs 30.4, ARC-E 44.1 vs 39.4, ARC-C 24.9 vs 23.0, OBQA 28.4 vs 25.6, LAMBADA 19.1 vs 13.0, facts 77.1 vs 66.7, arithmetic 30.0 vs 16.7), trails on PIQA (62.1 vs 62.4), GSM8K (0.8 vs 2.4) and reasoning (37.2 vs 39.5); it even leads Pythia's final 300B checkpoint on the six standard benchmarks. Caveat: equal tokens, not equal data (the Pile vs our curated web text plus targeted synthetic data). **Against GPT-2 / SmolLM2** (self-improved v3): ahead of GPT-2 on 7 of 10 benchmarks, behind SmolLM2 by 9–17 points on the knowledge-heavy ones (HellaSwag 32.6 vs 43.5, ARC-E 44.8 vs 58.8). Everyday Q&A 58.3 vs 16.7 / 62.5. **Long memory:** exact retrieval to a million tokens, which neither baseline can see. |
+| 2 | A cognitive model — **measured against humans** (user, 2026-10-13) | **Far from human; a clear profile** | `eval/cognitive.py`, fresh variants of classic tasks, human figures from the cited papers (v1, base / fine-tuned): digit span forward **15+** (humans ~7), backward **<3** (~5); free recall first-middle-last 62-51-48 / 98-77-77 (humans U-shaped: primacy and recency — ours has primacy, no recency); 2-back at chance (~90); CRT right 2% / 0% with the **intuitive error 55% / 48%** (humans ~41% right, errors mostly intuitive); false belief 35% / 40% (adults ~100; below chance = it names where the object *is*, the young child's error). Storage superhuman, manipulation absent, reasoning at chance. v1 had four test flaws of mine (Wason, two-option and yes/no scoring, span rule); v2 with them fixed is running. |
+| 3 | Self-improving | **Yes on lookup, including kinds it learned elsewhere; no gain on kinds it never saw** | It labels its own questions (answer agreed by ≥2 of 3 orderings; checked against gold only afterwards) and trains on them. v2 (two fact kinds): 67 → **97%** on the hard lookup test. v3 (381 kinds, labels 89–97% right): capitals / engines — kinds absent from its labels — 86.4 → **97.0%** at 120 facts; two kinds never written anywhere (rivers, guilds): 57–60% → 47–58%, no gain. Not shown for general knowledge. |
+| 4 | Knows what it knows | **Partly; one result to confirm** | Calibration on 48 facts: separation **+0.225 vs GPT-2's +0.186** (v3) — better, but on a small set, to be re-measured on thousands of questions. Its samples agree more when it is right: 0.51 vs 0.17 (everyday). |
+| 5 | Abstains on what it does not know | **Yes, no labels, no tuned threshold** | Answers only when ≥ half of 6 samples agree (`eval/selfcons.py`): everyday right-when-answering **58.3% → 90.0%** (declines 58%), SciQ 9.8% → 25.7%. It declines too often; that is the open part. |
+| 6 | Consumer GPU (4–8 GB): trains AND infers | **Inference: yes. Training: yes on 8 GB at 168M; 4 GB and "any size" not yet** | **Training under an 8 GB card's memory** (`eval/consumer_demo.sh`, cap 7.5 GiB, the real recipe resumed with its optimizer state): window 2,048 x 32 → **6.37 GB peak for the whole process**, window 4,096 x 16 → 7.15 GB (the 8,192 window needs ~9.6). The cap bounds memory, not speed. **Inference:** a million tokens of context with retrieval in 2.96 GiB allocated (4.10 GB process with its CUDA context — just over 4 GB) with the recall store in host memory. Open: a growth trial under the cap (running), training on 4 GB, and "any parameter count" (weights streamed from host memory). |
+| 7 | Continuous growth and learning | **Growth: yes. A skill into the weights without forgetting: yes (with replay). Facts into the weights: not shown** | Grew 46M → 98M → 168M on its own trials; training continues (next trial at 649k). Lookup over 381 kinds fine-tuned **with 1:1 replay of general text: bits/byte 1.0143 → 1.0171 (+0.3%)** vs **+7.8%** without replay, the gain kept. Three self-improvement rounds moved no benchmark beyond noise. The old result — 120 new facts into the weights forget old ones — has not been retried with this replay. |
+| 8 | Everything intrinsic | **No (mostly intrinsic training; hand-set data)** | No learning rate or schedule anywhere; size, reach and growth timing by the model's own trials; decoder repetition strength matched to real text; abstention by self-agreement. **Still hand-set:** every data mix (pretraining phases, fine-tune mixtures, the 1:1 replay ratio). A model-chosen mix failed three ways (2026-10-06/07). |
+| 9 | Solve context rot | **Largely** | **Exact retrieval** in real prose: **100% at every distance from 4k to 1,048,576 tokens** (590k). **Real-text open-book** SciQ (v3): closed book 57.3, paragraph 0 / 2k / 8k / 32k back **87.3 / 84.7 / 81.3 / 75.3**. **Reading invented facts** 100 / 91 / 87 at 0 / 8k / 32k. **Prediction:** bits/byte 1.118 at 512 tokens → 1.034 at 8k. Limits: real-text reading still falls 12 points from 0 to 32k; lookup on kinds of fact never trained on reaches ~60%, not ~95%. |
 
-## Head to head (same tests, same data, each model sees as much context as it can)
+## Head to head
 
-| Test | Ours | GPT-2 124M | SmolLM2-135M |
-|---|---|---|---|
-| Invented facts read once, question after 8k / 32k tokens (chance 25) | **87 / 89** | 19 / 24 | 22 / 25 |
-| Same, facts in plain view | 86–91 (earlier bases) | 29 | 32 |
-| Open-book SciQ, paragraph 2k / 8k / 32k back | 72.7 / 76.0 / 50.0 | 43.3 / 45.3 / 42.7 | 80.7 / 74.0 / 72.0 (closed book 72.7) |
-| Needle at 32k / 64k / 256k tokens | 100 / 96 / 92 | cannot see past 1,024 | cannot see past 8,192 |
-| Everyday Q&A, fine-tuned† | 39.6 | 16.7 | 62.5 |
-| ARC (4-way)† | 39.8 | 33.8 | 48.4 |
-| Facts (48, 4-way)† | 34 | 33 | — |
-| Induction on random syllables† | 99.2 | 98.5 | — |
+| Test | Ours | GPT-2 124M | SmolLM2-135M | Pythia-160M (40B / 300B) |
+|---|---|---|---|---|
+| HellaSwag / PIQA / ARC-E / ARC-C / OBQA (base, zero-shot) | 31.8 / 62.1 / 44.1 / 24.9 / 28.4 | 32.1 / 62.7 / 39.8 / 22.8 / 25.6 | 43.5 / 69.1 / 58.8 / 28.7 / 32.4 | 30.4 / 62.4 / 39.4 / 23.0 / 25.6 — 28.8 / 60.3 / 36.4 / 23.0 / 26.4 |
+| LAMBADA / GSM8K | 19.1 / 0.8 | 14.1 / 0.8 | 23.3 / 0.8 | 13.0 / 2.4 — 8.0 / 0.4 |
+| Facts / arithmetic / reasoning (4-way) | 77.1 / 30.0 / 37.2 | 79.2 / 35.0 / 61.2 | 91.7 / 36.7 / 53.2 | 66.7 / 16.7 / 39.5 — 85.4 / 73.3 / 76.8 |
+| Everyday Q&A / ARC (fine-tuned v3, greedy) | 58.3 / 43.7 | 16.7 / 33.8 | 62.5 / 48.4 | — |
+| Needle in real prose at 32k / 256k / 1M tokens (590k) | 100 / 100 / 100 | cannot see past 1,024 | cannot see past 8,192 | cannot see past 2,048 |
+| Open-book SciQ, paragraph 32k tokens back | 75.3 (closed 57.3) | 42.7 | 72.0 (closed 72.7) | — |
 
-## How the final model was built (2026-10-05 → 10-08)
+Absolute numbers are this suite's protocol, not leaderboard (lm-evaluation-harness) numbers; compare within the table.
 
-1. **run85** (the long intrinsic run) to step 368,000 — the best general-text checkpoint (held-out 1.0371 on the trainer's mix).
-2. **Recall switched on** with a gate born at −4 (the user's "better initialisation instead of random": the function barely
-   changes at the switch, and the model opens each head as far as it pays), trained on needles past the window.
-3. **Far lookup** (+3,000 steps): lists of invented facts, then 1k–12k tokens of prose, then questions → reading at 32k
-   22% → 70%.
-4. **Far reading** (+7,000 steps): real SQuAD-train paragraphs, 0.5k–16k tokens of prose, then their questions → reading at
-   32k 89%, open-book at 8k 65% → 76%, held-out bits/byte 1.0522 → **1.0483** (better, not worse).
-5. **Final pipeline** (running): self-improvement rounds (best round kept) → factual fine-tune → abstention → scorecard →
-   self-consistency abstention, open-book, reading, long generation, benchmark suite (`eval/final_pipeline2.sh`,
-   `eval/final_base_evals.sh`).
+## What this week found and fixed (details and every slip in PROGRESS.md)
 
-## Fixed this week, which changed earlier conclusions
+- **Lookup was learned as six templates, not as a skill.** On two kinds of fact no data ever contained, the base and every
+  self-improved model were at chance, even with 10 facts in plain view. Pretraining with 381 kinds at 12% of tokens did not
+  move it in 8,000 steps (the answers are ~2% of a document's loss); a fine-tune with the loss on answers over 381 kinds did:
+  **chance → ~60%** on the never-seen kinds.
+- **Fine-tunes forget unless general text is replayed.** The lookup fine-tune alone: +7.8% bits/byte and chat answers
+  broken ("capital of Japan?" → "96"); interleaved 1:1 with general text: +0.3%, gain kept. One of two identical replay
+  runs diverged to NaN (cause not found); every fine-tuned checkpoint is now checked for non-finite weights.
+- **The old fine-tune data erased base skills.** Plain arithmetic 8/8 → 3/8 and digit copying 90% → 10–30% after the
+  factual fine-tune (Alpaca / Dolly / OpenAssistant / CAMEL, no replay). New data fetched and being built
+  (`eval/get_sft_data.py`, `eval/build_sft2.py`: chat, arithmetic, coding, reasoning traces, human-choice data; decontaminated
+  against every evaluation set and the goal-2 battery), to be trained with replay.
+- **Training in 8 GB:** a shorter window alone rebuilt the position table at the window size and the optimizer state no
+  longer loaded; `--pos-table 8192` keeps it.
+- **Token count corrected:** the current model has seen ~39.6B tokens (604,000 x 65,536), not ~25B (that was the 382k base).
 
-- **Long generation "collapsed into loops" was a decoder bug.** Every recall model decodes on the eager path, which
-  sampled plainly: the anti-repetition (DRY) penalty existed only in the graphed decode. With it applied: 0 of 12
-  4,096-token segments collapsed, recall on or off (`eval/lg_check.txt`).
-- **The recall store at a million tokens needed 18 GiB on the GPU**; in host memory it needs none (2.38 GiB total).
-- **The model-chosen data mix degraded general text ~10%** in the final phase; reverted to the best checkpoint (user's
-  decision, 2026-10-07).
-- **A resume ratcheted the optimizer's step size upward** and degraded the model; the step size is now held across resumes.
-
-## Retractions and failures (all in PROGRESS.md)
+## Retractions and failures still standing
 
 - The first intrinsic learning rate (hypergradient) beat the tuned schedule over 6,000 steps and collapsed over 120,000.
-- "More context past 8k makes prediction worse" (block-local models) was a bug: attention output zero for most of every
-  window after the first.
-- Several first measurements went through broken decoders or underpowered tests and were re-measured.
-- Learning into the weights without forgetting: not achieved by any method tried.
-- The data mix chosen by the model: three rules tried (progress, per-share, gradient alignment); the last one ran, and
-  degraded the model.
+- The data mix chosen by the model: three rules tried, the last degraded the model.
+- Self-improvement does not yet carry to kinds of knowledge the model never saw, nor to general knowledge.
+- Real-text reading past ~32k and reasoning of any kind (goal 2) are weak.
 
-## Remaining before the meeting (2026-10-14)
+## Next (in order)
 
-1. The final pipeline on 382k (ETA ~04:00 IST 2026-10-09) and the base evaluations (ETA ~18:00 IST 2026-10-08): replace
-   every † number, re-measure needles to a million tokens on 382k.
-2. The investor page built from these numbers.
-3. Open: real-text reading past ~16k; retrieval past 256k; learning into the weights without forgetting; world knowledge
-   (data-bound).
+1. Fine-tune on the new data **with replay**; check that arithmetic and copying survive and Q&A / reasoning improve.
+2. Battery v2 against humans; the growth trial under the 8 GB cap; training on 4 GB; then weights streamed from host memory.
+3. Training data for the faculties the battery found missing (manipulation, reasoning, perspective), the battery's own task
+   types held out; calibration on thousands of questions; facts into the weights with replay.
+4. Instruction data folded into the continuous training, so no separate fine-tune stage is needed (goals 7, 8).
+5. Proposed: a vocabulary that grows as a model-chosen growth option (unfamiliar scripts and symbols cost 3–4x the tokens today).
 
 ## Reproduce
 
-- Final pipeline: `eval/final_pipeline2.sh <base ckpt> <tag>` → `eval/final_pipeline_<tag>.txt`, `eval/scorecard_final_<tag>.txt`
-- Base evaluations: `eval/final_base_evals.sh <base ckpt> <tag>` → `eval/final_base_<tag>.txt`
-- Reading: `eval/learn_by_reading.py <ckpt>=label "hf:gpt2=GPT-2 124M" "hf:HuggingFaceTB/SmolLM2-135M=SmolLM2-135M"`
-- Open-book: `eval/openbook.py <ckpt>=label`; needles: `RECALL=16 NEEDLE_DIST=... eval/recall_test.py <ckpt> needle`
-  (`RECALL_OFFLOAD=1` keeps the store in host memory)
-- The far phases: `eval/far_lookup_run.sh`, `eval/far_read_run.sh`, `eval/far_read_run2.sh` (data: `eval/build_recall.py
-  <out> <Mtok> farlookup|farread`)
+- Pipeline: `LOOK=1 LOOKCK=<lookup ckpt> SI_KINDS=many PCAP=8 OPENBOOK_HF=0 eval/final_pipeline2.sh <base ckpt> <tag>` →
+  `eval/final_pipeline_<tag>.txt`, `eval/si_rounds_<tag>.txt`, `eval/scorecard_final_<tag>.txt`
+- Equal-data comparison: `BENCH_HF=0 BENCH_EXTRA="EleutherAI/pythia-160m@step19000=label;..." eval/bench_suite.py <ckpt>=label`
+- Never-seen kinds: `INCONTEXT_KINDS=new eval/incontext.py <ckpt> powered`; lookup over many kinds and its replay test:
+  `eval/build_recall.py` (`RECALL_KINDS=many`), `eval/kinds.py`, `eval/look_forget.sh`, `eval/lookgold_test.sh`
+- Training in 8 GB: `CTX=2048 NGRP=2 eval/consumer_demo.sh <ckpt> <steps>` (cap 7.5 GiB)
+- Human battery: `eval/cognitive.py <ckpt>=label`
+- Needles: `RECALL=16 NEEDLE_DIST=... eval/recall_test.py <ckpt> needle` (`RECALL_OFFLOAD=1`: store in host memory)

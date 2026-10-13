@@ -21,3 +21,10 @@ positions after the first window: wrap
       8,192 tokens of context: 1.0358 bits/byte     13.5 s to ingest   peak 2.48 GiB
      32,768 tokens of context: 1.0362 bits/byte      2.8 s to ingest   peak 2.69 GiB
     131,072 tokens of context: 1.0515 bits/byte     16.7 s to ingest   peak 3.15 GiB
+    524,288 tokens of context: 1.0683 bits/byte    175.1 s to ingest   peak 3.15 GiB
+  1,048,576 tokens of context: 1.1180 bits/byte    624.4 s to ingest   peak 3.15 GiB
+
+  generated after 1,048,576 tokens of context:
+  '. \n\\c\\,{\\,\\s\\, \\mathcal{L} \\, \\mathcal{Z} \\, \\,\\g\\, \\sin(\\theta) \\, \\,\\gamma\\, \\mathcal{Z} \\, \\mathcal{Z} \\, \\mathcal{Z} \\, \\,\\pi\\, \\,\\pi\\,'
+GUARD: peak 4146 MiB of 4 GiB (.venv/bin/python -u eval/million.py /mnt/kv_cache/final_base_fr382.pt)
+MILLION_DONE

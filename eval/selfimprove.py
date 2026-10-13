@@ -41,7 +41,17 @@ if len(sys.argv) > 1 and sys.argv[1] == "lookup":
               ("{X} was born in {Y}.", "Where was {X} born?"),
               ("The code for {X} is {Y}.", "What is the code for {X}?")]
     def val(k): return f"{nm(2)} {nm(2)}" if k == 1 else str(rr.randint(100, 9999)) if k == 3 else nm(2)
-    o = Ours(CK, "/mnt/kv_cache/tok_v8192.json")
+    # SI_KINDS=many (2026-10-12): the rounds label documents of eval/kinds.py's ~381 kinds (each fact and question in one of
+    # three wordings) instead of the four above, so what self-improves is lookup itself; the test's kinds stay held out
+    MANY_ = os.environ.get("SI_KINDS") == "many"
+    if MANY_:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from kinds import many_kinds
+        KM_, val = many_kinds(nm, rr)
+        KINDS_ = KM_                                       # (fact wordings, question wordings, value type); one drawn per use
+    # SI_GOLD=1 (2026-10-12): NOT self-improvement -- the generator's own answers are the labels and the model is never asked
+    # (a supervised lookup fine-tune over the kinds; the control that says whether training on many kinds makes lookup general)
+    GOLD_ = os.environ.get("SI_GOLD") == "1"
+    o = None if GOLD_ else Ours(CK, "/mnt/kv_cache/tok_v8192.json")
     def answer(facts, q):
         ids = o.encode(" ".join(facts) + "\n\nQuestion: " + q + " Answer:")
         t = o.decode(o.generate(ids, 10, temp=0.0, stop=8191))
@@ -51,15 +61,16 @@ if len(sys.argv) > 1 and sys.argv[1] == "lookup":
         # SI_FACTS (2026-10-06): the round's difficulty. Round 2 at round 1's difficulty added nothing (2026-10-03); a CURRICULUM
         # moves each round to documents with more facts than the last, where the improved model's own labels still hold
         n = rr.choice([int(v) for v in os.environ.get("SI_FACTS", "20,40,80").split(",")]); facts, used = [], set()
+        kp_ = rr.sample(range(len(KINDS_)), rr.choice([1, 2, 3, 4, 6])) if MANY_ else range(len(KINDS_))
         while len(facts) < n:
-            k = rr.randrange(len(KINDS_)); x = nm(rr.choice([2, 3]))
+            k = rr.choice(kp_); x = nm(rr.choice([2, 3]))
             if x in used: continue
             used.add(x); facts.append((k, x, val(k)))
-        sent = [KINDS_[k][0].format(X=x, Y=y) for k, x, y in facts]
+        sent = [(rr.choice(KM_[k][0]) if MANY_ else KINDS_[k][0]).format(X=x, Y=y) for k, x, y in facts]
         qa = []
         for k, x, y in rr.sample(facts, 8):
-            q = KINDS_[k][1].format(X=x); ans = []
-            for _ in range(3):
+            q = (rr.choice(KM_[k][1]) if MANY_ else KINDS_[k][1]).format(X=x); ans = [y, y] if GOLD_ else []
+            for _ in range(0 if GOLD_ else 3):
                 order = sent[:]; rr.shuffle(order); ans.append(answer(order, q))
             top, c = Counter(ans).most_common(1)[0]
             asked += 1

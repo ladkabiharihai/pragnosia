@@ -1,0 +1,5 @@
+  know/ckpt_s590000.pt recall 16 'The history of the c': 1.15 1.30 1.17 0.91
+  know/ckpt_s590000.pt recall 16 'In this paper we stu': 1.53 1.77 1.57 1.46
+  know/ckpt_s590000.pt recall 16 'The river rises in t': 0.96 1.04 0.70 0.67
+/mnt/kv_cache/know/ckpt_s590000.pt: temp 0.85 DRY 0.4: 4/12 segments in band, 0/12 collapsed, median 1.16
+GUARD: peak 5670 MiB of 8 GiB (.venv/bin/python -u eval/lg_check.py /mnt/kv_cache/know/ckpt_s590000.pt)

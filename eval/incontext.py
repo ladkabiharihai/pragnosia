@@ -35,6 +35,22 @@ for i in range(60):
     FACTS.append((f"The {machines[i]} engine was invented by {people[i]}.",
                   f"Question: who invented the {machines[i]} engine? Answer:", f" {people[i]}",
                   [f" {o}" for o in rng.sample([x for x in people if x != people[i]], 3)]))
+# INCONTEXT_KINDS=new (2026-10-12): two KINDS OF FACT no training builder writes (eval/build_recall.py: capital, engine, birthplace,
+# dog owner, code, colour) and no self-improvement round labels (eval/selfimprove.py: capital, engine, birthplace, code): rivers
+# flowing into seas, guild leaders. Asks whether the self-improved lookup carries to kinds it never saw, not only to new names.
+import os
+KEY_ = "capital"
+if os.environ.get("INCONTEXT_KINDS") == "new":
+    rivers = [fresh(3) for _ in range(60)]; seas = [fresh(2) for _ in range(60)]
+    guilds = [fresh(2) for _ in range(60)]; leaders = [f"{fresh(2)} {fresh(2)}" for _ in range(60)]
+    FACTS, KEY_ = [], "river"
+    for i in range(60):
+        FACTS.append((f"The {rivers[i]} river flows into the {seas[i]} Sea.",
+                      f"Question: into which sea does the {rivers[i]} river flow? Answer:", f" {seas[i]}",
+                      [f" {o}" for o in rng.sample([x for x in seas if x != seas[i]], 3)]))
+        FACTS.append((f"{leaders[i]} leads the {guilds[i]} guild.",
+                      f"Question: who is the leader of the {guilds[i]} guild? Answer:", f" {leaders[i]}",
+                      [f" {o}" for o in rng.sample([x for x in leaders if x != leaders[i]], 3)]))
 order = list(range(len(FACTS))); random.Random(9).shuffle(order)
 # HARD mode (argv[2] == "hard"): every wrong option is ANOTHER ANSWER FROM THE SAME CONTEXT. Measured 2026-09-24:
 # in the default mode the wrong options were drawn from all 60 names, so with 10 facts in context most of them
@@ -44,7 +60,7 @@ HARD = len(sys.argv) > 2 and sys.argv[2] == "hard"
 def hard(sub):
     out = []
     for f in sub:
-        pool = [g[2] for g in sub if g is not f and ("capital" in g[1]) == ("capital" in f[1])]
+        pool = [g[2] for g in sub if g is not f and (KEY_ in g[1]) == (KEY_ in f[1])]
         out.append((f[0], f[1], f[2], rng.sample(pool, 3) if len(pool) >= 3 else f[3]))
     return out
 

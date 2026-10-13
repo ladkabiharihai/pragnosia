@@ -1,0 +1,2 @@
+SELF-IMPROVEMENT ROUNDS from /mnt/kv_cache/final_v3_look/ckpt.pt, 1000 documents per round, 2026-10-12 13:04 UTC
+== round 0 (the start)

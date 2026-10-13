@@ -56,7 +56,7 @@ def _swa(q, k, v, w, lse=False):
     return fa(q, k, v, block_mask=_SWA_MASKS[key])
 
 
-def _far_topk(qc, K, p0, w, kk, blk=64):
+def _far_topk(qc, K, p0, w, kk, blk=64, kvalid=None):
     """EXACT top-kk keys at least w back for the queries at absolute positions p0 .. p0+n-1 (query i sees key j iff
     p0 + i - j >= w), by q.k. Returns (scores, indices), -inf scores where a query has fewer than kk such keys.
     FAST (review, 2026-10-05: a top-k over the whole 16,384-key row cost ~3.5x the training step): only the keys that can be
@@ -67,6 +67,8 @@ def _far_topk(qc, K, p0, w, kk, blk=64):
     hi = p0 + n - w                                     # keys [0, hi) are far for at least the chunk's last query
     Lc = min(L, -(-hi // blk) * blk)
     S = qc @ K[:, :, :Lc].transpose(-1, -2)             # (B, H, n, Lc)
+    if kvalid is not None:                              # the zero slots a long training store is padded with are not keys
+        S = S.masked_fill(~kvalid[:, :, None, :Lc], float("-inf"))
     lo = max(0, p0 - w + 1)                             # keys below lo are far for every query of the chunk
     if lo < Lc:
         jj = torch.arange(lo, Lc, device=qc.device); ii = p0 + torch.arange(n, device=qc.device)
@@ -88,6 +90,9 @@ def _pad_topk(S, kk):
     pad = kk - S.shape[-1]
     return (torch.cat([tv, torch.full_like(tv[..., :1], float("-inf")).expand(*tv.shape[:-1], pad)], -1),
             torch.cat([ti, torch.zeros_like(ti[..., :1]).expand(*ti.shape[:-1], pad)], -1))
+
+
+REMAT = False                 # train.py --remat: recompute each layer in backward (LM.trunk)
 
 
 class FarStore:
@@ -115,8 +120,36 @@ class FarStore:
 
 
 class FarState:
-    __slots__ = ("fs", "n", "Kt", "Vt")
-    def __init__(self, fs, n, Kt, Vt): self.fs, self.n, self.Kt, self.Vt = fs, n, Kt, Vt
+    __slots__ = ("fs", "n", "Kt", "Vt", "M1", "M2")
+    def __init__(self, fs, n, Kt, Vt, M1=None, M2=None): self.fs, self.n, self.Kt, self.Vt, self.M1, self.M2 = fs, n, Kt, Vt, M1, M2
+
+
+import os as _os
+# THE CHANCE RISE OF THE FAR KEYS (2026-10-08, experiment; RECALL_EVC=<N0>, 0 = off). Each query takes its best k of N far
+# keys; with N far beyond the store it trained with (one window, N0 keys), even unrelated keys score higher by chance --
+# the maximum of N draws grows ~ sigma * sqrt(2 ln N) -- and recall made long-stream prediction worse past ~32k tokens
+# (382k: 1.0362 at 32k, 1.1180 at 1M; recall off 1.0411 at 1M). The far keys' log-sum-exp is lowered by the expected rise
+# sigma * (sqrt(2 ln N) - sqrt(2 ln N0)), sigma the spread of this query's scores over the far keys, from the keys' first and
+# second moments (no score is computed twice). N <= N0: unchanged. Nothing is tuned: N0 is the training span.
+_EVC_N0 = int(_os.environ.get("RECALL_EVC", "0"))
+# RECALL_EVC_MODE: "shift" lowers every far key by the expected chance rise (fixed a million-token prediction, 1.1180 ->
+# 1.0405, but needles at 128k fell to 42%: a genuine match is lowered too); "mask" (2026-10-08) keeps a far key only if it
+# beats the expected MAXIMUM of N chance scores, mu + sigma sqrt(2 ln N), untouched -- an outlier (a needle) keeps its full
+# weight, keys at chance level are dropped.
+_EVC_MODE = _os.environ.get("RECALL_EVC_MODE", "shift")
+
+def _evc_stats(q, M1, M2, N, sc):
+    """this query's mean and spread of scaled scores over N far keys, from the keys' first and second moments:
+    q (B,H,T,dh); M1 (B,H,dh) their sum, M2 (B,H,dh,dh) the sum of their outer products. Returns (mu, sigma), (B,H,T,1)."""
+    qf = q.float()
+    mu = (qf @ M1.unsqueeze(-1)).squeeze(-1) / N
+    e2 = ((qf @ M2) * qf).sum(-1) / N
+    return (mu * sc).unsqueeze(-1), ((e2 - mu * mu).clamp_min(0).sqrt() * sc).unsqueeze(-1)
+
+def _evc_shift(q, M1, M2, N, sc):
+    if not _EVC_N0 or N <= _EVC_N0: return 0.0
+    mu, sig = _evc_stats(q, M1, M2, N, sc)
+    return sig * (math.sqrt(2 * math.log(N)) - math.sqrt(2 * math.log(_EVC_N0)))
 
 
 def _swa_dense(q, k, v, w, lse=False, ch=1024):
@@ -297,22 +330,41 @@ class Attn(nn.Module):
         is scored exactly as a key inside the window. Untrained (src/recall.py) it took needles at 1-32k from 0% to
         100-31% and helped prediction inside the first context window, but hurt it past the first window boundary."""
         B_, T_, D = x.shape; w, kf, H = self.window, self.recall_k, self.h; dh = D // H
-        K = k if h0 is None else torch.cat([h0[0], k], dim=2)
-        V = v if h0 is None else torch.cat([h0[1], v], dim=2)
+        # THE GRADIENT REACHES ONLY THIS WINDOW'S KEYS (2026-10-08). The store (h0) is carried detached, so the full
+        # concatenation is built WITHOUT autograd (for the choice and the state), the window's keys are concatenated with
+        # gradient, and the chosen far keys are gathered from the store and from this window separately: gathering from
+        # the concatenation made every chunk's backward a gradient the size of the whole store (a 65,536-key training store
+        # ran out of memory at 28 GiB). The gradients are the same: the store's part was always discarded.
+        if h0 is not None and h0[0].shape[2] == 0: h0 = None
+        P0 = 0 if h0 is None else h0[0].shape[2]
+        K = k if h0 is None else torch.cat([h0[0], k.detach()], dim=2)
+        V = v if h0 is None else torch.cat([h0[1], v.detach()], dim=2)
         L = K.shape[2]; P = L - T_; sc = dh ** -0.5
         if T_ == 1:                                    # decode: the window as two matrix-vector products
-            kl, vl = K[:, :, -w:], V[:, :, -w:]
+            kl = K[:, :, -w:] if h0 is None else torch.cat([h0[0], k], dim=2)[:, :, -w:]
+            vl = V[:, :, -w:] if h0 is None else torch.cat([h0[1], v], dim=2)[:, :, -w:]
             s_ = (q.float() @ kl.float().transpose(-1, -2)) * sc
             lse_l = s_.logsumexp(-1, keepdim=True); o_l = s_.softmax(-1) @ vl.float()
         else:
             lo = max(0, P - w)
-            o_l, lse_l = _swa(q, K[:, :, lo:], V[:, :, lo:], w, lse=True)
+            Kw = k if h0 is None else torch.cat([h0[0][:, :, lo:], k], dim=2)      # the window's keys, with gradient
+            Vw = v if h0 is None else torch.cat([h0[1][:, :, lo:], v], dim=2)
+            o_l, lse_l = _swa(q, Kw, Vw, w, lse=True)
             o_l = o_l.float(); lse_l = lse_l.float().unsqueeze(-1)
         if L - w > 0 and kf:
             # per chunk of queries: the choice (each query's kf best keys at least w back; no gradient), then the gathered
             # keys and values (with gradient). Chunks keep the score block and the gathered block near 0.25 GB each.
             kk = min(kf, L)
+            # A LONG TRAINING STORE (--recall-span > the window, 2026-10-08) is a fixed-shape buffer, zero-padded at its
+            # front until a stream has read that far: those slots are masked (a real key is RMS-normed, never zero)
+            kval = (K.abs().amax(-1) > 0) if self.recall_span > T_ else None
             ch = max(16, min(T_, (1 << 27) // max(1, B_ * H * L), (1 << 25) // max(1, B_ * H * kk * dh)))
+            nf = P - w + 1                                 # keys far for the first query (the rest of the staircase is <= T_)
+            thr = None
+            if _EVC_N0 and nf > _EVC_N0 and not torch.is_grad_enabled():
+                Kf = K[:, :, :nf].float(); M1g, M2g = Kf.sum(2), Kf.transpose(-1, -2) @ Kf; del Kf
+                if _EVC_MODE == "mask":
+                    mu_, sg_ = _evc_stats(q, M1g, M2g, nf, sc); thr = mu_ + sg_ * math.sqrt(2 * math.log(nf))
             lfs, ofs = [], []
             for c0 in range(0, T_, ch):
                 n = min(ch, T_ - c0); qc = q[:, :, c0:c0 + n]
@@ -320,14 +372,23 @@ class Attn(nn.Module):
                     lfs.append(torch.full((B_, H, n, 1), -1e4, device=x.device))
                     ofs.append(torch.zeros(B_, H, n, dh, device=x.device)); continue
                 with torch.no_grad():
-                    tv, ti = _far_topk(qc, K, P + c0, w, kk)
+                    tv, ti = _far_topk(qc, K, P + c0, w, kk, kvalid=kval)
                 g_ = ti.reshape(B_, H, n * kk, 1).expand(-1, -1, -1, dh)
-                Ks = K.gather(2, g_).view(B_, H, n, kk, dh); Vs = V.gather(2, g_).view(B_, H, n, kk, dh)
+                if h0 is None:
+                    Ks = k.gather(2, g_); Vs = v.gather(2, g_)
+                else:                                    # from the store (no gradient) or from this window (gradient)
+                    ins = g_ < P0; gs = g_.clamp_max(P0 - 1); gw = (g_ - P0).clamp_min(0)
+                    Ks = torch.where(ins, h0[0].gather(2, gs), k.gather(2, gw))
+                    Vs = torch.where(ins, h0[1].gather(2, gs), v.gather(2, gw))
+                Ks = Ks.view(B_, H, n, kk, dh); Vs = Vs.view(B_, H, n, kk, dh)
                 sf = (qc.unsqueeze(3) @ Ks.transpose(-1, -2)).squeeze(3).float() * sc   # (B, H, n, kk)
                 sf = sf.masked_fill(~torch.isfinite(tv), -1e4)   # finite: a query with no old key gets weight exp(-1e4) = 0
+                if thr is not None: sf = sf.masked_fill(sf < thr[:, :, c0:c0 + n], -1e4)
                 lfs.append(sf.logsumexp(-1, keepdim=True))
                 ofs.append((sf.softmax(-1).to(Vs.dtype).unsqueeze(3) @ Vs).squeeze(3).float())
             lse_f = torch.cat(lfs, 2); o_f = torch.cat(ofs, 2)
+            if _EVC_N0 and nf > _EVC_N0 and not torch.is_grad_enabled() and _EVC_MODE == "shift":
+                lse_f = lse_f - _evc_shift(q, M1g, M2g, nf, sc)
             if hasattr(self, "recall_gate"): lse_f = lse_f + self.recall_gate.float().view(1, H, 1, 1)
             lse = torch.logaddexp(lse_l, lse_f)
             a = (o_l * torch.exp(lse_l - lse) + o_f * torch.exp(lse_f - lse)).to(q.dtype)
@@ -335,6 +396,8 @@ class Attn(nn.Module):
             a = o_l.to(q.dtype)
         sp = self.recall_span
         st = (K, V) if not sp else (K[:, :, -sp:], V[:, :, -sp:])
+        if sp and st[0].shape[2] < sp:                 # a fixed shape for the training graphs: zeros in front (masked above)
+            st = tuple(F.pad(t, (0, 0, sp - t.shape[2], 0)) for t in st)
         return x + self.o(self._state_read(a, z, None, B_, T_, D)), st
 
     FAR_CHUNK = 65536                                  # host keys streamed through the GPU at a time (~100 MB at d768)
@@ -347,7 +410,8 @@ class Attn(nn.Module):
         (_far_topk with its staircase); then only the chosen keys and values are gathered (host ones on the host). GPU
         memory is the tail, one streamed chunk and its score blocks -- independent of how long the past is."""
         B_, T_, D = x.shape; w, kf, H = self.window, self.recall_k, self.h; dh = D // H; sc = dh ** -0.5
-        if isinstance(h0, FarState): fs, n, Kt, Vt = h0.fs, h0.n, h0.Kt, h0.Vt
+        M1 = M2 = None
+        if isinstance(h0, FarState): fs, n, Kt, Vt, M1, M2 = h0.fs, h0.n, h0.Kt, h0.Vt, h0.M1, h0.M2
         elif h0 is None: fs, n, Kt, Vt = FarStore(H, dh, k.dtype), 0, k[:, :, :0], v[:, :, :0]
         else: fs, n, (Kt, Vt) = FarStore(H, dh, k.dtype), 0, h0      # a GPU store from the ordinary path
         Kt = torch.cat([Kt, k.to(Kt.dtype)], dim=2); Vt = torch.cat([Vt, v.to(Vt.dtype)], dim=2)
@@ -388,6 +452,14 @@ class Attn(nn.Module):
                 uq, inv = torch.unique(hk, return_inverse=True); uq = uq.cpu()
                 Ku = fs.K[uq // n, uq % n].to(x.device); Vu = fs.V[uq // n, uq % n].to(x.device)
                 inv = inv.view(H, T_ * kk)
+            nf = P - w + 1                                 # far for the first query: the host keys + the tail's first nf - n
+            m1 = m2 = thr = None
+            if _EVC_N0 and nf > _EVC_N0:
+                Kf = Kt[0, :, :max(0, nf - n)].float()
+                m1 = Kf.sum(1).unsqueeze(0); m2 = (Kf.transpose(-1, -2) @ Kf).unsqueeze(0)
+                if M1 is not None: m1 = m1 + M1; m2 = m2 + M2
+                if _EVC_MODE == "mask":
+                    mu_, sg_ = _evc_stats(q, m1, m2, nf, sc); thr = mu_ + sg_ * math.sqrt(2 * math.log(nf))
             lfs, ofs = [], []
             for c0 in range(0, T_, 1024):                 # gather the chosen keys and values, 1,024 queries at a time
                 c1 = min(T_, c0 + 1024); m_ = c1 - c0
@@ -400,9 +472,11 @@ class Attn(nn.Module):
                 Ks = Ks.view(1, H, m_, kk, dh); Vs = Vs.view(1, H, m_, kk, dh)
                 sf = (q[:, :, c0:c1].unsqueeze(3) @ Ks.to(q.dtype).transpose(-1, -2)).squeeze(3).float() * sc
                 sf = sf.masked_fill(~torch.isfinite(tv[:, :, c0:c1]), -1e4)
+                if thr is not None: sf = sf.masked_fill(sf < thr[:, :, c0:c1], -1e4)
                 lfs.append(sf.logsumexp(-1, keepdim=True))
                 ofs.append((sf.softmax(-1).to(Vs.dtype).unsqueeze(3) @ Vs).squeeze(3).float())
             lse_f = torch.cat(lfs, 2); o_f = torch.cat(ofs, 2)
+            if m1 is not None and _EVC_MODE == "shift": lse_f = lse_f - _evc_shift(q, m1, m2, nf, sc)
             if hasattr(self, "recall_gate"): lse_f = lse_f + self.recall_gate.float().view(1, H, 1, 1)
             lse = torch.logaddexp(lse_l, lse_f)
             a = (o_l * torch.exp(lse_l - lse) + o_f * torch.exp(lse_f - lse)).to(q.dtype)
@@ -410,8 +484,12 @@ class Attn(nn.Module):
             a = o_l.to(q.dtype)
         if Lt > w + 8192:                                 # spill all but the last w keys to the host
             s = Lt - w
-            fs.write(n, Kt[0, :, :s], Vt[0, :, :s]); n += s; Kt, Vt = Kt[:, :, s:], Vt[:, :, s:]
-        return x + self.o(self._state_read(a, z, None, B_, T_, D)), FarState(fs, n, Kt, Vt)
+            ks_ = Kt[0, :, :s]
+            if _EVC_N0:                                   # the host keys' moments, kept beside the store
+                kf_ = ks_.float(); d1 = kf_.sum(1).unsqueeze(0); d2 = (kf_.transpose(-1, -2) @ kf_).unsqueeze(0)
+                M1 = d1 if M1 is None else M1 + d1; M2 = d2 if M2 is None else M2 + d2
+            fs.write(n, ks_, Vt[0, :, :s]); n += s; Kt, Vt = Kt[:, :, s:], Vt[:, :, s:]
+        return x + self.o(self._state_read(a, z, None, B_, T_, D)), FarState(fs, n, Kt, Vt, M1, M2)
 
     def _state_read(self, a, z, mem, B_, T_, D):
         """Fold in this layer's read of the carrier's memory, if it has one, and flatten the heads."""
@@ -657,6 +735,17 @@ class LM(nn.Module):
         # at every window boundary with the state carried (train.py --pos-table); identical for windows <= the table
         h = self.e(x) + self.p(torch.arange(x.shape[1], device=x.device) % self.p.num_embeddings)
         mem = None; new = []
+        if REMAT and torch.is_grad_enabled() and not any(getattr(mx, "read_state", 0) for mx in self.mix):
+            # RECOMPUTE EACH LAYER IN BACKWARD (goal 6, 2026-10-11: train on a 4-8 GB card). Only each layer's input is
+            # kept; its inside is recomputed during backward. The same function and gradients, less memory, more time.
+            for i, (mx, mp) in enumerate(zip(self.mix, self.mlp)):
+                st_in = states[i] if states is not None else None
+                def _layer(h_, st_, mx=mx, mp=mp):
+                    o_, s_ = mx(h_, st_) if st_ is not None else mx(h_)
+                    return mp(o_), s_
+                h, st_ = torch.utils.checkpoint.checkpoint(_layer, h, st_in, use_reentrant=False)
+                new.append(st_)
+            return (self.n(h), new) if carry else self.n(h)
         for i, (mx, mp) in enumerate(zip(self.mix, self.mlp)):
             if getattr(mx, "read_state", 0):
                 o_, st_ = mx(h, mem=mem)

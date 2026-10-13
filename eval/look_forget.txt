@@ -1,0 +1,28 @@
+LOOKUP FINE-TUNE WITHOUT FORGETTING? from /mnt/kv_cache/final_base_v3.pt (bits/byte 1.0143; full lookup fine-tune 1.0933), 2026-10-12 12:31 UTC
+== variant mix
+[   521.0s] done: 4,842 steps, final held-out answer loss 0.0907
+/mnt/kv_cache/lookgold_mix_ft/ckpt.pt: step 4842  BPB 1.0171  (952k bytes)
+-- kinds=new
+10                          60.5% +- 6.8 (n=200)
+30                          59.0% +- 6.8 (n=200)
+60                          60.0% +- 6.8 (n=200)
+120                         50.5% +- 6.9 (n=200)
+-- kinds=old
+10                          92.0% +- 3.8 (n=200)
+30                          95.0% +- 3.0 (n=200)
+60                          95.0% +- 3.0 (n=200)
+120                         88.0% +- 4.5 (n=200)
+== variant 600
+[    91.3s] done: 600 steps, final held-out answer loss 0.1569
+/mnt/kv_cache/lookgold_600_ft/ckpt.pt: step 600  BPB 1.0360  (952k bytes)
+-- kinds=new
+10                          57.5% +- 6.9 (n=200)
+30                          63.5% +- 6.7 (n=200)
+60                          55.5% +- 6.9 (n=200)
+120                         57.5% +- 6.9 (n=200)
+-- kinds=old
+10                          89.0% +- 4.3 (n=200)
+30                          89.0% +- 4.3 (n=200)
+60                          89.5% +- 4.2 (n=200)
+120                         74.0% +- 6.1 (n=200)
+LOOK_FORGET_DONE 2026-10-12 13:11 UTC

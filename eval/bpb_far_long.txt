@@ -1,0 +1,5 @@
+/mnt/kv_cache/final_base_fr382.pt: step 382000  BPB 1.0482  (952k bytes)
+/mnt/kv_cache/far_long/ckpt_s383000.pt: step 383000  BPB 1.0496  (952k bytes)
+/mnt/kv_cache/far_long/ckpt_s384000.pt: step 384000  BPB 1.0514  (952k bytes)
+/mnt/kv_cache/far_long/ckpt_s385000.pt: step 385000  BPB 1.0528  (952k bytes)
+GUARD: peak 5520 MiB of 8 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/final_base_fr382.pt /mnt/kv_cache/far_long/ckpt_s383000.pt /mnt/kv_cache/far_long/ckpt_s384000.pt /mnt/kv_cache/far_long/ckpt_s385000.pt)

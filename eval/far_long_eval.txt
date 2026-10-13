@@ -1,0 +1,28 @@
+FAR LONG EVAL /mnt/kv_cache/far_long/ckpt_s385000.pt, 2026-10-08 10:54 UTC
+[  1208.3s]   eval step 383000: BPB 1.0558  (975k bytes)
+[  2269.9s]   eval step 384000: BPB 1.0576  (975k bytes)
+[  3454.6s]   eval step 385000: BPB 1.0591  (975k bytes)
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book         D=0     D=2,048     D=8,192    D=32,768
+far-long (recall-trained)                50.0%       85.3%       76.0%       70.0%       46.7%
+(95% interval about +-8 points per cell; GPT-2 sees the last 1,024 tokens, SmolLM2 the last 8,192)
+GUARD: peak 5258 MiB of 7 GiB (.venv/bin/python -u eval/openbook.py /mnt/kv_cache/far_long/ckpt_s385000.pt=far-long)
+LEARNING BY READING: 30 invented facts read once, then D tokens of unrelated prose, then a question (4-way, every wrong option another answer from the same facts; chance 25%); 100 questions per cell
+model                              D=8,192    D=32,768
+far-long                             63.0%       74.0%
+(95% interval about +-10 points per cell)
+GUARD: peak 6500 MiB of 7 GiB (.venv/bin/python -u eval/learn_by_reading.py /mnt/kv_cache/far_long/ckpt_s385000.pt=far-long)
+/mnt/kv_cache/far_long/ckpt_s385000.pt (step 385000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance      k=16   (k = far keys each query may recall; 0 = trained)
+   (D=65536 k=16 miss: wanted 284759, wrote ' 28475 introduction the Cuban')
+   65,536     95.8%   (peak GPU allocated 2.84 GiB)
+  131,072    100.0%   (peak GPU allocated 4.31 GiB)
+   (D=262144 k=16 miss: wanted 587381, wrote ' 587 introduction\n\nReferences\n')
+  262,144     87.5%   (peak GPU allocated 7.97 GiB)
+GUARD: peak 12560 MiB of 13 GiB (.venv/bin/python -u eval/recall_test.py /mnt/kv_cache/far_long/ckpt_s385000.pt needle)
+== prediction, 8 paired passages, recall on (store in host memory)
+      8,192 tokens of context: 0.9747 bits/byte over 8 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 0.9834 bits/byte over 8 passages; vs 8,192: +0.0087 +- 0.0349
+    131,072 tokens of context: 1.0437 bits/byte over 8 passages; vs 8,192: +0.0690 +- 0.0301
+FAR_LONG_EVAL_DONE 2026-10-08 11:33 UTC

@@ -1,0 +1,72 @@
+SELF-IMPROVEMENT ROUNDS from /mnt/kv_cache/lookgold_mix_ft/ckpt.pt, 1000 documents per round, 2026-10-12 13:05 UTC
+== round 0 (the start)
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/lookgold_mix_ft/ckpt.pt
+facts in context                         Carrier
+10                          92.4% +- 2.3 (n=500)
+30                          94.6% +- 2.0 (n=500)
+60                          95.0% +- 1.9 (n=500)
+120                         86.4% +- 3.0 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  78.0% +- 7.5   early-mid  74.1% +- 7.4   late-mid  96.0% +- 3.4   latest  98.4% +- 2.3
+-- held-out kinds
+10                          59.6% +- 4.3 (n=500)
+30                          60.0% +- 4.3 (n=500)
+60                          58.0% +- 4.3 (n=500)
+120                         57.0% +- 4.3 (n=500)
+== round 1: documents of 20,40,80 facts, labelled by the model from /mnt/kv_cache/lookgold_mix_ft/ckpt.pt
+  1000/1000 documents: 7344/8000 questions self-labelled (92%), labels right 97.3%  (0.12 doc/s)
+fine-tune format: 299 train + 15 val rows of 4097 tokens, 3.1% of tokens carry loss
+done: 1,000 documents, 7,344 of 8,000 questions self-labelled by >= 2 of 3 orderings; checked afterwards against gold, 97.3% right; 1,072,155 tokens -> /mnt/kv_cache/si_v3_r1/selflabel.bin
+[    42.0s] step 299: answer loss on held-out pairs 0.0877
+[    42.7s] done: 299 steps, final held-out answer loss 0.0880
+== round 1 result
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/si_v3_r1_ft/ckpt.pt
+facts in context                         Carrier
+10                          94.0% +- 2.1 (n=500)
+30                          97.2% +- 1.4 (n=500)
+60                          95.0% +- 1.9 (n=500)
+120                         82.8% +- 3.3 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  68.6% +- 8.4   early-mid  67.4% +- 7.9   late-mid  96.8% +- 3.1   latest  99.2% +- 1.6
+-- held-out kinds
+10                          61.6% +- 4.3 (n=500)
+30                          61.2% +- 4.3 (n=500)
+60                          58.6% +- 4.3 (n=500)
+120                         54.0% +- 4.4 (n=500)
+== round 2: documents of 80,160 facts, labelled by the model from /mnt/kv_cache/si_v3_r1_ft/ckpt.pt
+  1000/1000 documents: 6689/8000 questions self-labelled (84%), labels right 95.0%  (0.11 doc/s)
+fine-tune format: 819 train + 43 val rows of 4097 tokens, 1.0% of tokens carry loss
+done: 1,000 documents, 6,689 of 8,000 questions self-labelled by >= 2 of 3 orderings; checked afterwards against gold, 95.0% right; 2,450,494 tokens -> /mnt/kv_cache/si_v3_r2/selflabel.bin
+[    89.8s] step 819: answer loss on held-out pairs 0.0807
+[    90.9s] done: 819 steps, final held-out answer loss 0.0813
+== round 2 result
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/si_v3_r2_ft/ckpt.pt
+facts in context                         Carrier
+10                          96.6% +- 1.6 (n=500)
+30                          97.6% +- 1.3 (n=500)
+60                          96.8% +- 1.5 (n=500)
+120                         85.2% +- 3.1 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  73.7% +- 7.9   early-mid  71.1% +- 7.6   late-mid  97.6% +- 2.7   latest  99.2% +- 1.6
+-- held-out kinds
+10                          57.4% +- 4.3 (n=500)
+30                          55.2% +- 4.4 (n=500)
+60                          50.0% +- 4.4 (n=500)
+120                         50.8% +- 4.4 (n=500)
+== round 3: documents of 160,320 facts, labelled by the model from /mnt/kv_cache/si_v3_r2_ft/ckpt.pt
+  1000/1000 documents: 6520/8000 questions self-labelled (82%), labels right 89.5%  (0.09 doc/s)
+fine-tune format: 469 train + 24 val rows of 4097 tokens, 0.8% of tokens carry loss
+done: 1,000 documents, 6,520 of 8,000 questions self-labelled by >= 2 of 3 orderings; checked afterwards against gold, 89.5% right; 4,589,207 tokens -> /mnt/kv_cache/si_v3_r3/selflabel.bin
+[    55.1s] step 469: answer loss on held-out pairs 0.1355
+[    55.7s] done: 469 steps, final held-out answer loss 0.1353
+== round 3 result
+POWERED, HARD: 50 contexts per row, up to 10 questions each; chance 25%; /mnt/kv_cache/si_v3_r3_ft/ckpt.pt
+facts in context                         Carrier
+10                          98.0% +- 1.2 (n=500)
+30                          99.0% +- 0.9 (n=500)
+60                          98.4% +- 1.1 (n=500)
+120                         97.0% +- 1.5 (n=500)
+Carrier at 120 facts, by where the fact sits: earliest  94.1% +- 4.3   early-mid  94.8% +- 3.7   late-mid 100.0% +- 0.0   latest  99.2% +- 1.6
+-- held-out kinds
+10                          58.4% +- 4.3 (n=500)
+30                          54.6% +- 4.4 (n=500)
+60                          51.2% +- 4.4 (n=500)
+120                         47.0% +- 4.4 (n=500)
+SI_ROUNDS_DONE 2026-10-12 22:03 UTC

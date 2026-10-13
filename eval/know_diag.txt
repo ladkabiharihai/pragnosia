@@ -1,0 +1,6 @@
+/mnt/kv_cache/know/ckpt_s385000.pt: step 385000  BPB 1.0502  (952k bytes)
+/mnt/kv_cache/know/ckpt_s385000.pt: step 385000  BPB 0.9675  (860k bytes)
+/mnt/kv_cache/know/ckpt_s395000.pt: step 395000  BPB 0.9630  (860k bytes)
+model                              D=8,192    D=32,768
+know-385k-98M                        77.0%       81.0%
+know-395k-168M                       53.0%       62.0%

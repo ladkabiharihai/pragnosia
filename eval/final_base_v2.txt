@@ -1,0 +1,65 @@
+FINAL BASE EVALUATIONS v2: /mnt/kv_cache/final_base_v2.pt, 2026-10-11 11:47 UTC
+  [base-v2] HellaSwag 32.5
+  [base-v2] PIQA 61.7
+  [base-v2] ARC-Easy 44.0
+  [base-v2] ARC-Challenge 25.1
+  [base-v2] OpenBookQA 27.6
+  [base-v2] LAMBADA 18.2
+  [base-v2] GSM8K 0.0 (n=250)
+  [base-v2] facts 75.0  arithmetic 25.0 / exact 0.0  reasoning 43.8
+  [GPT-2 124M] HellaSwag 32.1
+  [GPT-2 124M] PIQA 62.7
+  [GPT-2 124M] ARC-Easy 39.8
+  [GPT-2 124M] ARC-Challenge 22.8
+  [GPT-2 124M] OpenBookQA 25.6
+  [GPT-2 124M] LAMBADA 14.1
+  [GPT-2 124M] GSM8K 0.8 (n=250)
+  [GPT-2 124M] facts 79.2  arithmetic 35.0 / exact 0.0  reasoning 61.2
+  [SmolLM2-135M] HellaSwag 43.5
+  [SmolLM2-135M] PIQA 69.1
+  [SmolLM2-135M] ARC-Easy 58.8
+  [SmolLM2-135M] ARC-Challenge 28.7
+  [SmolLM2-135M] OpenBookQA 32.4
+  [SmolLM2-135M] LAMBADA 23.3
+  [SmolLM2-135M] GSM8K 0.4 (n=250)
+  [SmolLM2-135M] facts 91.7  arithmetic 36.7 / exact 0.0  reasoning 53.2
+
+benchmark                    base-v2      GPT-2 124M    SmolLM2-135M
+HellaSwag                      32.5%           32.1%           43.5%
+PIQA                           61.7%           62.7%           69.1%
+ARC-Easy                       44.0%           39.8%           58.8%
+ARC-Challenge                  25.1%           22.8%           28.7%
+OpenBookQA                     27.6%           25.6%           32.4%
+LAMBADA                        18.2%           14.1%           23.3%
+GSM8K                           0.0%            0.8%            0.4%
+facts (48)                     75.0%           79.2%           91.7%
+arithmetic 4-way               25.0%           35.0%           36.7%
+arithmetic exact                0.0%            0.0%            0.0%
+reasoning (400)                43.8%           61.2%           53.2%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3826 MiB of 7 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/final_base_v2.pt=base-v2)
+/mnt/kv_cache/final_base_v2.pt (step 590000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance      k=16   (k = far keys each query may recall; 0 = trained)
+    4,096    100.0%   (peak GPU allocated 2.62 GiB)
+   16,384    100.0%   (peak GPU allocated 2.62 GiB)
+   65,536    100.0%   (peak GPU allocated 3.74 GiB)
+  131,072    100.0%   (peak GPU allocated 5.74 GiB)
+  262,144    100.0%   (peak GPU allocated 10.74 GiB)
+GUARD: peak 16716 MiB of 17 GiB (.venv/bin/python -u eval/recall_test.py /mnt/kv_cache/final_base_v2.pt needle)
+/mnt/kv_cache/final_base_v2.pt (step 590000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 12 per cell
+ distance      k=16   (k = far keys each query may recall; 0 = trained)
+  524,288    100.0%   (peak GPU allocated 2.96 GiB, the store in host memory)
+1,048,576    100.0%   (peak GPU allocated 2.96 GiB, the store in host memory)
+GUARD: peak 4102 MiB of 4 GiB (.venv/bin/python -u eval/recall_test.py /mnt/kv_cache/final_base_v2.pt needle)
+  kv_cache/final_base_v2.pt recall 0 'The history of the c': 1.15 1.31 1.07 1.01
+  kv_cache/final_base_v2.pt recall 0 'In this paper we stu': 1.53 2.44 1.34 1.07
+  kv_cache/final_base_v2.pt recall 0 'The river rises in t': 0.96 0.95 0.99 0.92
+/mnt/kv_cache/final_base_v2.pt@0: temp 0.85 DRY 0.4: 7/12 segments in band, 0/12 collapsed, median 1.07
+  kv_cache/final_base_v2.pt recall 16 'The history of the c': 1.15 1.30 1.17 0.91
+  kv_cache/final_base_v2.pt recall 16 'In this paper we stu': 1.53 1.77 1.57 1.46
+  kv_cache/final_base_v2.pt recall 16 'The river rises in t': 0.96 1.04 0.70 0.67
+/mnt/kv_cache/final_base_v2.pt: temp 0.85 DRY 0.4: 4/12 segments in band, 0/12 collapsed, median 1.16
+GUARD: peak 5750 MiB of 7 GiB (.venv/bin/python -u eval/lg_check.py /mnt/kv_cache/final_base_v2.pt@0 /mnt/kv_cache/final_base_v2.pt)
+FINAL_BASE_EVALS_DONE 2026-10-11 16:09 UTC

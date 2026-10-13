@@ -33,7 +33,7 @@ KINDS = [  # (fact templates, question templates) over (X, Y)
 ]
 COLOURS = ["red", "blue", "green", "yellow", "purple", "orange", "black", "white", "grey", "brown", "pink", "silver"]
 QA = [("Question: {q} Answer: {a}"), ("Q: {q}\nA: {a}"), ("{q} {a}.")]
-r = random.Random(20260924)
+r = random.Random(20260924 + int(os.environ.get("BUILD_SEED", "0")))   # BUILD_SEED: a fresh draw of the same kind (2026-10-08)
 
 
 def name(n): return "".join(r.choice(SYL) for _ in range(n)).capitalize()
@@ -46,11 +46,23 @@ def value(k):
     return name(2)
 
 
+# MANY KINDS OF FACT (2026-10-12, RECALL_KINDS=many). The six kinds above taught six template-bound lookups: on two kinds no
+# builder writes (rivers into seas, guild leaders; eval/incontext.py INCONTEXT_KINDS=new) the base and the self-improved model
+# are at chance (24-35%), even with 10 facts in plain view, while the trained kinds reach 97%. Here ~400 kinds, built from
+# attributes of typed things and from relations of people, each in several wordings, so what is learned is "find the sentence
+# about this name", not six patterns. A document draws its facts from 1-6 kinds, many names per kind, so a question can only
+# be answered by the name, never by the relation alone. HELD OUT, never written here: rivers, seas, flowing, guilds, leaders /
+# leading, bridges, building, fruit (eval/incontext.py's new kinds and the diagnostic kinds).
+if os.environ.get("RECALL_KINDS") == "many":
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from kinds import many_kinds
+    KINDS, value = many_kinds(name, r)
+
+
 def document():
     n = r.choice([10, 20, 40, 80, 150])
-    facts, used = [], set()
+    facts, used = [], set(); kp = r.sample(range(len(KINDS)), r.choice([1, 2, 3, 4, 6])) if os.environ.get("RECALL_KINDS") == "many" else range(len(KINDS))
     while len(facts) < n:
-        k = r.randrange(len(KINDS)); x = name(r.choice([2, 3]))
+        k = r.choice(kp); x = name(r.choice([2, 3]))
         if x in used: continue
         used.add(x); facts.append((k, x, value(k)))
     lines = [r.choice(KINDS[k][0]).format(X=x, Y=y) for k, x, y in facts]
@@ -127,13 +139,14 @@ if len(sys.argv) > 3 and sys.argv[3] == "farread":
         if x["answers"]["text"]: byctx.setdefault(x["context"], []).append((x["question"].strip(), x["answers"]["text"][0].strip()))
     ctxs = list(byctx)
     src = [np.memmap(f"/mnt/kv_cache/tokfull_v8192/{s_}.bin", dtype=np.uint16, mode="r") for s_ in ("wikipedia", "fineweb-edu")]
-    rn = np.random.default_rng(20261008)
+    rn = np.random.default_rng(20261008 + int(os.environ.get("BUILD_SEED", "0")))
     while total < target:
         ps_ = r.sample(ctxs, r.choice([1, 2, 3, 4, 6]))
         body = tok.encode("\n\n".join(ps_) + "\n\n").ids
         qs = [qa for c in ps_ for qa in byctx[c]]; asked = r.sample(qs, min(len(qs), r.choice([3, 5, 8])))
         qa = tok.encode("\n\n" + "\n".join(r.choice(QA).format(q=q_, a=a_) for q_, a_ in asked)).ids
-        D = int(np.exp(rn.uniform(np.log(512), np.log(16000))))
+        # FARREAD_DMIN / FARREAD_DMAX (2026-10-08): the long-span phase places the paragraphs up to ~56k tokens back
+        D = int(np.exp(rn.uniform(np.log(int(os.environ.get("FARREAD_DMIN", "512"))), np.log(int(os.environ.get("FARREAD_DMAX", "16000"))))))
         sb = src[r.randrange(2)]; o = int(rn.integers(0, len(sb) - 3 * D))
         fill = np.asarray(sb[o:o + 3 * D]); fill = fill[fill != EOD][:D].tolist()
         doc = body + fill + qa + [EOD]
@@ -148,11 +161,11 @@ if len(sys.argv) > 3 and sys.argv[3] == "farlookup":
     # facts. Recall learned single far needles (92% at 32k) but not a fact among 30 look-alikes past its window (22-26%,
     # eval/learn_by_reading.py): no training document ever asked about a list from far away.
     src = [np.memmap(f"/mnt/kv_cache/tokfull_v8192/{s_}.bin", dtype=np.uint16, mode="r") for s_ in ("wikipedia", "fineweb-edu")]
-    rn = np.random.default_rng(20261007)
+    rn = np.random.default_rng(20261007 + int(os.environ.get("BUILD_SEED", "0")))
     while total < target:
-        n = r.choice([10, 20, 30, 40, 60]); facts, used = [], set()
+        n = r.choice([10, 20, 30, 40, 60]); facts, used = [], set(); kp = r.sample(range(len(KINDS)), r.choice([1, 2, 3, 4, 6])) if os.environ.get("RECALL_KINDS") == "many" else range(len(KINDS))
         while len(facts) < n:
-            k = r.randrange(len(KINDS)); x = name(r.choice([2, 3]))
+            k = r.choice(kp); x = name(r.choice([2, 3]))
             if x in used: continue
             used.add(x); facts.append((k, x, value(k)))
         body = tok.encode(" ".join(r.choice(KINDS[k][0]).format(X=x, Y=y) for k, x, y in facts) + "\n\n").ids

@@ -1,0 +1,9 @@
+OPEN-BOOK, the self-improved row re-run (the pipeline's run hit its 6 GiB cap at 32k), 2026-10-12 05:56 UTC
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 5749.77it/s]
+Loading weights:   0%|          | 0/272 [00:00<?, ?it/s]Loading weights: 100%|██████████| 272/272 [00:00<00:00, 7480.55it/s]
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book         D=0     D=2,048     D=8,192    D=32,768
+self-improved-v2 (recall-trained)        54.7%       89.3%       81.3%       79.3%       69.3%
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (2094 > 1024). Running this sequence through the model will result in indexing errors
+GUARD: peak 5020 MiB of 10 GiB (.venv/bin/python -u eval/openbook.py /mnt/kv_cache/si_v2_r3_ft/ckpt.pt=self-improved-v2)

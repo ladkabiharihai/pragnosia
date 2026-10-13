@@ -1,0 +1,29 @@
+MANY-KINDS PROBE: hard four-way lookup, chance 25%, n=200 per row (+-6); new = held-out kinds (rivers, guilds), old = capitals / engines
+== seed-598k kinds=new 06:07 UTC
+10                          34.5% +- 6.6 (n=200)
+30                          22.5% +- 5.8 (n=200)
+60                          29.5% +- 6.3 (n=200)
+120                         26.0% +- 6.1 (n=200)
+== seed-598k kinds=old 06:14 UTC
+10                          69.5% +- 6.4 (n=200)
+30                          55.5% +- 6.9 (n=200)
+60                          47.5% +- 6.9 (n=200)
+120                         47.5% +- 6.9 (n=200)
+== many-602000 kinds=new 07:14 UTC
+10                          35.5% +- 6.6 (n=200)
+30                          24.0% +- 5.9 (n=200)
+60                          31.0% +- 6.4 (n=200)
+120                         27.0% +- 6.2 (n=200)
+== many-602000 kinds=old 07:22 UTC
+10                          71.5% +- 6.3 (n=200)
+30                          57.0% +- 6.9 (n=200)
+60                          49.0% +- 6.9 (n=200)
+120                         55.5% +- 6.9 (n=200)
+== many-606000 kinds=new 08:48 UTC
+10                          36.5% +- 6.7 (n=200)
+30                          24.0% +- 5.9 (n=200)
+60                          32.0% +- 6.5 (n=200)
+120                         27.0% +- 6.2 (n=200)
+== many-606000 kinds=old 09:01 UTC
+== probe loop stopped 09:01 UTC (606k old kinds not measured): pretraining alone does not move the held-out kinds; the lookup fine-tune does (eval/lookgold_test.txt). Pipeline v3 has the side slot.
+MANY-KINDS PROBE: hard four-way lookup, chance 25%, n=200 per row (+-6); new = held-out kinds (rivers, guilds), old = capitals / engines

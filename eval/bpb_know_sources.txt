@@ -1,0 +1,9 @@
+== wikipedia
+/mnt/kv_cache/final_base_fr382.pt: step 382000  BPB 0.9697  (860k bytes)
+/mnt/kv_cache/know/ckpt_s400000.pt: step 400000  BPB 0.9711  (860k bytes)
+== fineweb-edu
+/mnt/kv_cache/final_base_fr382.pt: step 382000  BPB 0.9485  (1028k bytes)
+/mnt/kv_cache/know/ckpt_s400000.pt: step 400000  BPB 0.9611  (1028k bytes)
+== dclm
+/mnt/kv_cache/final_base_fr382.pt: step 382000  BPB 1.1307  (944k bytes)
+/mnt/kv_cache/know/ckpt_s400000.pt: step 400000  BPB 1.1515  (944k bytes)

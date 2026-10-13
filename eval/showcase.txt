@@ -1,0 +1,186 @@
+
+==================== FACTS ====================
+
+Q: What is the capital of Japan?
+   ours (fine-tuned)   'The capital of Japan is Tokyo.'
+   GPT-2 124M          'The capital of Japan is Tokyo.'
+   SmolLM2-135M        'Tokyo.'
+
+Q: What is the capital of Australia?
+   ours (fine-tuned)   'The capital of Australia is Sydney.'
+   GPT-2 124M          'The capital of Australia is the capital of Australia.'
+   SmolLM2-135M        'The capital of Australia is Canberra.'
+
+Q: Who wrote Hamlet?
+   ours (fine-tuned)   'Hamlet is a play written by William Shakespeare'
+   GPT-2 124M          'Hamlet is a character in the novel.'
+   SmolLM2-135M        'Who wrote Hamlet?'
+
+Q: What is the chemical symbol for gold?
+   ours (fine-tuned)   'The chemical symbol for gold is Cu.'
+   GPT-2 124M          'The symbol for gold is the gold-colored gold.'
+   SmolLM2-135M        'Gold is a silvery-white metal.'
+
+Q: Who painted the Mona Lisa?
+   ours (fine-tuned)   'The Mona Lisa was painted by Johannes Braunfeld, who was a Swiss painter.'
+   GPT-2 124M          "I don't know."
+   SmolLM2-135M        'Leonardo da Vinci.'
+
+Q: What is the largest ocean on Earth?
+   ours (fine-tuned)   'The largest ocean on Earth is the Ocean, which is approximately 2.9 billion miles long.'
+   GPT-2 124M          'The largest ocean on Earth is about 1,000 miles (1,000 km) deep.'
+   SmolLM2-135M        'The Atlantic Ocean.'
+
+Q: How many continents are there?
+   ours (fine-tuned)   'There are four continents.'
+   GPT-2 124M          "I don't know."
+   SmolLM2-135M        '10'
+
+Q: At what temperature does water boil at sea level?
+   ours (fine-tuned)   'At sea level.'
+   GPT-2 124M          'At what temperature does water boil at sea level?'
+   SmolLM2-135M        '100 degrees Celsius.'
+
+Q: Who was the first person to walk on the Moon?
+   ours (fine-tuned)   'The first person to walk on the Moon was Johannes Kepler, who died in a crash in 1969.'
+   GPT-2 124M          "I'm not sure."
+   SmolLM2-135M        'Neil Armstrong.'
+
+Q: What gas do plants absorb from the air?
+   ours (fine-tuned)   'Oxygen.'
+   GPT-2 124M          "I don't know."
+   SmolLM2-135M        'Carbon dioxide.'
+
+==================== ARITHMETIC ====================
+
+Q: What is 2 plus 2?
+   ours (fine-tuned)   '1'
+   GPT-2 124M          "I'm not sure."
+   SmolLM2-135M        '4'
+
+Q: What is 7 plus 8?
+   ours (fine-tuned)   '7 plus 8 is equal to 8.'
+   GPT-2 124M          'I am a student at the University of California, Berkeley.'
+   SmolLM2-135M        '10'
+
+Q: What is 15 plus 27?
+   ours (fine-tuned)   '15 is equal to 27.'
+   GPT-2 124M          "I'm a little bit of a nerd."
+   SmolLM2-135M        '15 + 27 = 42.'
+
+Q: What is 9 times 6?
+   ours (fine-tuned)   'The number of times a person has a heart rate of 72.5.'
+   GPT-2 124M          '9 times 6.'
+   SmolLM2-135M        '9 times 6 is 54.'
+
+Q: What is 12 times 12?
+   ours (fine-tuned)   '12 is equal to 2.'
+   GPT-2 124M          '12 times 12.'
+   SmolLM2-135M        '12 times 12 is 144.'
+
+Q: What is 100 minus 37?
+   ours (fine-tuned)   'The number of electrons in a molecule is equal to the number of protons.'
+   GPT-2 124M          "I'm not sure."
+   SmolLM2-135M        '100 minus 37 is 37.'
+
+Q: What is 144 divided by 12?
+   ours (fine-tuned)   '144 divided by 12 is equal to 2.'
+   GPT-2 124M          "It's a number that's divided by 12."
+   SmolLM2-135M        '144 divided by 12 is 12.'
+
+Q: Tom has 3 apples and buys 5 more. How many apples does he have?
+   ours (fine-tuned)   'He has 3 apples.'
+   GPT-2 124M          '1 apple'
+   SmolLM2-135M        '10'
+
+==================== REASONING ====================
+
+Q: All cats are animals. Tom is a cat. Is Tom an animal?
+   ours (fine-tuned)   'Yes, Tom is an animal.'
+   GPT-2 124M          'Yes.'
+   SmolLM2-135M        'Yes, Tom is an animal.'
+
+Q: What comes next in the sequence 2, 4, 6, 8?
+   ours (fine-tuned)   'The sequence of numbers 1, 2, 3, 4, 6, 8.'
+   GPT-2 124M          "I'm going to be the one to pick the first one."
+   SmolLM2-135M        'What comes next in the sequence 2, 4, 6, 8?'
+
+Q: If today is Monday, what day is tomorrow?
+   ours (fine-tuned)   'Tuesday.'
+   GPT-2 124M          'Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, Monday, '
+   SmolLM2-135M        'Monday'
+
+Q: Which is heavier, a kilogram of iron or a kilogram of feathers?
+   ours (fine-tuned)   'The heavier, a kilogram of iron or a kilogram of feathers is approximately 1.989 kilograms.'
+   GPT-2 124M          "I don't know."
+   SmolLM2-135M        'Which is heavier, a kilogram of iron or a kilogram of feathers?'
+
+Q: Anna is taller than Ben, and Ben is taller than Carl. Who is the tallest?
+   ours (fine-tuned)   'Carl is the tallest person in the world, standing at around 8,800 meters.'
+   GPT-2 124M          'Anna is taller than Ben, and Ben is taller than Carl.'
+   SmolLM2-135M        'Anna is taller than Ben, and Ben is taller than Carl.'
+
+Q: If it is raining, the ground gets wet. The ground is dry. Is it raining?
+   ours (fine-tuned)   'Yes, it is raining.'
+   GPT-2 124M          'Yes.'
+   SmolLM2-135M        'Yes.'
+
+==================== EXPLAIN ====================
+
+Q: Why is the sky blue?
+   ours (fine-tuned)   'The sky is blue because of the way light is stretched.'
+   GPT-2 124M          "I'm not sure why the sky blue is blue."
+   SmolLM2-135M        "Because it reflects the sun's light."
+
+Q: What is photosynthesis?
+   ours (fine-tuned)   'Photosynthesis is the process by which plants convert light energy into chemical energy in the form of glucose.'
+   GPT-2 124M          'Photosynthesis is the process of converting carbon dioxide into energy.'
+   SmolLM2-135M        'Photosynthesis is the process by which plants and other organisms use sunlight to make their own food.'
+
+Q: What causes the seasons on Earth?
+   ours (fine-tuned)   "Sun's magnetic field."
+   GPT-2 124M          'The seasons on Earth are the seasons of the Earth.'
+   SmolLM2-135M        "The Earth's axis is tilted 23.5 degrees from the plane of its orbit."
+
+Q: How does a vaccine work?
+   ours (fine-tuned)   "A vaccine works by injecting a small amount of a specific compound (e.g., a vaccine drug) into a body part that is exposed to the body's immune system."
+   GPT-2 124M          'A vaccine is a vaccine that is administered to a person to prevent disease.'
+   SmolLM2-135M        'Vaccines are made up of a combination of proteins that are found on the surface of the virus.'
+
+==================== FREE TEXT (the same opening, 120 tokens, sampled) ====================
+
+PROMPT: 'The history of the city begins'
+   ours (base), temp 0.85, DRY 0.4:
+      'The history of the city begins with the narrative about the city’s history, its emphasis on its cultural achievements and its popular character.\nThe political history of the city is the supporting story of the depiction of a rapid growth that was initiated in the mid-1980s. The city’s predominantly urban character is based on the desperate need to escape the local government-mediated inflationary tightness and the absence of a stable government, which nevertheless created tensions between the city and the growing number of young people and the growing average number of'
+   GPT-2 124M, temp 0.9:
+      "The history of the city begins by the presence of Pier 67 on the edge of downtown Cincinnati. Today, restaurants along the waterfront strip are branded Pier 67 in honor of the historic centerpiece. However, the legacy is all the more puzzling by the fact that the city borders on historic, being the centerpiece of the City of Cincinnati's downtown line. The historic buildings which are located on the edge of downtown Cincinnati Core zone disappear. Base-9 Skyscraper buildings close along the south side of the Mara River. When the area was annexed, a series of neighboring buildings fell, and the predominant view is of the Immaculate Con"
+   SmolLM2-135M, temp 0.9:
+      'The history of the city begins early in the Christian era; Constantine is the first to be named. Constantine makes a brief settlement in the peninsula as a colony under the rule of the Tetrarchs; the emperor Constantius II removes the responsibility for building (or the lack thereof) of the city for the Pensiuni; the city becomes the central centre for Diocletian, with a late-July festival held on Christmas eve as the Christian celebration of Mithra; the city becomes important for the earliest Christianity; Constantine is succeeded by Septimius Severus; in 202 his son and successor,'
+
+PROMPT: 'Photosynthesis is the process by which'
+   ours (base), temp 0.85, DRY 0.4:
+      'Photosynthesis is the process by which plants and animals, in turn, obtain energy from sunlight. The process is referred to as photosynthesis. Autotrophic organisms (such as lichen blooms) convert sunlight energy from sunlight into plant energy and convert it into sugar. The process is known as photosynthesis or photoarchaea. Researchers at the University of Delaware have found that the PEK gene regulates photosynthesis and cell division. These researchers are working to understand and work to develop the cell'
+   GPT-2 124M, temp 0.9:
+      'Photosynthesis is the process by which foods and organisms, like plants and animals, digest nutrients that help to support life. Because their body is tightly wound together in this fashion, plants and organisms consume organic matter called CO2, which also contains sugars. Most plants and animals do not have the sugars for which they grow. Many plants and animals struggle to balance their natural needs, such as flax seed deposits and their use of carbon monoxide. But organic food molecules are absorbed by the body in liquid form during digestion, leading to the synthesis of sugar-rich organic compounds. Plants and animals also taste much more organic matter from herbed'
+   SmolLM2-135M, temp 0.9:
+      "Photosynthesis is the process by which plants and other plants use sunlight to convert carbon dioxide into glucose, a form of sugar. In photosynthesis, a plant uses the energy in sunlight to either:\n\n  • Convert carbon dioxide and water into sugars\n  • Use the energy from these sugars to grow\n  • Wait for a lack of water to occur\n  • Convert the remaining sugar molecules into starches\n\nPlants, such as vegetables, won't die if they lose water, but often they risk losing a lot of sugar. And if they run out of water early on, they may starve. Plants lose about 40% of their sugar reserves"
+
+==================== READING (3 invented facts, 2,000 tokens of unrelated Wikipedia, a question) ====================
+
+Q: What is the capital of Velmora?   (right answer: Drathis)
+   ours (base)         'Drathis'
+   GPT-2 124M          '"The capital of Velmora is the city of the'
+   SmolLM2-135M        'Drathis.'
+
+Q: Who invented the Oskel engine?   (right answer: Mirta Quell)
+   ours (base)         'Mirta Quell'
+   GPT-2 124M          'The Tosefta, the chief of the Tose'
+   SmolLM2-135M        'Rabbi Abbahu.'
+
+Q: What is the code for the Zarn vault?   (right answer: 4719)
+   ours (base)         '4719'
+   GPT-2 124M          '"The Zarn vault is the place where the dead are'
+   SmolLM2-135M        '4719.'
+
+(GPT-2 sees only its last 1,024 tokens here, so the facts are outside its view; SmolLM2 and ours see everything.)
+GUARD: peak 3336 MiB of 8 GiB (.venv/bin/python -u eval/showcase.py /mnt/kv_cache/final_far_sft/ckpt.pt /mnt/kv_cache/final_base_fr382.pt)

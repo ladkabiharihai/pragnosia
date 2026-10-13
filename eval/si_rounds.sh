@@ -6,25 +6,31 @@
 #   learn  src/sft.py on its own labelled documents, the loss on its answers only (a fine-tune that fits beside training)
 #   test   eval/incontext.py powered: the held-out hard lookup test (other names, other wording, every distractor from the
 #          same context), 10 / 30 / 60 / 120 facts, 500 questions each
-# Every step under eval/guarded.sh 6 (one side job at a time, killed past 6 GiB).
+# SI_KINDS=many: label documents of eval/kinds.py's ~381 kinds (eval/selfimprove.py). Every step under eval/guarded.sh 6 (one side job at a time, killed past 6 GiB).
 # usage: eval/si_rounds.sh <start ckpt> [docs per round] [tag: outputs eval/si_rounds<tag>.txt, /mnt/kv_cache/si<tag>_r*]
 set -u
 cd "$(dirname "$0")/.."
-CK=$1; ND=${2:-1000}; TAG=${3:-}; P=.venv/bin/python; O=eval/si_rounds$TAG.txt; G="eval/guarded.sh 6"
+CK=$1; ND=${2:-1000}; TAG=${3:-}; P=.venv/bin/python; O=eval/si_rounds$TAG.txt; G="eval/guarded.sh ${SI_GUARD:-6}"
 echo "SELF-IMPROVEMENT ROUNDS from $CK, $ND documents per round, $(date -u '+%Y-%m-%d %H:%M UTC')" > $O
 echo "== round 0 (the start)" >> $O
-MEMBRAE_CAP_MAX=6 INCONTEXT_GPT2=0 $G $P eval/incontext.py $CK powered 2>&1 | grep -vE "Warning|^\[gpu\]|GUARD" >> $O
+MEMBRAE_CAP_MAX=${SI_CAP:-6} INCONTEXT_GPT2=0 $G $P eval/incontext.py $CK powered 2>&1 | grep -vE "Warning|^\[gpu\]|GUARD" >> $O
+# HELD-OUT KINDS (2026-10-12): the same test over two kinds no builder and no round writes (rivers into seas, guild leaders)
+newk () { echo "-- held-out kinds" >> $O; MEMBRAE_CAP_MAX=${SI_CAP:-6} INCONTEXT_KINDS=new INCONTEXT_GPT2=0 $G $P eval/incontext.py $1 powered 2>&1 | grep -E "^(10|30|60|120) " >> $O; }
+newk $CK
 r=0
 for F in "20,40,80" "80,160" "160,320"; do
   r=$((r + 1)); D=/mnt/kv_cache/si${TAG}_r$r; rm -rf $D ${D}_ft; mkdir -p $D
   echo "== round $r: documents of $F facts, labelled by the model from $CK" >> $O
-  MEMBRAE_CAP_MAX=6 SI_FACTS=$F $G $P -u eval/selfimprove.py lookup $CK $D $ND 2>&1 | grep -vE "Warning|^\[gpu\]|GUARD" | tail -3 >> $O
+  MEMBRAE_CAP_MAX=${SI_CAP:-6} SI_FACTS=$F $G $P -u eval/selfimprove.py lookup $CK $D $ND 2>&1 | grep -vE "Warning|^\[gpu\]|GUARD" | tail -3 >> $O
   GATE=$(grep -oE "against gold, [0-9.]+% right" $O | tail -1 | grep -oE "[0-9.]+" | head -1)
   if [ -z "$GATE" ] || [ "$(echo "$GATE < 50" | bc)" = 1 ]; then echo "GATE FAILED at round $r: labels $GATE% right; stopping" >> $O; break; fi
-  MEMBRAE_CAP_MAX=6 $G $P -m src.sft --init $CK --out ${D}_ft --data $D --optim psf --epochs 1 --batch 1 --row 4097 --cap 6 2>&1 | grep -E "held-out|done" | tail -2 >> $O
+  MEMBRAE_CAP_MAX=${SI_CAP:-6} $G $P -m src.sft --init $CK --out ${D}_ft --data $D --optim psf --epochs 1 --batch 1 --row 4097 --cap ${SI_CAP:-6} 2>&1 | grep -E "held-out|done" | tail -2 >> $O
   [ -f ${D}_ft/ckpt.pt ] || { echo "round $r fine-tune failed" >> $O; break; }
+  # a diverged fine-tune (non-finite weights) ends the rounds (2026-10-12: one replay lookup fine-tune went to NaN)
+  $P -c "import torch,sys; m=torch.load(sys.argv[1],map_location='cpu',weights_only=False); m=m.get('model',m); sys.exit(0 if all(torch.isfinite(v).all() for v in m.values() if torch.is_tensor(v) and v.is_floating_point()) else 1)" ${D}_ft/ckpt.pt || { echo "round $r fine-tune DIVERGED (non-finite weights); stopping" >> $O; break; }
   CK=${D}_ft/ckpt.pt
   echo "== round $r result" >> $O
-  MEMBRAE_CAP_MAX=6 INCONTEXT_GPT2=0 $G $P eval/incontext.py $CK powered 2>&1 | grep -vE "Warning|^\[gpu\]|GUARD" >> $O
+  MEMBRAE_CAP_MAX=${SI_CAP:-6} INCONTEXT_GPT2=0 $G $P eval/incontext.py $CK powered 2>&1 | grep -vE "Warning|^\[gpu\]|GUARD" >> $O
+  newk $CK
 done
 echo "SI_ROUNDS_DONE $(date -u '+%Y-%m-%d %H:%M UTC')" >> $O

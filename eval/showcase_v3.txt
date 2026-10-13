@@ -1,0 +1,151 @@
+SHOWCASE 2026-10-12 12:26 UTC: Q&A = /mnt/kv_cache/final_v2_sft (the latest factual fine-tune: 590k, self-improved round 3); free text + reading = the latest training checkpoint (many-kinds run 616k, base, no fine-tune); never-seen kinds = /mnt/kv_cache/final_v3_look (604k + lookup fine-tune over 381 kinds)
+
+==================== FACTS ====================
+
+Q: What is the capital of Japan?
+   ours (fine-tuned)   'Tokyo is the capital of Japan.'
+
+Q: What is the capital of Australia?
+   ours (fine-tuned)   'The capital of Australia is Darwin.'
+
+Q: Who wrote Hamlet?
+   ours (fine-tuned)   'The name of the famous play written by William Shakespeare is Hamlet.'
+
+Q: What is the chemical symbol for gold?
+   ours (fine-tuned)   'The chemical symbol for gold is Au.'
+
+Q: Who painted the Mona Lisa?
+   ours (fine-tuned)   'The Mona Lisa was painted by Leonardo da Vinci in 1509-1510.'
+
+Q: What is the largest ocean on Earth?
+   ours (fine-tuned)   'The largest ocean on Earth is the ocean with a length of about 3,800 kilometers.'
+
+Q: How many continents are there?
+   ours (fine-tuned)   'There are 7 continents.'
+
+Q: At what temperature does water boil at sea level?
+   ours (fine-tuned)   'The boiling point of water is 100°C.'
+
+Q: Who was the first person to walk on the Moon?
+   ours (fine-tuned)   'The first person to walk on the Moon was Albert Einstein, who was a physicist and astronomer.'
+
+Q: What gas do plants absorb from the air?
+   ours (fine-tuned)   'Carbon dioxide.'
+
+==================== ARITHMETIC ====================
+
+Q: What is 2 plus 2?
+   ours (fine-tuned)   '4.'
+
+Q: What is 7 plus 8?
+   ours (fine-tuned)   '9'
+
+Q: What is 15 plus 27?
+   ours (fine-tuned)   '41'
+
+Q: What is 9 times 6?
+   ours (fine-tuned)   '9 times 6 is 54.'
+
+Q: What is 12 times 12?
+   ours (fine-tuned)   '12 is equal to 224.'
+
+Q: What is 100 minus 37?
+   ours (fine-tuned)   'The answer is 53.'
+
+Q: What is 144 divided by 12?
+   ours (fine-tuned)   '144 divided by 12 is 12.'
+
+Q: Tom has 3 apples and buys 5 more. How many apples does he have?
+   ours (fine-tuned)   'Tom has 3 apples.'
+
+==================== REASONING ====================
+
+Q: All cats are animals. Tom is a cat. Is Tom an animal?
+   ours (fine-tuned)   'Yes, Tom is an animal.'
+
+Q: What comes next in the sequence 2, 4, 6, 8?
+   ours (fine-tuned)   'The sequence 2, 4, 6, 8 is a sequence of three numbers.'
+
+Q: If today is Monday, what day is tomorrow?
+   ours (fine-tuned)   'Tuesday'
+
+Q: Which is heavier, a kilogram of iron or a kilogram of feathers?
+   ours (fine-tuned)   'The heaviest of the three is a kilogram.'
+
+Q: Anna is taller than Ben, and Ben is taller than Carl. Who is the tallest?
+   ours (fine-tuned)   'Carl is the tallest person in the world.'
+
+Q: If it is raining, the ground gets wet. The ground is dry. Is it raining?
+   ours (fine-tuned)   'Yes, it is raining.'
+
+==================== EXPLAIN ====================
+
+Q: Why is the sky blue?
+   ours (fine-tuned)   'Blue is the sky blue.'
+
+Q: What is photosynthesis?
+   ours (fine-tuned)   'Photosynthesis.'
+
+Q: What causes the seasons on Earth?
+   ours (fine-tuned)   "Earth's climate is a complex system of interactions between the atmosphere, land, and oceans."
+
+Q: How does a vaccine work?
+   ours (fine-tuned)   'A vaccine works by stimulating the immune system to produce specific antibodies against a particular pathogen.'
+
+==================== FREE TEXT (the same opening, 120 tokens, sampled) ====================
+
+PROMPT: 'The history of the city begins'
+   ours (base), temp 0.85, DRY 0.4:
+      "The history of the city begins with the narrative about the founding of the district. The settlement here was actually founded in 1819 but was submitted to the city council in 1830 by Governor Pike, who spoke on the subject.\nThe first post office\nThe Ligneuter was first settled in 1818 and was named for John Ligneuter. Ligneuter's first postmaster was William Pike (1811–1876), who was from the district. Ligneuter developed a larger and more profitable city than"
+
+PROMPT: 'Photosynthesis is the process by which'
+   ours (base), temp 0.85, DRY 0.4:
+      'Photosynthesis is the process by which plants utilize carbon dioxide to produce oxygen. It is what eventually turns all the carbohydrates in the plant into sugars; it is the mechanism that gives the plant its energy for photosynthesis.\nThe first steps in photosynthesis are predominantly the process of respiration, which is the process by which green plants use oxygen to synthesize energy. The mechanism of respiration is regulated by several factors, including the concentration of electrons and photosynthetic rate. The rate at which the cell'
+
+==================== READING (3 invented facts, 2,000 tokens of unrelated Wikipedia, a question) ====================
+
+Q: What is the capital of Velmora?   (right answer: Drathis)
+   ours (base)         'Zarn'
+
+Q: Who invented the Oskel engine?   (right answer: Mirta Quell)
+   ours (base)         'Moxnar Fenbax'
+
+Q: What is the code for the Zarn vault?   (right answer: 4719)
+   ours (base)         '4719'
+
+==================== KINDS OF FACT IT NEVER SAW (10 invented facts read, then a question; greedy) ====================
+
+Q: Into which sea does the Linisozor river flow?   (right answer: Isorum)
+   ours (base)           'the Kallinlin River'
+   ours (lookup-tuned)   'the Linisozor'
+
+Q: Into which sea does the Queldraiso river flow?   (right answer: Mirquel)
+   ours (base)           'the Bredra Sea'
+   ours (lookup-tuned)   'Brevel Sea'
+
+Q: Who is the leader of the Arthnthkal guild?   (right answer: Oskquel Brequel)
+   ours (base)           'Mirtan Dramir'
+   ours (lookup-tuned)   'Oskquel Breqel'
+
+Q: Who is the leader of the Oskisoquel guild?   (right answer: Oskbre Oskmir)
+   ours (base)           'Isorum Valin'
+   ours (lookup-tuned)   'Vaarth Ntharth'
+
+Q: Who built the Dramirquel bridge?   (right answer: Linarth Velvel)
+   ours (base)           'Isova Vadra'
+   ours (lookup-tuned)   'Linarth Velvel'
+
+Q: Who built the Linmirrum bridge?   (right answer: Veltan Mirosk)
+   ours (base)           'Tandra Brelin'
+   ours (lookup-tuned)   'Veltan Mirosk'
+
+Q: What is the favourite fruit of Mirarthbre?   (right answer: Quelkal)
+   ours (base)           'Kalrum'
+   ours (lookup-tuned)   'Quelkal'
+
+Q: What is the favourite fruit of Arthkalosk?   (right answer: Kalvel)
+   ours (base)           'Isomir'
+   ours (lookup-tuned)   'Kalvel'
+
+The favourite fruit of Isoquelquel is Brezor. The favourite fruit of Linbretan is Nthiso. The favourite fruit of Isovalin is Tandra. The favourite fruit of Isovelmir is Isova. The favourite fruit of Velbrenth is Mirva. The favourite fruit of Tanmirbre is Kalva. The favourite fruit of Velbreosk is Quellin. The favourite fruit of Arthvelkal is Isomir. The favourite fruit of Arthkalosk is Kalvel. The ...   (the last context, as the models read it)
+GUARD: peak 4200 MiB of 8 GiB (.venv/bin/python -u eval/showcase.py /mnt/kv_cache/final_v2_sft/ckpt.pt /mnt/kv_cache/many/ckpt_s616000.pt)

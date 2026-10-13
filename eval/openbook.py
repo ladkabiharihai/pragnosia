@@ -7,7 +7,7 @@ tokens, SmolLM2 its last 8,192, ours all of it (window by window, the state carr
 usage: eval/openbook.py <ckpt>[=label][+recall] ...      N=<questions per cell, default 150>"""
 import os, sys, glob, random, warnings; warnings.filterwarnings("ignore"); sys.path.insert(0, "/opt/code/membrae")
 from src.common import cap_gpu
-cap_gpu(6.0)
+cap_gpu(float(os.environ.get("OPENBOOK_CAP", "6.0")))  # OPENBOOK_CAP (2026-10-12): the self-improved row hit 6 GiB at 32k
 import numpy as np, torch, datasets
 from src.bench import Ours
 N = int(os.environ.get("N", "150")); DIST = [int(d) for d in os.environ.get("DIST", "0,2048,8192,32768").split(",")]
@@ -74,6 +74,7 @@ def options(r): return [r["correct_answer"], r["distractor1"], r["distractor2"],
 
 HFS = [("gpt2", "GPT-2 124M"), ("HuggingFaceTB/SmolLM2-135M", "SmolLM2-135M")]
 if os.environ.get("ONLY_HF"): HFS = [h for h in HFS if os.environ["ONLY_HF"] in h[0]]
+if os.environ.get("OPENBOOK_HF") == "0": HFS = []        # (2026-10-12) the baselines' rows are measured already; ours only
 models = [OursM(s) for s in sys.argv[1:]] + [HF(n, l) for n, l in HFS]
 print(f"OPEN-BOOK SciQ: {N} test questions per cell, the answering paragraph D tokens (ours) before the question among "
       f"real science paragraphs; 4-way, chance 25%")

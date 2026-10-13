@@ -1,0 +1,25 @@
+GOAL 2 BATTERY v1 (human comparison; eval/cognitive.py), 2026-10-13 07:04 UTC
+
+######## base-604k (/mnt/kv_cache/final_base_v3.pt); N=40 per cell
+DIGIT SPAN       forward 15, backward 2   (humans ~7 / ~5)   by length F 3:90 4:80 5:90 6:60 7:100 8:80 9:100 10:100 11:90 12:70 13:90 14:90 15:90  B 3:10 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:0 12:0 13:0 14:0 15:0
+FREE RECALL      by position 1-15: 65 65 55 65 60 50 55 55 50 45 50 45 45 50 50   first3 62 / middle 51 / last3 48   (humans U-shaped)
+2-BACK           50.0% right   (humans ~90; chance 50)
+WASON abstract   right 0%, matching (P and Q) 0%, P only 0%, all 100%   (humans ~10% right)
+WASON social     right 0%, matching 0%, P only 0%, all 100%   (humans ~75% right)
+BELIEF BIAS      accepted: valid-believable 0, valid-unbelievable 0, invalid-believable 0, invalid-unbelievable 0   (humans 89 / 56 / 71 / 10)
+CRT              right 2%, intuitive error 55%   (humans ~41% right, most errors intuitive; chance 25)
+CONJUNCTION      'A and B' judged more probable: 50%   (humans ~85; chance 50)
+FALSE BELIEF     false-belief stories 35% right, true-belief controls 48%   (adults ~100 / ~100; chance 50)
+
+######## finetuned-v3 (/mnt/kv_cache/final_v3_sft/ckpt.pt); N=40 per cell
+DIGIT SPAN       forward 13, backward 2   (humans ~7 / ~5)   by length F 3:30 4:10 5:20 6:30 7:20 8:40 9:30 10:50 11:50 12:60 13:50 14:40 15:10  B 3:0 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:0 12:0 13:0 14:0 15:0
+FREE RECALL      by position 1-15: 100 100 95 90 85 80 80 80 70 75 75 70 75 80 75   first3 98 / middle 77 / last3 77   (humans U-shaped)
+2-BACK           45.0% right   (humans ~90; chance 50)
+WASON abstract   right 0%, matching (P and Q) 0%, P only 0%, all 100%   (humans ~10% right)
+WASON social     right 0%, matching 0%, P only 0%, all 100%   (humans ~75% right)
+BELIEF BIAS      accepted: valid-believable 0, valid-unbelievable 2, invalid-believable 2, invalid-unbelievable 8   (humans 89 / 56 / 71 / 10)
+CRT              right 0%, intuitive error 48%   (humans ~41% right, most errors intuitive; chance 25)
+CONJUNCTION      'A and B' judged more probable: 50%   (humans ~85; chance 50)
+FALSE BELIEF     false-belief stories 40% right, true-belief controls 45%   (adults ~100 / ~100; chance 50)
+GUARD: peak 3650 MiB of 7 GiB (.venv/bin/python -u eval/cognitive.py /mnt/kv_cache/final_base_v3.pt=base-604k /mnt/kv_cache/final_v3_sft/ckpt.pt=finetuned-v3)
+COGNITIVE_DONE

@@ -1,0 +1,203 @@
+==================== start-382k (/mnt/kv_cache/final_base_fr382.pt), 2026-10-08 12:59 UTC
+/mnt/kv_cache/final_base_fr382.pt: step 382000  BPB 1.0482  (952k bytes)
+GUARD: peak 5408 MiB of 7 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/final_base_fr382.pt)
+
+benchmark                 start-382k
+HellaSwag                      30.6%
+PIQA                           60.4%
+ARC-Easy                       41.8%
+ARC-Challenge                  25.6%
+OpenBookQA                     25.4%
+LAMBADA                        16.8%
+GSM8K                           2.0%
+facts (48)                     66.7%
+arithmetic 4-way                8.3%
+arithmetic exact                0.0%
+reasoning (400)                42.2%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 2696 MiB of 7 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/final_base_fr382.pt=start-382k)
+model                              D=8,192    D=32,768
+start-382k                           87.0%       89.0%
+KNOW_PROBE_DONE 2026-10-08 18:00 UTC
+==================== know-400000 (/mnt/kv_cache/know/ckpt_s400000.pt), 2026-10-09 11:20 UTC
+[eval] out of memory; retrying at batch 2
+/mnt/kv_cache/know/ckpt_s400000.pt: step 400000  BPB 1.0721  (974k bytes)
+GUARD: peak 6808 MiB of 7 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/know/ckpt_s400000.pt)
+
+benchmark                know-400000
+HellaSwag                      29.6%
+PIQA                           61.4%
+ARC-Easy                       41.4%
+ARC-Challenge                  27.4%
+OpenBookQA                     25.0%
+LAMBADA                        16.2%
+GSM8K                           2.0%
+facts (48)                     72.9%
+arithmetic 4-way               26.7%
+arithmetic exact                3.3%
+reasoning (400)                40.8%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3654 MiB of 7 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/know/ckpt_s400000.pt=know-400000)
+model                              D=8,192    D=32,768
+know-400000                          59.0%       67.0%
+==================== know-420000 (/mnt/kv_cache/know/ckpt_s420000.pt), 2026-10-09 16:15 UTC
+/mnt/kv_cache/know/ckpt_s420000.pt: step 420000  BPB 1.0725  (952k bytes)
+GUARD: peak 3324 MiB of 7 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/know/ckpt_s420000.pt)
+
+benchmark                know-420000
+HellaSwag                      30.4%
+PIQA                           61.0%
+ARC-Easy                       39.4%
+ARC-Challenge                  24.6%
+OpenBookQA                     28.8%
+LAMBADA                        15.6%
+GSM8K                           0.8%
+facts (48)                     68.8%
+arithmetic 4-way               46.7%
+arithmetic exact                8.3%
+reasoning (400)                39.5%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3654 MiB of 7 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/know/ckpt_s420000.pt=know-420000)
+model                              D=8,192    D=32,768
+know-420000                          68.0%       60.0%
+==================== know-440000 (/mnt/kv_cache/know/ckpt_s440000.pt), 2026-10-09 21:00 UTC
+/mnt/kv_cache/know/ckpt_s440000.pt: step 440000  BPB 1.0738  (952k bytes)
+GUARD: peak 3324 MiB of 7 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/know/ckpt_s440000.pt)
+
+benchmark                know-440000
+HellaSwag                      32.4%
+PIQA                           62.0%
+ARC-Easy                       41.0%
+ARC-Challenge                  24.8%
+OpenBookQA                     28.2%
+LAMBADA                        14.8%
+GSM8K                           1.6%
+facts (48)                     70.8%
+arithmetic 4-way               48.3%
+arithmetic exact                8.3%
+reasoning (400)                40.2%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3654 MiB of 7 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/know/ckpt_s440000.pt=know-440000)
+model                              D=8,192    D=32,768
+know-440000                          66.0%       70.0%
+==================== know-480000 (/mnt/kv_cache/know/ckpt_s480000.pt), 2026-10-10 06:06 UTC
+/mnt/kv_cache/know/ckpt_s480000.pt: step 480000  BPB 1.0475  (952k bytes)
+GUARD: peak 3324 MiB of 7 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/know/ckpt_s480000.pt)
+
+benchmark                know-480000
+HellaSwag                      32.8%
+PIQA                           59.2%
+ARC-Easy                       40.0%
+ARC-Challenge                  24.8%
+OpenBookQA                     27.0%
+LAMBADA                        16.2%
+GSM8K                           1.2%
+facts (48)                     70.8%
+arithmetic 4-way               53.3%
+arithmetic exact                1.7%
+reasoning (400)                46.0%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3654 MiB of 7 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/know/ckpt_s480000.pt=know-480000)
+model                              D=8,192    D=32,768
+know-480000                          34.0%       36.0%
+==================== know-500000 (/mnt/kv_cache/know/ckpt_s500000.pt), 2026-10-10 10:37 UTC
+/mnt/kv_cache/know/ckpt_s500000.pt: step 500000  BPB 1.0401  (952k bytes)
+GUARD: peak 3324 MiB of 7 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/know/ckpt_s500000.pt)
+
+benchmark                know-500000
+HellaSwag                      31.8%
+PIQA                           60.4%
+ARC-Easy                       41.0%
+ARC-Challenge                  25.6%
+OpenBookQA                     27.4%
+LAMBADA                        17.4%
+GSM8K                           3.2%
+facts (48)                     75.0%
+arithmetic 4-way               55.0%
+arithmetic exact                1.7%
+reasoning (400)                37.5%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3654 MiB of 7 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/know/ckpt_s500000.pt=know-500000)
+model                              D=8,192    D=32,768
+know-500000                          40.0%       30.0%
+==================== know-520000 (/mnt/kv_cache/know/ckpt_s520000.pt), 2026-10-10 15:12 UTC
+/mnt/kv_cache/know/ckpt_s520000.pt: step 520000  BPB 1.0289  (952k bytes)
+GUARD: peak 3324 MiB of 7 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/know/ckpt_s520000.pt)
+
+benchmark                know-520000
+HellaSwag                      32.6%
+PIQA                           62.2%
+ARC-Easy                       42.6%
+ARC-Challenge                  25.2%
+OpenBookQA                     26.8%
+LAMBADA                        18.8%
+GSM8K                           2.8%
+facts (48)                     72.9%
+arithmetic 4-way               48.3%
+arithmetic exact                5.0%
+reasoning (400)                43.8%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3654 MiB of 7 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/know/ckpt_s520000.pt=know-520000)
+model                              D=8,192    D=32,768
+know-520000                          50.0%       40.0%
+==================== know-540000 (/mnt/kv_cache/know/ckpt_s540000.pt), 2026-10-10 20:22 UTC
+/mnt/kv_cache/know/ckpt_s540000.pt: step 540000  BPB 1.0271  (952k bytes)
+GUARD: peak 3324 MiB of 7 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/know/ckpt_s540000.pt)
+
+benchmark                know-540000
+HellaSwag                      31.8%
+PIQA                           62.2%
+ARC-Easy                       41.6%
+ARC-Challenge                  26.0%
+OpenBookQA                     27.6%
+LAMBADA                        18.8%
+GSM8K                           1.6%
+facts (48)                     70.8%
+arithmetic 4-way               45.0%
+arithmetic exact               10.0%
+reasoning (400)                41.5%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3654 MiB of 7 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/know/ckpt_s540000.pt=know-540000)
+model                              D=8,192    D=32,768
+know-540000                          50.0%       42.0%
+==================== know-560000 (/mnt/kv_cache/know/ckpt_s560000.pt), 2026-10-11 00:51 UTC
+/mnt/kv_cache/know/ckpt_s560000.pt: step 560000  BPB 1.0204  (952k bytes)
+GUARD: peak 3324 MiB of 7 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/know/ckpt_s560000.pt)
+
+benchmark                know-560000
+HellaSwag                      32.8%
+PIQA                           64.0%
+ARC-Easy                       40.6%
+ARC-Challenge                  23.8%
+OpenBookQA                     27.0%
+LAMBADA                        20.4%
+GSM8K                           0.8%
+facts (48)                     81.2%
+arithmetic 4-way               41.7%
+arithmetic exact                8.3%
+reasoning (400)                41.0%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3654 MiB of 7 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/know/ckpt_s560000.pt=know-560000)
+model                              D=8,192    D=32,768
+know-560000                          43.0%       40.0%
+==================== know-580000 (/mnt/kv_cache/know/ckpt_s580000.pt), 2026-10-11 05:16 UTC
+/mnt/kv_cache/know/ckpt_s580000.pt: step 580000  BPB 1.0194  (952k bytes)
+GUARD: peak 3324 MiB of 7 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/know/ckpt_s580000.pt)
+
+benchmark                know-580000
+HellaSwag                      31.8%
+PIQA                           62.0%
+ARC-Easy                       41.4%
+ARC-Challenge                  25.0%
+OpenBookQA                     26.6%
+LAMBADA                        19.8%
+GSM8K                           0.8%
+facts (48)                     75.0%
+arithmetic 4-way               38.3%
+arithmetic exact                1.7%
+reasoning (400)                43.0%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3654 MiB of 7 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/know/ckpt_s580000.pt=know-580000)
+model                              D=8,192    D=32,768
+know-580000                          41.0%       42.0%
+KNOW_PROBE stopped 2026-10-11 08:32 UTC: the knowledge run ended at ~595,000 (restore from 590,000)

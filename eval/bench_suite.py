@@ -24,10 +24,10 @@ def arrow(pat):
     return [r for f in fs for r in datasets.Dataset.from_file(f)]
 
 class HF:
-    def __init__(self, name, lab):
+    def __init__(self, name, lab, revision=None):
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        self.tok = AutoTokenizer.from_pretrained(name, cache_dir="/mnt/kv_cache/hf_cache")
-        self.m = AutoModelForCausalLM.from_pretrained(name, cache_dir="/mnt/kv_cache/hf_cache", torch_dtype=torch.bfloat16).cuda().eval()
+        self.tok = AutoTokenizer.from_pretrained(name, cache_dir="/mnt/kv_cache/hf_cache", revision=revision)
+        self.m = AutoModelForCausalLM.from_pretrained(name, cache_dir="/mnt/kv_cache/hf_cache", torch_dtype=torch.bfloat16, revision=revision).cuda().eval()
         self.lab = lab; self.max_ctx = getattr(self.m.config, "max_position_embeddings", 1024)
     def encode(self, t): return self.tok.encode(t)
     def decode(self, ids): return self.tok.decode(ids)
@@ -100,7 +100,11 @@ def suite():
 
 B, LB, GS, SHOTS = suite()
 models = [OursM(a.split("=")[0], a.split("=")[1] if "=" in a else os.path.basename(a)) for a in sys.argv[1:]] + \
-         [HF("gpt2", "GPT-2 124M"), HF("HuggingFaceTB/SmolLM2-135M", "SmolLM2-135M")]
+         ([HF("gpt2", "GPT-2 124M"), HF("HuggingFaceTB/SmolLM2-135M", "SmolLM2-135M")] if os.environ.get("BENCH_HF", "1") != "0" else []) + \
+         [HF(e.split("=")[0].split("@")[0], e.split("=")[1], e.split("=")[0].split("@")[1] if "@" in e.split("=")[0] else None)
+          for e in os.environ.get("BENCH_EXTRA", "").split(";") if e]
+# BENCH_EXTRA (2026-10-12; user: compare at equal data): "repo[@revision]=label;..." -- e.g. Pythia-160M's checkpoints during its
+# training (EleutherAI/pythia-160m@step19000 = 19,000 x 2,097,152 = 39.8B tokens, the tokens our 604k checkpoint has seen)
 rows = {}
 for M in models:
     r = {}

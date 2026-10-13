@@ -1,0 +1,3 @@
+FINAL PIPELINE v2 v3 from /mnt/kv_cache/final_base_v3.pt, 2026-10-12 12:53 UTC
+== lookup fine-tune over many kinds (gold answers; /mnt/kv_cache/lookgold_mix) from /mnt/kv_cache/final_base_v3.pt
+[   624.0s] done: 4,842 steps, final held-out answer loss nan

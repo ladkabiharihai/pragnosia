@@ -1,0 +1,5 @@
+/mnt/kv_cache/final_base_v3.pt: step 604000  BPB 1.0143  (952k bytes)
+/mnt/kv_cache/final_v3_look/ckpt.pt: step 2421  BPB 1.0933  (952k bytes)
+/mnt/kv_cache/final_base_v2.pt: step 590000  BPB 1.0173  (952k bytes)
+/mnt/kv_cache/si_v2_r3_ft/ckpt.pt: step 472  BPB 1.0222  (952k bytes)
+GUARD: peak 3324 MiB of 8 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/final_base_v3.pt /mnt/kv_cache/final_v3_look/ckpt.pt /mnt/kv_cache/final_base_v2.pt /mnt/kv_cache/si_v2_r3_ft/ckpt.pt)

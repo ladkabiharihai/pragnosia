@@ -1,0 +1,32 @@
+CHANCE-RISE CORRECTION N0=8192 on /mnt/kv_cache/final_base_fr382.pt, 2026-10-08 08:27 UTC
+/mnt/kv_cache/final_base_fr382.pt (step 382000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance      k=16   (k = far keys each query may recall; 0 = trained)
+   (D=131072 k=16 miss: wanted 812990, wrote ' 99589 introduction the first time')
+  131,072     41.7%   (peak GPU allocated 2.39 GiB, the store in host memory)
+   (D=262144 k=16 miss: wanted 922077, wrote ' 893853 introduction.\n\n')
+  262,144      8.3%   (peak GPU allocated 2.39 GiB, the store in host memory)
+GUARD: peak 3414 MiB of 4 GiB (.venv/bin/python -u eval/recall_test.py /mnt/kv_cache/final_base_fr382.pt needle)
+LEARNING BY READING: 30 invented facts read once, then D tokens of unrelated prose, then a question (4-way, every wrong option another answer from the same facts; chance 25%); 100 questions per cell
+model                              D=8,192    D=32,768
+fr382-evc                            87.0%       90.0%
+(95% interval about +-10 points per cell)
+GUARD: peak 4810 MiB of 7 GiB (.venv/bin/python -u eval/learn_by_reading.py /mnt/kv_cache/final_base_fr382.pt=fr382-evc)
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book     D=8,192    D=32,768
+fr382-evc (recall-trained)               51.3%       74.0%       44.7%
+(95% interval about +-8 points per cell; GPT-2 sees the last 1,024 tokens, SmolLM2 the last 8,192)
+GUARD: peak 5258 MiB of 7 GiB (.venv/bin/python -u eval/openbook.py /mnt/kv_cache/final_base_fr382.pt=fr382-evc)
+== prediction, 8 paired passages, RECALL_EVC=8192 (recall on, store in host memory)
+      8,192 tokens of context: 0.9739 bits/byte over 8 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 0.9761 bits/byte over 8 passages; vs 8,192: +0.0022 +- 0.0271
+    131,072 tokens of context: 1.0167 bits/byte over 8 passages; vs 8,192: +0.0428 +- 0.0252
+== prediction, 8 paired passages, RECALL_EVC=0 (recall on, store in host memory)
+      8,192 tokens of context: 0.9739 bits/byte over 8 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 0.9735 bits/byte over 8 passages; vs 8,192: -0.0004 +- 0.0401
+    131,072 tokens of context: 1.0339 bits/byte over 8 passages; vs 8,192: +0.0600 +- 0.0330
+== prediction, 8 paired passages, recall OFF
+      8,192 tokens of context: 1.0016 bits/byte over 8 passages; vs 8,192: +0.0000 +- 0.0000
+     32,768 tokens of context: 1.0087 bits/byte over 8 passages; vs 8,192: +0.0070 +- 0.0056
+    131,072 tokens of context: 1.0091 bits/byte over 8 passages; vs 8,192: +0.0075 +- 0.0061
+EVC_CHECK_DONE 2026-10-08 09:17 UTC

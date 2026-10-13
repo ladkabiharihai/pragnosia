@@ -1,0 +1,116 @@
+FINAL PIPELINE v2 v2 from /mnt/kv_cache/final_base_v2.pt, 2026-10-11 11:47 UTC
+== round 1 result
+10                          87.6% +- 2.9 (n=500)
+30                          85.8% +- 3.1 (n=500)
+60                          87.0% +- 2.9 (n=500)
+120                         88.4% +- 2.8 (n=500)
+== round 2 result
+10                          95.0% +- 1.9 (n=500)
+30                          94.6% +- 2.0 (n=500)
+60                          94.0% +- 2.1 (n=500)
+120                         94.6% +- 2.0 (n=500)
+== round 3 result
+10                          97.6% +- 1.3 (n=500)
+30                          97.0% +- 1.5 (n=500)
+60                          96.2% +- 1.7 (n=500)
+120                         96.8% +- 1.5 (n=500)
+== the self-improved model (best mean round): /mnt/kv_cache/si_v2_r3_ft/ckpt.pt
+1880 right + 1880 I-don't-know
+GUARD: peak 12930 MiB of 13 GiB (eval/eval_ckpt.sh /mnt/kv_cache/si_v2_r3_ft/ckpt.pt final_v2)
+SELF-CONSISTENCY ABSTENTION, no labels, no threshold set by hand: /mnt/kv_cache/final_v2_sft/ckpt.pt, K=6 samples at temperature 1
+  EVERYDAY  greedy, always answers                       right  52.1%  WRONG  47.9%  declined   0.0%  -> accuracy when it answers  52.1%
+  EVERYDAY  self-consistent (>= half of 6 samples agree) right  27.1%  WRONG   6.2%  declined  66.7%  -> accuracy when it answers  81.2%
+  EVERYDAY  consistency when right 0.52, when wrong 0.20
+  SCIQ      greedy, always answers                       right  10.8%  WRONG  89.2%  declined   0.0%  -> accuracy when it answers  10.8%
+  SCIQ      self-consistent (>= half of 6 samples agree) right   3.7%  WRONG   8.9%  declined  87.4%  -> accuracy when it answers  29.4%
+  SCIQ      consistency when right 0.34, when wrong 0.14
+GUARD: peak 2234 MiB of 13 GiB (.venv/bin/python -u eval/selfcons.py /mnt/kv_cache/final_v2_sft/ckpt.pt 6)
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book         D=0     D=2,048     D=8,192    D=32,768
+base-v2 (recall-trained)                 54.0%       88.7%       78.7%       78.0%       70.0%
+Traceback (most recent call last):
+  File "/opt/code/membrae/eval/openbook.py", line 86, in <module>
+    ok = sum(int(np.argmax([M.opt_lp(CTX[(D, i)], o) for o in options(r)])) == 0 for i, r in enumerate(Q))
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/eval/openbook.py", line 86, in <genexpr>
+    ok = sum(int(np.argmax([M.opt_lp(CTX[(D, i)], o) for o in options(r)])) == 0 for i, r in enumerate(Q))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/eval/openbook.py", line 54, in opt_lp
+    self._ck = ctx; self._pre = self.o.prefix(self.o.encode(ctx))
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/src/bench.py", line 154, in prefix
+    h, states[i] = mx(h, states[i]); h = mp(h)
+                   ^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1783, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1794, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/src/model.py", line 234, in forward
+    return self._recall(x, z, q, k, v, h0)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/src/model.py", line 375, in _recall
+    tv, ti = _far_topk(qc, K, P + c0, w, kk, kvalid=kval)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/code/membrae/src/model.py", line 69, in _far_topk
+    S = qc @ K[:, :, :Lc].transpose(-1, -2)             # (B, H, n, Lc)
+        ~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  File "/opt/code/membrae/.venv/lib/python3.12/site-packages/torch/_native/registry.py", line 958, in eager_router
+    return _fallback.call_boxed(keyset, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 370.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 39.26 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.67 GiB memory in use. Process 3954411 has 3.60 GiB memory in use. Process 572107 has 37.27 GiB memory in use. Process 579654 has 946.00 MiB memory in use. Process 579653 has 946.00 MiB memory in use. Process 579655 has 946.00 MiB memory in use. Process 579652 has 946.00 MiB memory in use. Including non-PyTorch memory, this process has 6.48 GiB memory in use. 6.00 GiB allowed; Of the allocated memory 4.37 GiB is allocated by PyTorch, and 1.45 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+GUARD: peak 6664 MiB of 13 GiB (.venv/bin/python -u eval/openbook.py /mnt/kv_cache/final_base_v2.pt=base-v2 /mnt/kv_cache/si_v2_r3_ft/ckpt.pt=self-improved-v2)
+LEARNING BY READING: 30 invented facts read once, then D tokens of unrelated prose, then a question (4-way, every wrong option another answer from the same facts; chance 25%); 100 questions per cell
+model                                  D=0     D=8,192    D=32,768
+self-improved-v2                     99.0%       90.0%       86.0%
+(95% interval about +-10 points per cell)
+GUARD: peak 5748 MiB of 13 GiB (.venv/bin/python -u eval/learn_by_reading.py /mnt/kv_cache/si_v2_r3_ft/ckpt.pt=self-improved-v2)
+  si_v2_r3_ft/ckpt.pt recall 16 'The history of the c': 1.08 0.94 1.02 1.02
+  si_v2_r3_ft/ckpt.pt recall 16 'In this paper we stu': 1.41 2.03 1.20 1.27
+  si_v2_r3_ft/ckpt.pt recall 16 'The river rises in t': 1.04 1.24 1.21 1.18
+/mnt/kv_cache/si_v2_r3_ft/ckpt.pt: temp 0.85 DRY 0.4: 5/12 segments in band, 0/12 collapsed, median 1.19
+GUARD: peak 5568 MiB of 13 GiB (.venv/bin/python -u eval/lg_check.py /mnt/kv_cache/si_v2_r3_ft/ckpt.pt)
+  [self-improved-v2] HellaSwag 32.0
+  [self-improved-v2] PIQA 60.0
+  [self-improved-v2] ARC-Easy 43.3
+  [self-improved-v2] ARC-Challenge 23.8
+  [self-improved-v2] OpenBookQA 26.0
+  [self-improved-v2] LAMBADA 18.3
+  [self-improved-v2] GSM8K 2.4 (n=250)
+  [self-improved-v2] facts 75.0  arithmetic 35.0 / exact 3.3  reasoning 45.0
+  [GPT-2 124M] HellaSwag 32.1
+  [GPT-2 124M] PIQA 62.7
+  [GPT-2 124M] ARC-Easy 39.8
+  [GPT-2 124M] ARC-Challenge 22.8
+  [GPT-2 124M] OpenBookQA 25.6
+  [GPT-2 124M] LAMBADA 14.1
+  [GPT-2 124M] GSM8K 0.8 (n=250)
+  [GPT-2 124M] facts 79.2  arithmetic 35.0 / exact 0.0  reasoning 61.2
+  [SmolLM2-135M] HellaSwag 43.5
+  [SmolLM2-135M] PIQA 69.1
+  [SmolLM2-135M] ARC-Easy 58.8
+  [SmolLM2-135M] ARC-Challenge 28.7
+  [SmolLM2-135M] OpenBookQA 32.4
+  [SmolLM2-135M] LAMBADA 23.3
+  [SmolLM2-135M] GSM8K 0.8 (n=250)
+  [SmolLM2-135M] facts 91.7  arithmetic 36.7 / exact 0.0  reasoning 53.2
+
+benchmark           self-improved-v2      GPT-2 124M    SmolLM2-135M
+HellaSwag                      32.0%           32.1%           43.5%
+PIQA                           60.0%           62.7%           69.1%
+ARC-Easy                       43.3%           39.8%           58.8%
+ARC-Challenge                  23.8%           22.8%           28.7%
+OpenBookQA                     26.0%           25.6%           32.4%
+LAMBADA                        18.3%           14.1%           23.3%
+GSM8K                           2.4%            0.8%            0.8%
+facts (48)                     75.0%           79.2%           91.7%
+arithmetic 4-way               35.0%           35.0%           36.7%
+arithmetic exact                3.3%            0.0%            0.0%
+reasoning (400)                45.0%           61.2%           53.2%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 2432 MiB of 13 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/si_v2_r3_ft/ckpt.pt=self-improved-v2)
+FINAL_PIPELINE_DONE 2026-10-12 01:32 UTC

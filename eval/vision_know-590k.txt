@@ -1,0 +1,64 @@
+VISION MEASURES know-590k (/mnt/kv_cache/know/ckpt_s590000.pt), 2026-10-11 08:34 UTC
+/mnt/kv_cache/know/ckpt_s590000.pt: step 590000  BPB 1.0173  (952k bytes)
+GUARD: peak 3324 MiB of 8 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/know/ckpt_s590000.pt)
+
+######## know-590k (/mnt/kv_cache/know/ckpt_s590000.pt, 168M)
+  [ ] What is the capital of Japan?                                -> 'Kivkiv'
+  [ ] What is the capital of Australia?                            -> 'Baxjal'
+  [+] Who wrote Hamlet?                                            -> 'The name of the play Hamlet is a play by William Shakespeare.'
+  [ ] What is the chemical symbol for gold?                        -> 'The chemical symbol for gold is gold.'
+  [ ] Who painted the Mona Lisa?                                   -> 'The Mona Lisa was painted by Gustav Holst in 1929.'
+  [ ] What is the largest ocean on Earth?                          -> 'The largest ocean on Earth is the ocean of Mars.'
+  [ ] How many continents are there?                               -> 'There are 5 continents.'
+  [ ] At what temperature does water boil at sea level?            -> 'At sea level, water boils at a temperature of approximately 4,000 degrees Fahrenheit (2,000 degrees Celsius).'
+  [ ] Who was the first person to walk on the Moon?                -> 'The Moon was the first object to be born.'
+  [+] What gas do plants absorb from the air?                      -> 'Plants absorb a significant amount of carbon dioxide (CO2) from the air.'
+  [+] What is 2 plus 2?                                            -> '2 plus 2 is 4.'
+  [+] What is 7 plus 8?                                            -> '7 plus 8 is 15.'
+  [+] What is 15 plus 27?                                          -> '15 plus 27 is 42.'
+  [+] What is 9 times 6?                                           -> '9 times 6 is 54.'
+  [+] What is 12 times 12?                                         -> '12 times 12 is 144.'
+  [+] What is 100 minus 37?                                        -> '100 minus 37 is 63.'
+  [+] What is 144 divided by 12?                                   -> '144 divided by 12 is 12.'
+  [+] Tom has 3 apples and buys 5 more. How many apples does he ha -> 'Tom has 3 + 5 = 8 apples.'
+  [ ] All cats are animals. Tom is a cat. Is Tom an animal?        -> 'Tom is an animal.'
+  [+] What comes next in the sequence 2, 4, 6, 8?                  -> 'The sequence 2, 4, 6, 8, 10 is a repeating pattern.'
+  [+] If today is Monday, what day is tomorrow?                    -> 'Tomorrow is Monday, so Tomorrow is Tuesday.'
+  [ ] Which is heavier, a kilogram of iron or a kilogram of feathe -> 'To find the weight of a kilogram of iron, we can use the following formula:'
+  [ ] Anna is taller than Ben, and Ben is taller than Carl. Who is -> 'Carl is the tallest.'
+  [ ] If it is raining, the ground gets wet. The ground is dry. Is -> 'If it is raining, it is dry.'
+  SCORE FACTS 2/10  ARITHMETIC 8/8  REASONING 2/6
+GUARD: peak 3648 MiB of 8 GiB (.venv/bin/python -u eval/showcase_ckpts.py /mnt/kv_cache/know/ckpt_s590000.pt=know-590k)
+LEARNING BY READING: 30 invented facts read once, then D tokens of unrelated prose, then a question (4-way, every wrong option another answer from the same facts; chance 25%); 100 questions per cell
+model                                  D=0     D=8,192    D=32,768
+know-590k                            79.0%       61.0%       56.0%
+(95% interval about +-10 points per cell)
+GUARD: peak 6104 MiB of 8 GiB (.venv/bin/python -u eval/learn_by_reading.py /mnt/kv_cache/know/ckpt_s590000.pt=know-590k)
+/mnt/kv_cache/know/ckpt_s590000.pt (step 590000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance      k=16   (k = far keys each query may recall; 0 = trained)
+   16,384    100.0%   (peak GPU allocated 2.62 GiB)
+   65,536    100.0%   (peak GPU allocated 3.74 GiB)
+  131,072    100.0%   (peak GPU allocated 5.74 GiB)
+GUARD: peak 7810 MiB of 8 GiB (.venv/bin/python -u eval/recall_test.py /mnt/kv_cache/know/ckpt_s590000.pt needle)
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book     D=2,048     D=8,192    D=32,768
+know-590k (recall-trained)               54.0%       84.0%       78.0%       68.7%
+(95% interval about +-8 points per cell; GPT-2 sees the last 1,024 tokens, SmolLM2 the last 8,192)
+GUARD: peak 6086 MiB of 8 GiB (.venv/bin/python -u eval/openbook.py /mnt/kv_cache/know/ckpt_s590000.pt=know-590k)
+
+benchmark                  know-590k
+HellaSwag                      33.0%
+PIQA                           62.8%
+ARC-Easy                       42.2%
+ARC-Challenge                  25.8%
+OpenBookQA                     27.6%
+LAMBADA                        19.2%
+GSM8K                           0.0%
+facts (48)                     75.0%
+arithmetic 4-way               25.0%
+arithmetic exact                0.0%
+reasoning (400)                43.8%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3654 MiB of 8 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/know/ckpt_s590000.pt=know-590k)
+VISION_DONE 2026-10-11 10:00 UTC

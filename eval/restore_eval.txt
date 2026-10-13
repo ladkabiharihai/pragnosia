@@ -1,0 +1,40 @@
+READING RESTORE EVAL 2026-10-11 10:59 UTC: /mnt/kv_cache/restore/ckpt_s598000.pt vs /mnt/kv_cache/know/ckpt_s590000.pt
+/mnt/kv_cache/know/ckpt_s590000.pt: step 590000  BPB 1.0173  (952k bytes)
+/mnt/kv_cache/restore/ckpt_s598000.pt: step 598000  BPB 1.0166  (952k bytes)
+GUARD: peak 3324 MiB of 11 GiB (.venv/bin/python -u eval/bpb_ckpt.py /mnt/kv_cache/know/ckpt_s590000.pt /mnt/kv_cache/restore/ckpt_s598000.pt)
+LEARNING BY READING: 30 invented facts read once, then D tokens of unrelated prose, then a question (4-way, every wrong option another answer from the same facts; chance 25%); 100 questions per cell
+model                                  D=0     D=8,192    D=32,768
+know-590k                            79.0%       61.0%       56.0%
+restore-598k                         81.0%       59.0%       65.0%
+(95% interval about +-10 points per cell)
+GUARD: peak 6768 MiB of 11 GiB (.venv/bin/python -u eval/learn_by_reading.py /mnt/kv_cache/know/ckpt_s590000.pt=know-590k /mnt/kv_cache/restore/ckpt_s598000.pt=restore-598k)
+/mnt/kv_cache/restore/ckpt_s598000.pt (step 598000)  attention window 2048  context window 8192  mode needle
+IN-DISTRIBUTION NEEDLE, one needle D tokens before the question, real prose filler, greedy exact, 24 per cell
+ distance      k=16   (k = far keys each query may recall; 0 = trained)
+   (D=16384 k=16 miss: wanted 359634, wrote ' 79019 introduction, and the')
+   16,384     95.8%   (peak GPU allocated 2.62 GiB)
+   65,536    100.0%   (peak GPU allocated 3.74 GiB)
+  131,072    100.0%   (peak GPU allocated 5.74 GiB)
+GUARD: peak 14902 MiB of 15 GiB (.venv/bin/python -u eval/recall_test.py /mnt/kv_cache/restore/ckpt_s598000.pt needle)
+OPEN-BOOK SciQ: 150 test questions per cell, the answering paragraph D tokens (ours) before the question among real science paragraphs; 4-way, chance 25%
+model                              closed book         D=0     D=2,048     D=8,192    D=32,768
+know-590k (recall-trained)               54.0%       88.7%       78.7%       78.0%       70.0%
+restore-598k (recall-trained)            54.7%       88.0%       79.3%       78.7%       73.3%
+(95% interval about +-8 points per cell; GPT-2 sees the last 1,024 tokens, SmolLM2 the last 8,192)
+GUARD: peak 6792 MiB of 11 GiB (.venv/bin/python -u eval/openbook.py /mnt/kv_cache/know/ckpt_s590000.pt=know-590k /mnt/kv_cache/restore/ckpt_s598000.pt=restore-598k)
+
+benchmark               restore-598k
+HellaSwag                      31.4%
+PIQA                           63.0%
+ARC-Easy                       42.4%
+ARC-Challenge                  26.2%
+OpenBookQA                     27.6%
+LAMBADA                        19.4%
+GSM8K                           1.6%
+facts (48)                     79.2%
+arithmetic 4-way               31.7%
+arithmetic exact                0.0%
+reasoning (400)                40.5%
+chance: HellaSwag 25, PIQA 50, ARC 25, OpenBookQA 25, facts/arithmetic/reasoning 25; LAMBADA, GSM8K, exact ~0
+GUARD: peak 3654 MiB of 11 GiB (.venv/bin/python -u eval/bench_suite.py /mnt/kv_cache/restore/ckpt_s598000.pt=restore-598k)
+RESTORE_EVAL_DONE 2026-10-11 11:47 UTC
