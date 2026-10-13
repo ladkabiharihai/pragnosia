@@ -4185,3 +4185,12 @@ at this budget. Its prediction breaks past its trained 8,192 positions.
 - `2026-10-13 07:38 UTC` **REPORT.md rewritten for 2026-10-13** (v3 model, equal-data Pythia comparison, goal 6 training in 8 GB, goal 2 battery v1,
   the lookup / replay / fine-tune findings, next steps; the investor item removed per the user's rule) and **pushed with all code
   and results** (user: "push the code and files and docs").
+- `2026-10-13 07:40:02 UTC` **train** (21.6 min) ok
+  d512 L12 mlp4 ctx2048 B1 626400 steps -> /mnt/kv_cache/consumer_grow
+  (log `logs/20261013-071828-train.log`, seed 34)
+- `2026-10-13 07:40 UTC` **Goal 6 correction: with the growth machinery on (--trial-now 1: held-out measurements), the 400-step run at cap 7.5
+  GiB peaked at 8,596 MiB for the process** (logs/consumer_grow_400steps_cap7.5.out) -- over an 8 GB card: PyTorch filled its 7.5
+  GiB cap and the CUDA context adds ~0.9 GB. The 6.37 GB of the 60-step run held for the training loop without trials only.
+  REPORT.md's goal-6 row overstates it until re-measured. The 400-step run also had no trial: a trial needs two trial lengths
+  left at a check (every 200 steps), so 400 steps never qualified (mine). Requeued: 800 steps at **cap 6.9 GiB** (process
+  target <= ~7.9 GB); the queued cap-7.5 run stopped first (script PID 1274518, then its waiting flock 1276124; cmdlines read).
