@@ -20,11 +20,11 @@ S0=$(.venv/bin/python -c "import torch;print(torch.load('$OUT/seed.pt',map_locat
 echo "=== CONSUMER-GPU TRAINING DEMO $(date -u '+%Y-%m-%d %H:%M UTC'): cap $CAP GiB, window $CTX x $ACCUM, from $SEED (step $S0), $N steps ===" > $L
 MEMBRAE_NOLOCK=1 MEMBRAE_CAP_MAX=$CAP .venv/bin/python -u -m src.train --steps $((S0 + N)) --d 512 --layers 12 --ctx $CTX --pos-table ${PT:-8192} --batch 1 --accum $ACCUM \
   --mixer grspin --norm rms --optim sfp --attn-sliding 1 --attn-window 1024 --share-d 1 --carry 16 --carry-groups ${NGRP:-2} --carry-half 1 \
-  --grow-auto "R|W|d,R|W|d" --trial-steps 100 --trial-frac 16 --trial-now ${TRIALNOW:-1} --heldout-long 32768 --remat 1 --spike 1e9 \
+  --grow-auto "R|W|d,R|W|d" --trial-steps ${TRIALSTEPS:-100} --trial-frac 16 --trial-now ${TRIALNOW:-1} --heldout-long ${HL:-32768} --remat 1 --spike 1e9 \
   --scan-chunk 64 --chunks 16 --fused-scan 1 --seed 34 --freeze-d 1 --data /mnt/kv_cache/tokfull_v8192 \
   --sources dclm,fineweb-edu,wikipedia,finemath,arxiv --data2 /mnt/kv_cache/tokrestore --data2-frac 0.30 \
   --weights fineweb-edu:30,wikipedia:18,dclm:14,finemath:4,arxiv:4,farread2:6,farread:1,farlookup2:4,farlookup:2,recall:4,needle:3,farneedle:3,arith:5,instr_math:2 \
-  --save-every 1000000 --eval-every 1000000 --cap $CAP --resume $OUT/seed.pt --out $OUT >> $L 2>&1 &
+  --save-every 1000000 --eval-every 1000000 --cap $CAP --resume $OUT/seed.pt --out $OUT ${EXTRA:-} >> $L 2>&1 &
 TP=$!; PEAK=0
 while kill -0 $TP 2>/dev/null; do
   u=$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits | awk -F', ' -v p=$TP '$1==p {print $2}')

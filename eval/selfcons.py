@@ -41,6 +41,12 @@ def run(name, items, n):
         print(f"  {name:<9s} {lab:<44s} right {100 * right:5.1f}%  WRONG {100 * wrong:5.1f}%  declined {100 * dec:5.1f}%  "
               f"-> accuracy when it answers {100 * right / max(1e-9, right + wrong):5.1f}%", flush=True)
     print(f"  {name:<9s} consistency when right {c[r].mean():.2f}, when wrong {c[~r].mean():.2f}", flush=True)
+    # AUROC (2026-10-15, goal 4 at scale): does self-agreement separate right answers from wrong ones (0.5 = no; the option-softmax
+    # confidence of eval/calibration.py reached only ~0.6)
+    if r.any() and (~r).any():
+        pos, neg = c[r], c[~r]
+        au = float(((pos[:, None] > neg[None, :]).mean() + 0.5 * (pos[:, None] == neg[None, :]).mean()))
+        print(f"  {name:<9s} self-agreement AUROC (right vs wrong) {au:.3f}  (n right {int(r.sum())}, wrong {int((~r).sum())})", flush=True)
 print(f"SELF-CONSISTENCY ABSTENTION, no labels, no threshold set by hand: {CK}, K={K} samples at temperature 1")
 run("EVERYDAY", EVERYDAY, 48)
 run("SCIQ", [(x["question"], [x["correct_answer"].lower().strip()]) for x in list(SCIQ)[:1000]], 32)

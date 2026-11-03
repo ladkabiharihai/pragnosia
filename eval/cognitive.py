@@ -47,15 +47,22 @@ def mc_labelled(M, stem, options):
     # v2 (2026-10-13): the options as (a)-(d), every rotation scored and each option's label score summed over the positions it
     # took -- v1 scored the option texts, and PMI rewarded the option that copied the prompt (Wason's "all four cards"), while a
     # fixed order left exactly-50% position choices on two-option tasks. Returns the option index chosen.
-    k = len(options); tot = np.zeros(k)
+    # v4 (2026-10-13): the options are first put in a RANDOM order (v2-v3 always listed the right answer first, and when the label
+    # scores carried no content the per-option totals tied and argmax returned the first option -- the right one); an exact
+    # tie is then broken at random and counted (TIES)
+    k = len(options); perm = R.sample(range(k), k); opts_ = [options[j] for j in perm]; tot = np.zeros(k)
     for r in range(k):
-        order = options[r:] + options[:r]
+        order = opts_[r:] + opts_[:r]
         p = stem + "\n" + "\n".join(f"({'abcd'[i]}) {o}" for i, o in enumerate(order)) + "\nAnswer: ("
         cue = "Answer: ("; pre, pre0 = M.prefix(M.encode(p)), M.prefix(M.encode(cue))
         for i in range(k):
             lab = M.encode(f"{'abcd'[i]})")
             tot[(i + r) % k] += M.continuation_lp(pre, lab) - M.continuation_lp(pre0, lab)
-    return int(np.argmax(tot))
+    best = np.flatnonzero(tot >= tot.max() - 1e-6)
+    if len(best) > 1: TIES[0] += 1
+    TIES[1] += 1
+    return perm[int(R.choice(list(best)))]
+TIES = [0, 0]                                   # [items whose best options tied, items scored] -- printed per model
 
 
 def margin(M, prompt):
@@ -130,14 +137,15 @@ def wason(M, social):
                 ("boarding the ferry", "waiting on the dock", "holding a ticket", "holding no ticket"),
                 ("drinking beer", "drinking juice", "over 18", "under 18"),
                 ("using the pool", "sitting in the cafe", "wearing a cap", "not wearing a cap")])
+            vis = R.sample([act, alt, need, lack], 4)     # v3: shuffled -- in a fixed order the answer was always first + last
             p = (f"Four people are each described by a card: one side says what the person is doing, the other side says whether "
                  f"they are {need} or {lack}. The rule: if a person is {act}, then they must be {need}. The visible sides are: "
-                 f"{act}, {alt}, {need}, {lack}. Which cards must be turned over to check whether anyone is breaking the rule?\nAnswer: the cards")
+                 f"{', '.join(vis)}. Which cards must be turned over to check whether anyone is breaking the rule?\nAnswer: the cards")
             opts = [f" {act} and {lack}", f" {act} and {need}", f" {act} only", f" {act}, {alt}, {need} and {lack}"]
         else:
             v, c = R.choice("AEIOU"), R.choice("BDFGKMPRT"); e, o = R.choice("2468"), R.choice("3579")
             p = (f"Four cards each have a letter on one side and a number on the other side. The rule: if a card has a vowel on one "
-                 f"side, then it has an even number on the other side. The visible faces are: {v}, {c}, {e}, {o}. Which cards must be "
+                 f"side, then it has an even number on the other side. The visible faces are: {', '.join(R.sample([v, c, e, o], 4))}. Which cards must be "
                  f"turned over to check whether the rule is broken?\nAnswer: the cards")
             opts = [f" {v} and {o}", f" {v} and {e}", f" {v} only", f" {v}, {c}, {e} and {o}"]
         pick[mc_labelled(M, p.rsplit("\nAnswer:", 1)[0], [o.strip() for o in opts])] += 1
@@ -192,13 +200,15 @@ def conjunction(M):
               ("a passionate climber who spends every weekend in the mountains", "an accountant", "a member of an alpine club"),
               ("devoted to animals and volunteers at a shelter", "a librarian", "a vegetarian"),
               ("obsessed with music, playing in two bands since school", "an insurance clerk", "a part-time guitar teacher")]
-    conj = 0
+    # v3 CONTROL: "A or B" against "A" -- the longer option is now the more probable one; picking the short option in both
+    # means a length habit, picking "A" for the conjunction and "A or B" for the disjunction means the probability rule
+    conj = disj = 0
     for _ in range(N):
         nm = R.choice(NAMES); desc, a, b = R.choice(traits); age = R.randint(28, 40)
-        o1, o2 = f"{nm} is {a}.", f"{nm} is {a} and is {b}."
         stem = f"{nm} is {age} years old, single, outspoken and very bright, {desc}.\nWhich is more probable?"
-        conj += mc_labelled(M, stem, [o1, o2]) == 1
-    return conj / N
+        conj += mc_labelled(M, stem, [f"{nm} is {a}.", f"{nm} is {a} and is {b}."]) == 1
+        disj += mc_labelled(M, stem, [f"{nm} is {a}.", f"{nm} is {a} or is {b}."]) == 1
+    return conj / N, disj / N
 
 
 def false_belief(M):
@@ -236,6 +246,8 @@ for spec in sys.argv[1:]:
           f"sensitivity to logic {lg:.2f}, to belief {bl:.2f} (AUC; none 0.50)", flush=True)
     cr, ci = crt(M)
     print(f"CRT              right {100*cr:.0f}%, intuitive error {100*ci:.0f}%   (humans ~41% right, most errors intuitive; chance 25)", flush=True)
-    print(f"CONJUNCTION      'A and B' judged more probable: {100*conjunction(M):.0f}%   (humans ~85; chance 50)", flush=True)
+    cj, dj = conjunction(M)
+    print(f"CONJUNCTION      'A and B' judged more probable: {100*cj:.0f}%   (humans ~85; chance 50); control 'A or B' over 'A': {100*dj:.0f}% (correct = 100)", flush=True)
     fb = false_belief(M)
+    print(f"(labelled choices: {TIES[0]} of {TIES[1]} items had tied best options, broken at random)", flush=True); TIES[:] = [0, 0]
     print(f"FALSE BELIEF     false-belief stories {100*fb[False]:.0f}% right, true-belief controls {100*fb[True]:.0f}%   (adults ~100 / ~100; chance 50)", flush=True)

@@ -115,6 +115,15 @@ def prompt(q): return f"User: {q}\nAssistant:"
 def declined(a): return any(k in a for k in ("i don't know", "i do not know", "i'm not sure", "i am not sure"))
 
 
+# CONTAMINATION FOUND 2026-10-14: these 10 EVERYDAY questions occur VERBATIM in the factual fine-tune data (Alpaca / Dolly /
+# OpenAssistant; eval/build_sft.py SFT_MIX=factual) -- the 10-word-span decontamination missed them, being shorter than 10 words. A
+# model fine-tuned on that data has seen them with their answers. Every EVERYDAY score is now also given on the 38 others.
+CONTAM = {"What is the capital of France?", "What is the capital of Japan?", "What is the largest planet in our solar system?",
+          "Which planet is closest to the Sun?", "What is the longest river in the world?", "How many continents are there on Earth?",
+          "Who developed the theory of relativity?", "Who was the first president of the United States?",
+          "What language is spoken in Brazil?", "What is ice?"}
+
+
 def run(lab, model):
     # LIVE PROGRESS: a line every 100 questions with the running score and the rate, flushed, so the log can be
     # watched while it runs instead of staying silent until a model is finished
@@ -129,6 +138,10 @@ def run(lab, model):
         a = first_sentence(model.answer(prompt(q))).lower()
         ev.append(any(v in a for v in acc)); ev_idk.append(declined(a))
     tick("everyday", len(ev), len(EVERYDAY), ev); t0 = time.time()
+    clean_ = [h for (q, _), h in zip(EVERYDAY, ev) if q not in CONTAM]
+    print(f"{lab:<26s} EVERYDAY clean ({len(clean_)} not in the factual fine-tune data): {100 * np.mean(clean_):.1f}%   "
+          f"(all 48: {100 * np.mean(ev):.1f}%; the 10 seen: {100 * np.mean([h for (q, _), h in zip(EVERYDAY, ev) if q in CONTAM]):.1f}%)", flush=True)
+    if os.environ.get("QA_EVERYDAY_ONLY"): return model
     sq, sq_idk = [], []
     for r in list(SCIQ)[:1000]:
         a = first_sentence(model.answer(prompt(r["question"]), 32)).lower()

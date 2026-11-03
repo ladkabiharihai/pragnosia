@@ -36,7 +36,12 @@ def _swa(q, k, v, w, lse=False):
         if _SWA_FLEX is None: _SWA_FLEX = torch.compile(flex_attention)
         fa = _SWA_FLEX
     Lq, Lk = q.shape[2], k.shape[2]
-    if not torch.compiler.is_compiling() and not torch.is_grad_enabled():
+    # READING WITH THE TRAINING KERNEL (MEMBRAE_SWA_READ=flex, 2026-10-26): the trained attention is nearly hard (QK-norm gains on the keys
+    # of 260-400, scores in the thousands), so the exact fp32 reading path and the training kernel (flex, TF32 scores) compute visibly
+    # different functions -- 9.3% and 5.6% from a float64 reference on a real layer, 2.42050 vs 2.39501 nats on one batch
+    # (eval/swa_check.txt, eval/stream_diag.txt). With the switch, reading runs the function that was trained. Off by default: every
+    # number so far was read the dense way, and a running comparison must not change kernels midway.
+    if not torch.compiler.is_compiling() and not torch.is_grad_enabled() and not _SWA_READ_FLEX:
         return _swa_dense(q, k, v, w, lse)
     if not torch.compiler.is_compiling() and Lq % 256:
         # LENGTHS IN BUCKETS OUTSIDE TRAINING (2026-10-06): every new (query, key) length built a new block mask and
@@ -47,6 +52,11 @@ def _swa(q, k, v, w, lse=False):
         q, k, v = (F.pad(t, (0, 0, 0, pad)) for t in (q, k, v))
         r = _swa(q, k, v, w, lse)
         return (r[0][:, :, :Lq], r[1][:, :, :Lq]) if lse else r[:, :, :Lq]
+    if _ATTN_FP32 and v.dtype != torch.float32:
+        # FP32 ATTENTION SCORES (MEMBRAE_ATTN_FP32=1, 2026-10-26): q and k arrive in fp32 (after the per-head norm) but v in bf16, and the
+        # kernel then scores in bf16 -- with the trained QK-norm gains (scores in the thousands) the rounding picks the winning key
+        # (eval/swa_check.txt: flex 5.6% from a float64 reference on a real layer). With the switch every input is fp32. Off by default.
+        q, k, v = q.float(), k.float(), v.float()
     off = Lk - Lq
     key = (Lq, Lk, w, q.device)
     if key not in _SWA_MASKS:
@@ -152,12 +162,21 @@ def _evc_shift(q, M1, M2, N, sc):
     return sig * (math.sqrt(2 * math.log(N)) - math.sqrt(2 * math.log(_EVC_N0)))
 
 
+_SWA_BUDGET = int(_os.environ.get("MEMBRAE_SWA_BUDGET", str(1 << 28)))
+_SWA_READ_FLEX = _os.environ.get("MEMBRAE_SWA_READ") == "flex"
+_ATTN_FP32 = _os.environ.get("MEMBRAE_ATTN_FP32") == "1"
+
+
 def _swa_dense(q, k, v, w, lse=False, ch=1024):
     """THE SAME SLIDING WINDOW, EXACT, FOR READING WITHOUT A BACKWARD PASS (2026-10-06): 1,024 queries at a time against
     only the keys their windows reach. Outside a compiled region flex attention fell back to its reference maths (a full
     8,192 x 8,192 score block, 3 GiB, which killed a 6 GiB-capped evaluation) and built a new mask for every new length
-    (~2.3 s each); this needs neither. Scores and the softmax in float32."""
+    (~2.3 s each); this needs neither. Scores and the softmax in float32.
+    BOUNDED (2026-10-26, goal 6): a chunk's score block and its softmax take 8 bytes x heads x queries x keys -- 1.3 GiB at the 40
+    heads of a 1B-parameter width, most of a 4 GB card; the chunk halves until they fit _SWA_BUDGET (a query's keys and its
+    result do not depend on the chunk)."""
     B_, H, Lq, dh = q.shape; Lk = k.shape[2]; off = Lk - Lq; sc = dh ** -0.5
+    while ch > 64 and 8 * B_ * H * ch * (ch + w) > _SWA_BUDGET: ch //= 2
     outs, lses = [], []
     for c0 in range(0, Lq, ch):
         n = min(ch, Lq - c0); k0 = max(0, c0 + off - w + 1); k1 = c0 + n + off
@@ -401,6 +420,10 @@ class Attn(nn.Module):
         return x + self.o(self._state_read(a, z, None, B_, T_, D)), st
 
     FAR_CHUNK = 65536                                  # host keys streamed through the GPU at a time (~100 MB at d768)
+    # keys kept on the card beyond the window before the older ones spill to the host store. 8,192 amortises the spills; at 4 GB (goal
+    # 6, 2026-10-26) the tails were the wall -- ~150 MB per attention layer at 60 heads, 1.8 GB over the 12 attention layers of a 8.5B
+    # model -- so eval/stream_infer.py sets 0 (only the window stays on the card; the result is the same)
+    TAIL_SLACK = 8192
 
     def _recall_far(self, x, z, q, k, v, h0):
         """_recall with the store in HOST memory (FarStore; inference, one sequence, no gradient). The same function:
@@ -426,13 +449,16 @@ class Attn(nn.Module):
             o_l = o_l.float(); lse_l = lse_l.float().unsqueeze(-1)
         if L - w > 0 and kf:
             kk = min(kf, L)
-            ch = max(16, min(T_, (1 << 28) // max(1, H * max(Lt, self.FAR_CHUNK))))
+            # BOUNDED (goal 6, 2026-10-26): a streamed host chunk is (heads, keys, dh) on the card and its score block (heads, queries, keys); at
+            # 80 heads (15B) 65,536 keys and the old 2^28-element block took ~1.2 GB together -- the chunk and the block now fit _SWA_BUDGET
+            fc = max(4096, min(self.FAR_CHUNK, _SWA_BUDGET // max(1, 2 * H * dh * 2)))
+            ch = max(16, min(T_, (_SWA_BUDGET // 4) // max(1, H * max(Lt, fc))))
             tv = torch.full((1, H, T_, kk), float("-inf"), device=x.device); ti = torch.zeros((1, H, T_, kk), dtype=torch.long, device=x.device)
             def keep(c0, c1, v_, i_):                     # merge a candidate set into the running best of queries c0..c1
                 av = torch.cat([tv[:, :, c0:c1], v_.float()], -1); ai = torch.cat([ti[:, :, c0:c1], i_], -1)
                 b = av.topk(kk, dim=-1); tv[:, :, c0:c1] = b.values; ti[:, :, c0:c1] = ai.gather(-1, b.indices)
-            for s0 in range(0, n, self.FAR_CHUNK):        # (a) the host keys, every one far for every query here
-                s1 = min(n, s0 + self.FAR_CHUNK)
+            for s0 in range(0, n, fc):                    # (a) the host keys, every one far for every query here
+                s1 = min(n, s0 + fc)
                 Kc = fs.K[:, s0:s1].to(x.device, non_blocking=True).unsqueeze(0)
                 for c0 in range(0, T_, ch):
                     c1 = min(T_, c0 + ch)
@@ -461,8 +487,12 @@ class Attn(nn.Module):
                 if _EVC_MODE == "mask":
                     mu_, sg_ = _evc_stats(q, m1, m2, nf, sc); thr = mu_ + sg_ * math.sqrt(2 * math.log(nf))
             lfs, ofs = [], []
-            for c0 in range(0, T_, 1024):                 # gather the chosen keys and values, 1,024 queries at a time
-                c1 = min(T_, c0 + 1024); m_ = c1 - c0
+            # gather the chosen keys and values, gc queries at a time: 1,024 made ~6 copies of (heads, 1,024 x kk, dh) per keys and values,
+            # 1.4 GB at 60 heads (goal 6, 2026-10-26, eval/act_mem.txt); halved until they fit _SWA_BUDGET (exact: per query)
+            gc = 1024
+            while gc > 16 and 12 * H * gc * kk * dh * 2 > _SWA_BUDGET: gc //= 2
+            for c0 in range(0, T_, gc):
+                c1 = min(T_, c0 + gc); m_ = c1 - c0
                 g = ti[0, :, c0:c1].reshape(H, m_ * kk); host = g < n
                 Ks = Kt[0].gather(1, (g - n).clamp_min(0).unsqueeze(-1).expand(-1, -1, dh))
                 Vs = Vt[0].gather(1, (g - n).clamp_min(0).unsqueeze(-1).expand(-1, -1, dh))
@@ -482,13 +512,15 @@ class Attn(nn.Module):
             a = (o_l * torch.exp(lse_l - lse) + o_f * torch.exp(lse_f - lse)).to(q.dtype)
         else:
             a = o_l.to(q.dtype)
-        if Lt > w + 8192:                                 # spill all but the last w keys to the host
+        if Lt > w + self.TAIL_SLACK:                      # spill all but the last w keys to the host
             s = Lt - w
             ks_ = Kt[0, :, :s]
             if _EVC_N0:                                   # the host keys' moments, kept beside the store
                 kf_ = ks_.float(); d1 = kf_.sum(1).unsqueeze(0); d2 = (kf_.transpose(-1, -2) @ kf_).unsqueeze(0)
                 M1 = d1 if M1 is None else M1 + d1; M2 = d2 if M2 is None else M2 + d2
-            fs.write(n, ks_, Vt[0, :, :s]); n += s; Kt, Vt = Kt[:, :, s:], Vt[:, :, s:]
+            fs.write(n, ks_, Vt[0, :, :s]); n += s
+            # a copy, not a view: the view kept the whole concatenated tail alive, ~2x the window per attention layer (goal 6, 2026-10-26)
+            Kt, Vt = Kt[:, :, s:].clone(), Vt[:, :, s:].clone()
         return x + self.o(self._state_read(a, z, None, B_, T_, D)), FarState(fs, n, Kt, Vt, M1, M2)
 
     def _state_read(self, a, z, mem, B_, T_, D):

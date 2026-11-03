@@ -85,7 +85,10 @@ def gen_arith():                      # plain arithmetic in chat form (the skill
         if op == "/": b = max(b, 1); a = a * b
         c = {"+": a + b, "-": a - b, "*": a * b, "/": a // max(b, 1)}[op]; w = r.choice(W[op]); s = {"*": "x"}.get(op, op)
         q = r.choice([f"What is {a} {w} {b}?", f"Calculate {a} {s} {b}.", f"{a} {s} {b} = ?", f"How much is {a} {w} {b}?"])
-        yield qa(q, r.choice([f"{a} {w} {b} is {c}.", f"{a} {s} {b} = {c}", f"{c}", f"The answer is {c}."]))
+        # ARITH_WORKED=1 (2026-10-14): only answers that state the operation -- terse factual training taught a bare number
+        # ("7 plus 8?" -> "9") and the arithmetic collapsed 8/8 -> 2/8; the base gets them right when it writes "7 plus 8 is 15"
+        fm = [f"{a} {w} {b} is {c}.", f"{a} {s} {b} = {c}"] if os.environ.get("ARITH_WORKED") else [f"{a} {w} {b} is {c}.", f"{a} {s} {b} = {c}", f"{c}", f"The answer is {c}."]
+        yield qa(q, r.choice(fm))
 def gen_magicoder():
     for x in ds("ise-uiuc/Magicoder-OSS-Instruct-75K"): yield qa(x["problem"], x["solution"])
 def gen_selfoss():
@@ -110,6 +113,8 @@ def gen_psych():                      # loss on the human choices (between << an
         yield seg
 GEN = dict(chat=gen_chat, tulu=gen_tulu, orca=gen_orca, metamath=gen_metamath, gsm8k=gen_gsm8k, arith=gen_arith,
            magicoder=gen_magicoder, selfoss=gen_selfoss, thinking=gen_thinking, psych=gen_psych)
+if os.environ.get("SFT2_SOURCES"):                     # a subset of the sources (2026-10-14: the arithmetic-only stage)
+    GEN = {k: v for k, v in GEN.items() if k in os.environ["SFT2_SOURCES"].split(",")}
 
 # ---------------------------------------------------------------- tokenize, budget, pack
 # rows stream to disk (~390M tokens as Python lists would need ~14 GB of RAM); shuffled afterwards through a memory map

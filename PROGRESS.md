@@ -4194,3 +4194,1393 @@ at this budget. Its prediction breaks past its trained 8,192 positions.
   REPORT.md's goal-6 row overstates it until re-measured. The 400-step run also had no trial: a trial needs two trial lengths
   left at a check (every 200 steps), so 400 steps never qualified (mine). Requeued: 800 steps at **cap 6.9 GiB** (process
   target <= ~7.9 GB); the queued cap-7.5 run stopped first (script PID 1274518, then its waiting flock 1276124; cmdlines read).
+- `2026-10-13 08:00 UTC` **New fine-tune set built (/mnt/kv_cache/sft2; logs/build_sft2.out, report.json): 109,422 rows of 4,097 (448M tokens with
+  padding, 58.6% carrying loss).** chat smol-smoltalk 110,345 ex / 110M (1,980 contaminated dropped), tulu 51,987 / 40M; arithmetic
+  orca 104,270 / 35M, MetaMathQA 205,877 / 50M, GSM8K train 7,420 / 1.2M (53 dropped: 10-word spans shared with GSM8K test), plain
+  arithmetic 352,507 / 8M; coding Magicoder 42,799 / 30M, self-oss-sc2 20,326 / 25M; thinking OpenThoughts 22,088 / 60M (52,860 too
+  long for a row); cognition Psych-101 6,936 / 25M (7% loss: the choices). Held-out Psych-101 experiments: levering2020revisiting,
+  ludwig2023human, popov2023intent, steingroever2015data, wise2019acomputational, wulff2018sampling, zorowitz2023data.
+  **Quick check queued (eval/sft2_check.sh):** 20,000 of its rows + 20,000 general-text rows (replay), from v3's self-improved
+  round 1 (the old fine-tune's init), then bits/byte, scored chat questions, Q&A against the old fine-tune.
+- `2026-10-13 08:01:18 UTC` **train** (16.6 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 16.35 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.67 GiB memory in use. Process 1065073 has 38.50 GiB memory in use. Process 1070683 has 1.57 GiB memory in use. Process 1070680 has 1.57 GiB memory in use. Process 1070681 has 1.71 GiB memory in use. Process 1070682 has 1.71 GiB memory in use. Process 1157864 has 3.60 GiB memory in use. Process 1243936 has 17.42 GiB memory in use. Including non-PyTorch memory, this process has 7.88 GiB memory in use. 6.90 GiB allowed; Of the allocated memory 6.83 GiB is allocated by PyTorch, with 1.46 GiB allocated in private pools (e.g., CUDA Graphs), and 59.75 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx2048 B1 626800 steps -> /mnt/kv_cache/consumer_grow
+  (log `logs/20261013-074440-train.log`, seed 34)
+- `2026-10-13 08:02 UTC` **Goal 6 growth trial under 8 GB: the process peaked at 7,788 MiB (under 8 GB) at cap 6.9 GiB, the R branch ran (2.2719 ->
+  2.2717 over 100 steps), then restoring the unchanged snapshot for the next option ran out of memory** (train.py install(),
+  moving the snapshot's carried state back to the card; logs/consumer_grow_cap6.9_restore_oom.out). The does-not-fit handler
+  covers the growth events, not this restore. Root cause under study: after "releasing the outgoing branch", 2.46 GiB stays
+  allocated here -- and ~6.1 GiB at every main-run trial (logs), absorbed there by the 32 GiB cap. Added: MEMBRAE_MEMDBG probe in
+  install() (live CUDA tensors by size, with their holders) and TRIALSTEPS in eval/consumer_demo.sh; a 20-step-branch debug run
+  queued after the fine-tune check.
+- `2026-10-13 08:10 UTC` **Battery v2, base 604k so far:** digit span 15+ / 2 (unchanged; the standard rule agrees); free recall 62-51-48 (generation,
+  unchanged); **2-back AUC 0.31** (40 + 40 items, ~3 SE below 0.5: not chance -- it leans systematically the wrong way, a wrong
+  comparison rule); **Wason 98% / 100% right -- A TEST ARTIFACT (mine): the visible cards were always listed P, not-P, Q, not-Q,
+  so the right answer was always the first and last card; "first and last" scores 100% with no logic.** Not to be reported. Fixed
+  (v3): the card order shuffled per item. Other tasks checked for the same leak: false belief's right answer is the first-named
+  place and the control's the last-named, so a position heuristic shows as the asymmetry between the two (by design); CRT and
+  conjunction have no position cue left after every ordering is scored. Battery v3 (all models incl. the new fine-tune) queued
+  after the fine-tune check and the memory debug run.
+- `2026-10-13 08:13 UTC` **Battery v2, base 604k, complete (eval/cognitive_v2.txt):** belief bias -- sensitivity to logic AUC **0.30** (reversed:
+  it leans to accept the INVALID form; the two forms use the same words in a different arrangement, so it judges by arrangement),
+  to belief 0.57 (weak, human direction); **CRT 30% right, intuitive 28% -- chance; v1's "intuitive lure 55%" was an artifact of
+  v1's option scoring (the intuitive number often appears in the question and PMI rewarded copying) -- RETRACTED**; conjunction
+  "A and B" 10% (the normative answer 90% -- but possibly a shorter-option habit: a disjunction control, "A or B" vs "A", added
+  for v3); false belief 60% / true-belief control 40% (sum ~100: it names the first-mentioned place ~60% whatever the story --
+  no belief tracking; v1's "young child's reality bias" does not survive either). **No human-like signature survives fair
+  scoring; reasoning answers follow surface features (order, length, arrangement).**
+- `2026-10-13 08:18 UTC` **Battery v2, old fine-tune (v3 SFT), complete:** digit span forward **2** / backward 2 by the standard rule (3 digits
+  already 30%: the old fine-tune destroyed list copying; base 15+); free recall 98-77-77; 2-back AUC 0.42; Wason v2 invalid (the
+  card-order leak); belief bias logic 0.43 / belief 0.41 (both near none, slightly reversed); CRT 30 right / 28 intuitive (chance);
+  **conjunction fallacy 68%** (base 10%, humans ~85: the fine-tune moved it to the human error -- or to preferring the longer,
+  more descriptive option; v3's disjunction control decides); false belief 52 / control 50 (chance). The new fine-tune check
+  (eval/sft2_check.sh) now has the side slot.
+- `2026-10-13 09:23 UTC` **VISION.md: goal 10 added (user): "intrinsic thoughts -- the model thinks while it is idle, sitting on the VRAM, like a
+  human, not only when asked."** Proposed test (no architecture in VISION.md): the model reads material, then gets idle compute
+  with NO question (it chooses what to think about), then is asked; against the same compute spent reading unrelated text and
+  against no idle time. Idle thought counts only if the later answers improve without the question having been known.
+- `2026-10-13 09:56 UTC` **New fine-tune data + replay, quick check -- first result (eval/sft2_check.txt): same-text bits/byte init (v3 self-improved
+  r1) 1.0245, OLD factual fine-tune 1.0753 (+5.0%: the forgetting quantified), NEW fine-tune 1.0200 (-0.4%: better than its init).**
+  40,000 steps (20,000 new-data rows + 20,000 general-text rows), held-out answer loss 1.0001, no divergence. Scored chat
+  questions and Q&A running.
+- `2026-10-13 10:03 UTC` **New fine-tune quick check, scored chat questions (facts / arithmetic / reasoning):** init 3/10, 8/8, 1/6; old fine-tune
+  6/10, **3/8**, 2/6; **new fine-tune 2/10, 8/8, 1/6** (its "reasoning 1" is a scorer false positive: the Anna answer repeats the
+  names without answering -- really 0/6). New: arithmetic kept and cleanly worked ("Tom has 3 + 5 = 8 apples."), facts fluent
+  but wrong ("The capital of Australia is Australia.", "Hamlet ... by the French playwright Jean-Jacques Rousselot", "the
+  first person on the Moon was Albert Einstein") -- the replay removes the forgetting, but the new chat data does not teach
+  short factual answers as the old factual-QA data did (and the check used a quarter of the set). Q&A (everyday / SciQ / ARC)
+  running. **The queued memory-debug run and battery v3 had died with the previous session** (their nohup waiters ended with
+  it); re-queued as one chain under setsid (logs/queue_dbg_v3.out).
+- `2026-10-13 10:15 UTC` **Goal 10 baseline written (eval/idle_think.py):** 30 invented facts, 8,192 tokens of prose, an idle period of 512 tokens,
+  a question; idle = none / unrelated prose (same compute) / the model's own free generation from its state (no prompt, no hint
+  of the question). Idle thought counts only if "think" beats both. Queued after battery v3 (base 604k, new fine-tune). Training
+  it later: reward idle thoughts that make the next input easier to predict (a label-free signal, after Quiet-STaR, Zelikman
+  et al. 2024).
+- `2026-10-13 10:51 UTC` **Quick check, Q&A (eval/sft2_check.txt): old fine-tune everyday / SciQ / ARC 58.3 / 9.8 / 43.7, new 54.2 / 6.1 / 35.4** --
+  the new data with replay keeps general text (1.0200) and arithmetic (8/8) but answers worse: the old set trained SciQ / ARC /
+  CommonsenseQA train splits in the test's own format; the new set has none. **Full fine-tune decided: half the new set + the
+  old factual set + general text 1:1 (replay)** -> /mnt/kv_cache/sft3_mix (113,298 rows, 464M tokens: 53,617 new + 3,032 factual
+  + 56,649 general). The factual set rebuilt at 4,097-token rows (SFT_MIX=factual SFT_ROW=4097, 3,300 rows) and decontaminated
+  row by row for the first time: 268 rows dropped -- 83 naming the battery's puzzles, 185 sharing a 10-word span with an
+  evaluation set, mostly SciQ textbook boilerplate ("by the end of this section you will be able to") and SciQ train/test
+  passages from the same textbooks ("daughter cells each with half the number of chromosomes as the parent cell"): earlier
+  SciQ scores of fine-tuned models may be slightly inflated by that overlap. eval/sft3_full.sh (fine-tune + bits/byte, chat
+  questions, Q&A, benchmark suite, human battery) queued after the idle-thought baseline (~18:30 IST start, ~4 h training).
+- `2026-10-13 11:03:02 UTC` **train** (14.4 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 16.92 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.67 GiB memory in use. Process 1065073 has 38.50 GiB memory in use. Process 1070683 has 1.57 GiB memory in use. Process 1070680 has 1.57 GiB memory in use. Process 1070681 has 1.31 GiB memory in use. Process 1070682 has 1.53 GiB memory in use. Process 1157864 has 3.60 GiB memory in use. Process 1243936 has 17.42 GiB memory in use. Including non-PyTorch memory, this process has 7.88 GiB memory in use. 6.90 GiB allowed; Of the allocated memory 6.83 GiB is allocated by PyTorch, with 1.46 GiB allocated in private pools (e.g., CUDA Graphs), and 59.75 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx2048 B1 626400 steps -> /mnt/kv_cache/consumer_dbg
+  (log `logs/20261013-104838-train.log`, seed 34)
+- `2026-10-13 11:04 UTC` **The trial memory leak found (logs/consumer_dbg.out, MEMBRAE_MEMDBG):** after "releasing the outgoing branch", the live CUDA
+  tensors were the old branch's weights and optimizer state -- 198 x (1024,1024), 38 x (4096,1024), 38 x (1024,4096), 14 x
+  (8192,1024) fp32 (~2.5 GiB) -- held by torch.compile's tracing records (TrackedFake), which torch._dynamo.reset() does not
+  release; every graph recapture also leaked ~64 MiB (3.42 -> 3.48 -> 3.54 -> 3.61 GiB across recaptures). The same leak is the
+  ~6.1 GiB seen at every main-run trial. **Fix (src/train.py install()):** the outgoing branch -- already snapshotted to the CPU --
+  has its parameters, buffers and optimizer-state tensors emptied in place before its names are dropped, so whatever still
+  points at them holds no storage. The debug run itself ended in the expected OOM (peak 8,068 MiB: with a 6.9 GiB cap the CUDA
+  context brings the process to the edge of 8 GB -- the 8 GB recipe needs more margin, e.g. cap 6.5). Verification run (20-step
+  branches, cap 6.9) queued after the idle baseline; the main run keeps the old code until its next restart.
+- `2026-10-13 11:15 UTC` **Slip (mine): the memory-debug run ran twice.** The waiter I had judged dead after the session break was alive (it ran
+  the first debug run, 16:19-16:33 IST, the one with the diagnosis); the re-queued chain then ran a second, identical one, whose
+  trainer started 16:33:12 -- 28 s before the fix was saved (16:33:40) -- so it was old code reproducing a known OOM. Stopped (its
+  trainer, PID 1350908, cmdline and start time read first; the chain then went on); ~12 min of side slot lost. **Battery v3
+  started (all three models).** Lesson: confirm a waiter is dead from /proc, not from a grep of ps text.
+- `2026-10-13 11:37 UTC` **Battery v3 (base 604k): Wason with the cards shuffled STILL 100% / 92% right -- so the card order was not the whole leak.
+  Suspected (mine): eval/cognitive.py's labelled scorer always listed the RIGHT option first, and when the label scores carry
+  no content the per-option totals tie and argmax returns index 0 -- the right answer.** The same bias would explain v2/v3's
+  false belief 60/55 vs controls 40/38 (right = first-named), CRT "30-40% right" (right listed first) and the conjunction "A"
+  90% plus its control picking "A" over "A or B" 82% (base). A debug run printing per-option totals is queued. **v4:** options
+  in a random order per item, exact ties broken at random and counted. Every labelled-choice result of v2 and v3 (Wason, CRT,
+  conjunction, false belief) is withdrawn until v4; digit span, free recall, 2-back and belief bias (no labels) stand.
+  v4 queued after the full fine-tune (its own battery already uses v4).
+- `2026-10-13 11:44 UTC` **Battery v3 done** (valid parts journaled above; new fine-tune: digit span forward **15+** -- copying KEPT, old fine-tune 2 --,
+  free recall 63-61-55, belief bias logic 0.54 / belief 0.48; its labelled-choice results withdrawn with the rest). **A second
+  surviving waiter from before the session break** (PID 1284314, cmdline read) had queued a duplicate battery; its run started
+  17:13 IST, after the v4 fix was saved (17:07), so it IS battery v4 (base, old, new): kept, labelled inside eval/cognitive_v3.txt
+  ("== NOTE ... read as BATTERY v4"), and the separate v4 queue (PID 1361857) stopped. The later queue order: idle baseline ->
+  option-score debug -> leak-fix test -> full fine-tune (~19:30 IST start, ~4 h).
+- `2026-10-13 11:57 UTC` **Battery v4, base 604k (inside eval/cognitive_v3.txt after the NOTE line):** digit span 15+ / 2, free recall 62-51-48,
+  2-back AUC 0.31 (all unchanged: unlabelled); **Wason abstract: right 30%, MATCHING "P and Q" 65%** (humans ~10% right, matching
+  the classic error -- the first human-like signature to survive fair scoring, though it may be the same word-association
+  habit that explains human matching bias), social: right 38%, matching 32%, P only 28% (humans ~75%: no social facilitation);
+  belief bias logic 0.48 / belief 0.56 (logic swung 0.30-0.48 across reruns with fresh items: unstable at this size); CRT right
+  20%, intuitive 28% (chance 25: neither); conjunction "A and B" 25% with the control "A or B" 28% -- it prefers the short
+  option "A" ~75% in both: a length habit, not probability, not the human fallacy (the control earned its place). **Correction
+  (mine): 0 of 280 labelled items tied, so my "ties resolve to index 0" explanation of v2-v3 was wrong.** The cause fitting the
+  evidence: the rotation put each option in every position but always in the SAME CYCLIC ORDER (right answer, then matching,
+  then P only, then all), and the label scores depend on the neighbours; v4's random starting order per item breaks that. The
+  per-option debug print (queued) will show it.
+- `2026-10-13 12:10 UTC` **GOAL 2 BATTERY v4 COMPLETE (eval/cognitive_v3.txt below its NOTE; base 604k / old fine-tune / new fine-tune; humans in brackets):**
+  digit span forward 15+ / 2 / 15+, backward 2 / 2 / 2 (~7 / ~5); free recall first3-middle-last3 62-51-48 / 98-77-77 / 63-61-55 (U-shaped:
+  primacy and recency -- none shows recency); 2-back AUC 0.31 / 0.42 / 0.54 (~90% right); Wason abstract right 30 / 20 / 40, matching
+  "P and Q" 65 / 38 / 32 (~10% right; matching the classic error -- only the base model shows it strongly), social right 38 / 40 / 45
+  (~75%: no social facilitation in any); belief bias logic 0.48 / 0.55 / 0.51, belief 0.56 / 0.46 / 0.52 (both strong in humans); CRT
+  right 20 / 28 / 20, intuitive 28 / 15 / 25 (~41 right, errors intuitive; chance 25); conjunction "A and B" 25 / 55 / 25 with the
+  control "A or B" 28 / 65 / 28 (a length preference: base and new prefer the short option, the old fine-tune the long one; humans
+  ~85 fallacy); false belief 60 / 48 / 55, controls 40 / 38 / 35 (adults ~100: none tracks belief; base and new name the first-
+  mentioned place). 0 ties in 280 labelled items per model. **Verdict for goal 2 (against humans): superhuman storage and
+  copying; working-memory manipulation, reasoning, probability judgement and theory of mind absent; one human-like signature
+  (Wason matching bias, base model).** The new fine-tune keeps the base's copying (15+), the old one destroyed it (2).
+- `2026-10-13 12:11 UTC` **Labelled-choice scoring diagnosed (debug run, scratch mcl_dbg.py; one Wason item, base 604k):** the label scores carry a
+  large position prior, about the same in every rotation -- (a) ~2.6, (b) ~2.7, (c) ~3.4, (d) ~3.6 PMI -- and rotation cancels most
+  of it, but the option listed FIRST in the original order still wins: correct first -> totals 12.50 / 12.42 / 12.16 / 12.13 (the right
+  one wins); the same item with the right answer third -> 12.48 / 12.07 / 12.20 / 12.39 (the first-listed "E and 4" wins). So v2-v3's
+  inflation was this structural first-option edge (not ties, not content). v4's random starting order per item spreads that edge
+  over random options: v4 results are noisier (pulled toward chance), not inflated; effects that survive it (the base's 65% Wason
+  matching) are real. v5 (later): score all k! orderings (24 for four options), removing the order effect entirely, ~6x the cost.
+- `2026-10-13 13:28 UTC` **GOAL 10 BASELINE (eval/idle_think_v1.txt; 30 facts, 8,192 tokens of prose, 512 idle tokens, n=100, +-10):** base 604k
+  none / read / think **62 / 70 / 62**; new fine-tune **94 / 94 / 95**. Untrained idle thought does not help: both models' idle
+  "thought" continues the last prose they read (samples: a monorail in Guayaquil, a project in Warangal), never the facts. The
+  new fine-tune is at ceiling here (its init carries the lookup fine-tune and self-improvement: reading at 8k 62 -> 94), so the
+  next version needs a harder setting (120 facts, 32k back) and then TRAINING of idle thought (reward: thoughts that make the
+  next input easier to predict).
+- `2026-10-13 13:42:41 UTC` **train** (14.5 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 192.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 15.73 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 3.29 GiB memory in use. Process 1065073 has 38.50 GiB memory in use. Process 1070683 has 1.57 GiB memory in use. Process 1070680 has 1.57 GiB memory in use. Process 1070681 has 1.73 GiB memory in use. Process 1070682 has 1.73 GiB memory in use. Process 1157864 has 3.60 GiB memory in use. Process 1243936 has 17.42 GiB memory in use. Including non-PyTorch memory, this process has 7.83 GiB memory in use. 6.90 GiB allowed; Of the allocated memory 6.34 GiB is allocated by PyTorch, with 22.00 MiB allocated in private pools (e.g., CUDA Graphs), and 505.11 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx2048 B1 626400 steps -> /mnt/kv_cache/consumer_fix
+  (log `logs/20261013-132809-train.log`, seed 34)
+- `2026-10-13 15:40:01 UTC` **train** (672.4 min) ok
+  d512 L12 mlp4 ctx8192 B1 650000 steps -> /mnt/kv_cache/many
+  (log `logs/20261013-042735-train.log`, seed 36)
+- `2026-10-14 06:43 UTC` **OVERNIGHT (Oct 13-14) -- three failures, mine to own:**
+  (1) **The full fine-tune DIVERGED** (eval/sft3_full_nan_run1.txt, /mnt/kv_cache/sft3_full_nan_run1): held-out answer loss 1.30 ->
+  1.07 (10k) -> 1.04 (20k) -> 1.33 (30k) -> NaN at ~31,400 of 113,298 steps, then trained on NaN for 2.3 h; the finite check
+  stopped the pipeline, so no NaN model was evaluated, but every evaluation had overwritten ckpt.pt (the good 20k weights lost).
+  src/sft.py's schedule-free Prodigy path had no gradient clipping and no NaN guard. **Fixed:** non-finite steps skipped; the
+  gradient clipped to the 90th percentile of its own recent norms (AutoClip, Seetharaman et al. 2020); ckpt.pt keeps the BEST
+  held-out weights; a held-out loss non-finite or > 1.5x the best stops the run. **Relaunched 06:42 UTC** (eval every 2,000;
+  ~21 ktok/s beside the trainer, ~6 h).
+  (2) **The main run ended at 650,000 (2026-10-13 15:40 UTC) WITHOUT the growth trial I had forecast for "649k ~20:00":** the stage
+  clock (393,000 + 256,000) made it due at 649k, but a trial of 1/16 of the stage (~16k steps per branch) needs two branch lengths
+  left, and the run's horizon was 650k. My forecast was wrong. **The trainer slot then sat idle ~15 h** (nothing queued after it,
+  and the loop's wakeups did not run overnight). **Restarted 06:40 UTC** from ckpt_s650000 to 750,000 (eval/many_run.sh, logs/many2.out,
+  /mnt/kv_cache/many2): the trial is due at once, ~4 x 16k branch steps.
+  (3) **The leak-fix test (logs/consumer_fix.out, cap 6.9 GiB):** the fix worked for a normal switch (1.00 GiB left after R, was
+  2.46), W and d were correctly "does not fit ... not a candidate" (no crash) -- but after the failed deepen 2.41 GiB stayed
+  (the half-built model and its optimizer, named None only) and the unchanged branch then ran out of memory. **Fixed:** that path
+  now empties the half-built model's and optimizer's tensors in place as install() does (guarded for the widen path, where they
+  are unset). The restarted main run carries both fixes; the 8 GB test is to repeat.
+- `2026-10-14 07:52 UTC` **Guarded full fine-tune passed the old divergence point:** held-out answer loss 1.1276 (2k) -> 1.0601 (10k) -> 1.0324 (20k,
+  the NaN run 1.0402) -> 1.0221 (30k, the NaN run 1.3271) -> **1.0196 at 32,000** (the NaN run was NaN by 31,400); 0 steps skipped,
+  so the 90th-percentile gradient clip (not the NaN skip) is what changed the path. Main run: growth trial branch R in progress
+  (652,800 at 07:43 UTC).
+- `2026-10-14 08:10 UTC` **The guarded fine-tune diverged too -- and the guard worked:** held-out best 1.0105 at 38,000, then 2.2301 at 40,000 ->
+  stopped, ckpt.pt = step 38,000 (34% of the set). The training loss crept up over ~1,500 steps (1.62 at 38,100 -> 2.00 at 39,300 ->
+  2.78 at 40,000) with 0 non-finite steps: a slow drift, which a clip that follows the recent norms cannot stop. Three divergences
+  of this replay fine-tune now (~3k, ~31.4k, ~39k): most likely schedule-free Prodigy's own step size growing too large on long
+  runs -- pretraining holds it (--freeze-d) for the same reason; src/sft.py never did. Its step size is now logged with the loss
+  (prodigyplus "d") to see the drift; the fix to choose: hold it at the model's own pretraining step size, or freeze it where
+  held-out stops improving (prodigyplus prodigy_steps). The 38k checkpoint's evaluations (eval/sft3_full.sh) are running.
+- `2026-10-14 08:45 UTC` **Full fine-tune (step 38,000) results so far (eval/sft3_full.txt):** bits/byte **1.0193** (init 1.0245, old 1.0753, quick
+  1.0200 -- no forgetting); chat questions hand-checked facts 3/10, arithmetic 6/8 ("144 divided by 12 is 11", "Tom has 3 apples"),
+  reasoning 2/6 ("Yes, Tom is an animal", "2, 4, 6, 8, 10 ..."); **Q&A everyday / SciQ / ARC 43.8 / 5.0 / 37.6 -- worse than the old
+  fine-tune (58.3 / 9.8 / 43.7) and the quick check (54.2 / 6.1 / 35.4).** The broad new data keeps general text and arithmetic but
+  does not teach this question format; the factual set at 2.7% of the mix (and a run stopped at a third) gave little. Next (queued
+  after the benchmarks and battery, eval/factual_replay.sh): the old factual set ALONE with 1:1 replay, 2 epochs -- does replay keep
+  the old fine-tune's Q&A without its forgetting?
+- `2026-10-14 09:53 UTC` **Full fine-tune (step 38,000), rest of the evaluation (eval/sft3_full.txt):** benchmarks HellaSwag 31.8, PIQA 61.4, ARC-E 42.3,
+  ARC-C 26.5, OBQA 28.0, LAMBADA 18.6, GSM8K 2.0, facts 72.9, arithmetic 40.0 / exact 1.7, reasoning 42.2 -- all within noise of its init
+  (32.6 / 61.9 / 44.8 / 25.5 / 27.2 / 17.2 / 2.0 / 77.1 / 40.0 / 0.0 / 44.8): with replay the fine-tune neither harmed nor helped them.
+  Human battery: digit span 15+ / 2 (copying kept), **free recall 42-21-18 (down from the base's 62-51-48 -- to check whether it now
+  answers in sentences instead of listing the words)**, 2-back 0.44, Wason abstract right 30 / matching 38 / all 32, social right 35 /
+  matching 50, belief bias logic 0.40 / belief 0.53, CRT 22 / 22, conjunction 18 with control 35, false belief 45 / 38 -- the same
+  profile: storage kept, reasoning at chance.
+- `2026-10-14 10:11 UTC` **The fine-tune's step size, first measured (eval/factual_replay.sh run, prodigyplus d now logged):** 2.7e-5 (step 100) -> 1.1e-4
+  (900) -> 1.5e-4 (1,700) -> 2.2e-4 (2,500) -> 3.2e-4 (4,900-7,300); it only ratchets up (Prodigy's d never falls). Pretraining holds
+  3.3e-3 frozen. Consistent with the divergence diagnosis: on the long replay runs the step size kept climbing until the loss
+  crept up (~31k, ~39k). Fix for the next full run: freeze it after its measured plateau (prodigyplus prodigy_steps ~5,000 -- a
+  value read from this run's trajectory, recorded as such, not tuned). Factual+replay held-out improving smoothly (1.2268 at 4k ->
+  1.2154 at 7k). Main run: growth-trial branch R at 660,400.
+- `2026-10-14 10:47 UTC` **Old factual set + replay (eval/factual_replay.txt; 12,128 steps, best held-out 1.2090 at 9,000, no divergence -- step size
+  ~3.2e-4):** bits/byte **1.0282** (init 1.0245; old fine-tune 1.0753 -> replay removes ~90% of the forgetting); chat questions facts
+  3/10, **arithmetic 2/8** ("7 plus 8?" -> "9", "9 times 6?" -> "18", "12 times 12?" -> "24"), reasoning 2-3/6; **Q&A everyday / SciQ /
+  ARC 45.8 / 6.6 / 41.7** (old fine-tune 58.3 / 9.8 / 43.7). **Finding: the arithmetic loss is a STYLE effect, not forgetting** --
+  the base writes "7 plus 8 is 15" and gets it right; the factual set's terse answers ("Tokyo", "Carbon dioxide.") teach it to
+  emit a bare number without the working, and replay (which keeps general text) cannot prevent that; the full mix, which has
+  worked arithmetic answers, kept 6/8. Fine-tune data must show the working wherever working is needed. **Open: does replay cost
+  the Q&A, or was the old fine-tune partly inflated by the evaluation overlap the decontamination removed (185 rows, mostly SciQ
+  passages)?** Ablation queued (eval/factual_noreplay.sh): the decontaminated factual set WITHOUT replay.
+- `2026-10-14 11:29 UTC` **Ablation decided it (eval/factual_noreplay.txt): decontaminated factual set, NO replay** -- best held-out 1.2125 at step
+  3,500 (overfits sooner than with replay: 9,000), bits/byte 1.0399, chat facts 5/10, arithmetic 2/8, **Q&A everyday / SciQ / ARC
+  60.4 / 6.9 / 42.6**. Against the old fine-tune (no replay, NOT decontaminated) 58.3 / 9.8 / 43.7 and factual+replay 45.8 / 6.6 / 41.7:
+  (1) **the old fine-tune's SciQ was inflated ~3 points by the evaluation overlap** (9.8 -> 6.9 on the same data decontaminated,
+  replay or not); (2) **replay costs everyday Q&A** (60.4 -> 45.8, ~7 of 48 questions, ~2 SE) but not SciQ / ARC; (3) replay holds
+  general text (1.0282 vs 1.0399; init 1.0245); (4) arithmetic 2/8 either way -- the terse-answer style. **Recipe for the next full
+  fine-tune:** stage 1 the factual set without replay, stopped at its best held-out (~3,500 steps); stage 2 the broad new data with
+  replay, the step size frozen at its measured plateau (prodigy_steps ~5,000), and arithmetic answers that show their working.
+- `2026-10-14 11:30 UTC` **Two-stage fine-tune launched (eval/sft4_twostage.sh):** stage 2 from the no-replay factual model (step 3,500) on
+  /mnt/kv_cache/sft3_mix (new data + factual + general text 1:1), 50,984 steps (45%), step size frozen after 5,000 (src/sft.py
+  --prodigy-steps, new), guards on; then bits/byte, chat questions, Q&A, benchmarks, human battery. ~3.3 h + ~2 h evaluation.
+- `2026-10-14 12:11 UTC` **Main-run growth trial, branch R done: held-out 2.0876 -> 2.0862 over 16,075 steps at 168.1M; the switch to W left 0.88 GiB
+  allocated (every earlier main-run trial: ~6.1 GiB) -- the leak fix (outgoing branch's tensors emptied in place) holds in the main
+  run, ~5.2 GiB freed per switch.** Stage 2 fine-tune: held-out 1.0246 at 20,000 (step size frozen at 1.72e-4 since 5,000), no skips.
+- `2026-10-14 13:10 UTC` **Two-stage fine-tune, stage 2 COMPLETE and stable:** 50,984 steps, held-out answer loss 1.3051 -> 1.0542 (10k) -> 1.0246 (20k)
+  -> 1.0061 (30k) -> 0.9927 (40k) -> **0.9798 at the end (best; lowest of any fine-tune)**, 0 skipped steps, no divergence -- the step
+  size frozen after 5,000 steps (1.72e-4) removed the instability that broke three earlier runs (~3k, ~31k, ~39k). Evaluations running.
+- `2026-10-14 13:43 UTC` **Two-stage Q&A: everyday / SciQ / ARC 43.8 / 7.6 / 38.7** (stage 1 alone 60.4 / 6.9 / 42.6): stage 2 kept the arithmetic
+  (hand-checked 7/8: "The answer is 15.", "Tom has 3 + 5 = 8 apples."; "144 / 12 = 11" wrong) and general text (1.0183, the best of
+  any fine-tune, below the init's 1.0245) but not stage 1's everyday gain. **CONTAMINATION FOUND (mine): 10 of the 48 everyday
+  questions occur VERBATIM in the factual fine-tune data** ("What is the capital of France?", "Who was the first president of the
+  United States?", "What language is spoken in Brazil?", ...) -- the 10-word-span decontamination missed them (they are shorter).
+  So the everyday scores of the factually fine-tuned models -- the old fine-tune's 58.3 (in REPORT.md, pushed) and stage 1's 60.4 --
+  are partly memorised test questions. eval/qa.py now prints a CLEAN score on the other 38 (QA_EVERYDAY_ONLY=1 for a quick run);
+  the six fine-tunes re-scored on it after the two-stage evaluations (eval/everyday_clean.txt). REPORT.md to be corrected.
+- `2026-10-15 06:31 UTC` **GROWTH TRIAL DECIDED (logs/many2.out): STAY at 168.1M, step 698,426.** Branches of 16,075 steps from 650,200: R (longer
+  reach) held-out 2.0876 -> 2.0862 (1.215 s/step); W (wider, 257.4M) -> 2.0952 (1.141 s/step); d (deeper, 24 layers) "does not fit under
+  the 32 GiB cap ... not a candidate" (no crash); unchanged -> **2.0843** (0.742 s/step). Gain per hour: unchanged +0.0006, R -0.0002, W
+  -0.0019 -> STAY; "will reconsider when this stage's length doubles again". First full trial with the leak fix: switches left
+  0.88 / 1.03 GiB (was ~6.1); after the failed deepen still 2.41 GiB (that path's leftover is not the half-built model). Main run at
+  739,400 / 750,000; continuation to 1,000,000 queued (eval/many_run.sh, logs/many3.out) so the trainer slot is not left idle again.
+- `2026-10-15 06:31 UTC` **Two-stage fine-tune, complete (eval/sft4_twostage.txt):** benchmarks HellaSwag 32.4, PIQA 62.0, ARC-E 42.9, ARC-C 25.2, OBQA
+  27.6, LAMBADA 18.0, GSM8K 2.0, facts 77.1, arithmetic 36.7 / exact 3.3, reasoning 39.5 (all within noise of the init); battery: digit span
+  15+ / 2, free recall 45-17-20, 2-back 0.43, Wason abstract right 35 / matching 55, social right 42, belief bias logic 0.57, CRT 30 / 22,
+  conjunction 20 with control 25, false belief 57 / 35 -- the same profile.
+- `2026-10-15 06:31 UTC` **Clean everyday Q&A (eval/everyday_clean.txt; the 38 questions NOT verbatim in the factual data):** init (no fine-tune) 47.4,
+  old fine-tune 57.9, **stage-1 factual 60.5**, quick new 55.3, full mix 44.7, two-stage 44.7; **GPT-2 15.8, SmolLM2 60.5.** **Correction
+  of my alarm:** the overlap was real (10 verbatim) but its effect is negligible -- the factually trained models score about the same on
+  the 38 clean questions as on all 48 (old 57.9 vs 58.3; stage 1 60.5 vs 60.4): the factual fine-tune's gain (+10-13 over the init) is
+  real answering, not memorised items. **Stage 1 matches SmolLM2 on clean everyday questions (60.5 = 60.5).** The broad chat data pulls
+  it down to 44.7 (below the init): it teaches a style that answers short factual questions worse. SciQ remains ~3 points inflated
+  for the old fine-tune (its overlap was passages, not questions).
+- `2026-10-15 06:38 UTC` **Stage 2 for arithmetic launched (eval/sft5_arith.sh):** from stage 1 (factual, no replay; clean everyday 60.5), one pass
+  over 6,421 rows = 3,032 factual + 1,784 worked arithmetic (eval/build_sft2.py ARITH_WORKED=1 SFT2_SOURCES=orca,gsm8k,arith: answers that
+  state the operation, never a bare number) + 1,605 general text (25%); guards on. Aim: stage 1's Q&A with arithmetic back.
+- `2026-10-15 06:45 UTC` **User: work on goals 4, 7, 2 first.** Written: **eval/calibration.py** (goal 4: calibration on ARC-E/C, SciQ, OpenBookQA test
+  -- ~5,000 four-way items; accuracy, confidence, ECE, AUROC; ours vs GPT-2 / SmolLM2) and **eval/continual2.py** (goal 7: eval/continual.py's
+  120 invented facts and its NEW / OLD / TEXT measures, trained with the step size FROZEN at the fine-tune plateau 1.72e-4 and replay 0 / 0.5
+  of every batch, measured every 100 steps to 1,000) -- both queued after the arithmetic stage 2 (logs/queue_g47.out). (Checked and
+  withdrawn: my guess that eval/continual.py measured schedule-free runs without the averaged weights -- train() does call opt.eval().)
+  **eval/build_cog.py** (goal 2): worked practice for the faculties the battery found missing, the battery's own formats HELD OUT --
+  list manipulation on words / letters (digits held out), conditional logic with invented terms (Wason held out), syllogisms over nonsense
+  categories (believability held out), transitive orderings, counting probability and the conjunction rule with numbers (Linda / CRT held
+  out), unexpected contents and knowledge access (the moved-object story held out). Building 30M tokens -> /mnt/kv_cache/sft_cog.
+- `2026-10-15 07:17 UTC` **Stage 2 for arithmetic (eval/sft5_arith.txt) = the best balanced fine-tune so far** (/mnt/kv_cache/sft5_arith): best held-out
+  1.1975 at 5,500 of 6,421, no skips; bits/byte **1.0234** (init 1.0245, stage 1 1.0399); chat questions hand-checked arithmetic **8/8**
+  (all worked: "7 plus 8 is 15.", "12 x 12 = 144", "144 / 12 = 12", "Tom has 3 + 5 = 8 apples."), facts 3/10, reasoning 2/6; **clean
+  everyday 55.3** (stage 1 60.5, ~1 SE on 38 questions), SciQ 7.1, ARC 40.5. Stage 1's question answering kept, arithmetic back, no
+  forgetting. The goal 2 training starts from it.
+- `2026-10-15 08:12 UTC` **GOAL 4 CALIBRATION AT SCALE (eval/calibration_v1.txt; 5,030 four-way items: ARC-E 2,365, ARC-C 1,165, SciQ 1,000, OBQA 500;
+  confidence = softmax over per-character option log-probabilities):** acc / mean conf / ECE / AUROC -- base 740k 41.1 / 0.329 / 0.087 /
+  0.575; **stage-1 factual 45.3 / 0.335 / 0.119 / 0.599**; two-stage 40.5 / 0.329 / 0.078 / 0.563; GPT-2 34.8 / 0.336 / 0.042 / 0.529; SmolLM2
+  50.3 / 0.336 / 0.168 / 0.597. Every model's mean confidence is ~0.33 -- option-softmax confidence is nearly flat whatever the model, so
+  ECE mostly tracks |accuracy - 0.33| (GPT-2's "best" ECE is that coincidence). **AUROC, the discrimination, is the reading: stage 1
+  ties SmolLM2 (0.599 vs 0.597) and beats GPT-2 (0.529) -- real but weak (~0.6).** This replaces the 48-fact "+0.225 vs GPT-2's +0.186"
+  (too small a set). Next for goal 4: self-agreement confidence (0.51 vs 0.17 right vs wrong on everyday questions) measured on these sets.
+- `2026-10-15 08:22 UTC` **GOAL 7: FACTS INTO THE WEIGHTS WITHOUT FORGETTING -- SHOWN (eval/continual2_v1.txt; eval/continual.py's 120 invented facts and
+  measures; base 740k; step size frozen at 1.72e-4; batch 8 x 256).** No replay: NEW 25.0 -> 35.0 (100) -> 85.8 (300) -> 94.2% (1,000), OLD 77.1
+  -> 70.8%, TEXT 1.0060 -> 1.1968 -> 1.4758 -> **1.8272** (+82%). **Replay 0.5:** NEW 25.0 -> 33.3 (100) -> 55.0 (300) -> 79.2 (500) -> **80.8% (600)**
+  -> 74.2% (1,000); **OLD 77.1 -> 83.3-85.4%** (up); **TEXT 1.0060 -> 1.012-1.017** throughout (+0.6%). With the step size frozen and half
+  of every batch real text, 120 new facts went from chance to ~81% while old facts rose and general text held -- every earlier variant
+  forgot (TEXT 1.19 -> 1.9-5.3; 2026-10-06). Costs: the new facts reach ~81% not 94%, and drift down past their peak (74% at 1,000), so
+  training stops at the peak on held-out phrasings of the new facts. The earlier failures were the step size (left to climb, or the
+  pretraining one, ~10x too large), not replay itself.
+- `2026-10-15 09:13 UTC` **GOAL 2 TRAINING: LEARNED, DID NOT TRANSFER (eval/sft6_cog.txt).** eval/build_cog.py's practice (30M tokens) + general text 1:1
+  from the arithmetic stage-2 model: held-out answer loss **0.0004** (the templates mastered), bits/byte 1.0234 -> 1.0299, chat questions
+  (scorer, not hand-checked) facts 1/10, arithmetic 6/8, reasoning 4/6. **Battery v4, init -> trained (the battery's formats held out):**
+  digit span backward 2 -> 2 (forward 6 -> 5), 2-back 0.48 -> 0.47, Wason abstract right 40 -> 40, social 42 -> 25, belief bias logic 0.54 ->
+  0.52, belief 0.50 -> 0.29 (now leaning AGAINST believable), CRT 25 -> 28, conjunction 30 -> 45 with control 35 -> 57 (a shift to the
+  longer option, not the rule), false belief 55 / 35 -> 45 / 40, free recall 48-34-27 -> 38-22-20. **No transfer:** reversing words /
+  letters did not teach reversing digits; if-then practice did not help card selection; abstract syllogisms did not move validity. The
+  same lesson as the lookup (template-bound at 6 kinds, general at 381): one or two formats per faculty teach the formats. Next: many
+  formats per faculty (hundreds), the battery's still held out. **Also found:** the arithmetic stage-2 model's forward digit span is 6
+  (base 15+) -- stage 1's terse factual style damaged plain copying and 25% replay did not restore it.
+- `2026-10-15 09:17 UTC` **Goal 2 v2 data (eval/build_cog2.py): many formats per faculty** -- manipulation ~16 operations x 10 materials (words of 8
+  categories, letters, syllables, colours, names, number words; digits held out) x 6 list layouts x 4 answer formats, streaming recall; conditional
+  logic in 6 rule phrasings x 6 inference forms (incl. contrapositive, "only if", "unless"); 10 syllogism forms x 4 quantifier phrasings (nonsense
+  categories); orderings (8 relations, first / last / between / check); probability in 6 problem types incl. conjunction AND disjunction rules
+  and base rates with numbers; theory of mind in 6 paradigms (unexpected contents, appearance-reality, knowledge access, second-order belief,
+  deception, ignorance -> "does not know"); mental steps (running arithmetic in words, shell game). Held out as before. Building 100M tokens +
+  1:1 general text (/mnt/kv_cache/sft_cog2_mix). Self-agreement AUROC for goal 4 running (eval/selfcons_auroc.txt).
+- `2026-10-15 09:48:04 UTC` **train** (1627.8 min) ok
+  d512 L12 mlp4 ctx8192 B1 750000 steps -> /mnt/kv_cache/many2
+  (log `logs/20261014-064018-train.log`, seed 36)
+- `2026-10-15 10:46 UTC` **GOAL 4, SELF-AGREEMENT AS CONFIDENCE (eval/selfcons_auroc.txt; stage-1 factual model, 6 samples at temperature 1):** everyday
+  AUROC **0.680** (agreement 0.43 right vs 0.22 wrong; n 29 / 19), SciQ AUROC **0.700** (0.27 vs 0.14; n 69 / 931) -- stronger than the
+  option-softmax confidence (AUROC ~0.60 on 5,030 items). Abstaining when fewer than half agree: everyday right-when-answering 76.5%
+  (declines 64.6%), SciQ 15.8% (declines 88.0%). A real but moderate signal; not yet compared with GPT-2 / SmolLM2 (selfcons runs ours
+  only). The second model (arithmetic stage 2) was dropped to start goal 2 v2 sooner (its loop stopped by verified PID 1881520; the
+  running test left to finish). Next for goal 4: train on its own self-agreement so the confidence is intrinsic.
+- `2026-10-15 10:48 UTC` **GOAL 2 v2 TRAINING STARTED** (eval/sft7_cog2.sh via the queue, 10:47 UTC): init the two-stage model
+  (/mnt/kv_cache/sft4_twostage, keeps copying), data /mnt/kv_cache/sft_cog2_mix (eval/build_cog2.py v2: many formats per faculty, ~100M
+  tokens, general text 1:1), psf with step size frozen after 5,000 steps, divergence guards; then BPB, chat questions and the v4 battery
+  (init vs trained) into eval/sft7_cog2.txt. Main run at 753,000 (62 ktok/s, ~72 h to 1M).
+- `2026-10-15 11:14 UTC` **GOAL 4 NEXT, A FEELING OF KNOWING (eval/know_probe.py, queued after goal 2 v2 via scratchpad/queue_know.sh
+  -> eval/know_probe.sh -> eval/know_probe_v1.txt, marker KNOW_DONE):** a linear read-out of the model's own hidden state, trained on
+  whether its own answers were right (~33,000 four-way train/validation items of ARC / SciQ / OBQA / CommonsenseQA), tested on the
+  5,030 items of eval/calibration.py. PROSPECTIVE = the state at the end of the question, before any answer (the human feeling of
+  knowing); RETROSPECTIVE = the state at the end of its chosen answer; layer and penalty chosen on training items only; TRANSFER =
+  trained with the test set's own source left out. Same model as calibration (0.599) and self-agreement (0.700), plus GPT-2 and
+  SmolLM2 read the same way; open-ended SciQ (4,000 train questions, the same 1,000 test questions as self-agreement). Smoke tests at
+  15-20 items per set ran all three models end to end (numbers meaningless at that size). Disclosure: the smoke tests ran beside the
+  goal 2 training without the side-job lock (2 GiB cap, ~15 min in all; the caps' sum stayed under the card) and slowed it from ~25
+  to ~20 ktok/s meanwhile. Goal 2 v2 at 9,000/48,262: held-out loss 0.0134 (falling), no skipped steps, step size 4.7e-4 since step 100.
+- `2026-10-15 11:15 UTC` **GOAL 7 NEXT, LEARNING IN EPISODES (eval/continual3.py, queued after the goal 4 read-out via
+  scratchpad/queue_cont3.sh -> eval/continual3.sh -> eval/continual3_v1.txt, marker CONT3_DONE):** the 120 invented facts of
+  continual2 in FOUR episodes of 30. The model stops each episode itself: each fact's third sentence is never trained and serves as
+  its flashcard (cloze over the four candidates); a self-test every 50 steps; stop when the score has not risen for 3 checks (or
+  is 100%), max 1,500 steps. REHEARSE=1: earlier facts whose flashcard it now fails go back into the study pool (replaying what is
+  fading); REHEARSE=0 is the control. Half of each batch general text; step size frozen at 1.72e-4; base 740,000 as continual2.
+  Reported after each episode: every episode's recall in the untrained question phrasing, OLD, TEXT. Not smoke-tested yet (it needs
+  ~5 GiB and the side slot is in use; the cap sum would pass the card) -- its first minutes in the queue are the smoke test.
+- `2026-10-15 11:34 UTC` **FOUND: the end-of-document marker is a real word.** Token 8191, used as the end-of-document marker in every
+  bin since tokenizing (and in every fine-tune set, and as generate()'s stop), is the ordinary BPE token " introduction". Measured on 20M
+  tokens per source (offset 100M): 8191 occurs 830 / 856 / 661 times per million tokens (wikipedia / fineweb-edu / dclm), and 2.8% / 3.0%
+  / 1.7% of those are followed by a sentence continuation (" to", " of", ",", ...) -- the real word, ~20 per million tokens. Effects:
+  the model has learned the word as a document boundary (a reset of topic after "introduction" in running text), and every generation
+  with stop=8191 is cut short wherever the model writes "introduction" (answers, idle thought, chat). Small, but real; not seen before
+  today. A clean fix needs a dedicated marker = a vocabulary change (re-tokenize, or the vocabulary-growth option proposed to the user);
+  until then it is a known limit of every result.
+- `2026-10-15 11:58 UTC` **GOAL 2, THE BATTERY AS HUMANS TAKE IT (eval/cognitive_think.py; queued after goal 7 via scratchpad/queue_cogthink.sh
+  -> eval/cognitive_think.sh -> eval/cognitive_think_v1.txt, marker COGTHINK_DONE).** The goal-2 data teaches answers in chat format with
+  the steps first; the battery (eval/cognitive.py) reads the label the model gives INSTANTLY in raw text -- a trained faculty could be
+  invisible to it, and people taking these tests think first. Same tasks (fresh items, same human figures) in chat format, read two
+  ways: INSTANT ("Assistant: So the answer is (") and THINK (up to 160 greedy tokens of its own, then the same cue). Answers read by
+  likelihood (labels in a random order per item; yes vs no) or greedy continuation (CRT numbers, digit lists), never parsed from free
+  text. Models: the goal-2 init (two-stage), goal-2 v1 (sft6) and v2 (sft7). Smoke test N=2 ran both modes end to end (numbers
+  meaningless). generate() reads a prompt in one piece of its own length and the fused kernel tunes per length (~2.3 s each), so the
+  script decodes from prefix() (pieces of 256) -- plain greedy, identical to generate() with DRY / frequency penalty at their default 0.
+  Disclosure: the two smoke tests ran beside the goal-2 training without the side-job lock (cap 2 GiB, ~25 min).
+- `2026-10-15 13:00 UTC` **GOAL 2 v2 RESULT (eval/sft7_cog2.txt): many formats per faculty learned (held-out 0.0098, stable, 0 skipped), but
+  NO TRANSFER to the instant battery, and chat damaged.** Battery v4, init (two-stage) -> goal-2 v2: digit span 15 / 2 -> 15 / 2; 2-back AUC
+  0.43 -> 0.38; Wason abstract right 35 -> 28, social 42 -> 35; belief bias logic 0.57 -> 0.53, belief 0.51 -> 0.48; CRT 30 -> 25 (intuitive
+  22 -> 25); conjunction 20 -> 40 with control 25 -> 22; false belief 57 / 35 -> 52 / 35 -- all within noise of chance. **One gain: free
+  recall** (a held-out format) mean 24% -> 42% of 15 words (by position 45 40 50 ... 20 25 -> 35 45 50 55 40 ...), the middle of the
+  list 17 -> 43 -- more remembered, but the curve went FLAT (humans: U-shaped, ~40-50% overall); part of the battery's word pool is in the
+  training's "objects" material (lantern, napkin, quilt, ...), so the size of that gain is uncertain. **Costs:** bits/byte 1.0183 -> 1.0380
+  (+1.9% despite 1:1 general text); chat questions facts 2 -> 1 / 10, arithmetic **8 -> 3 / 8**, reasoning 1 -> 2 / 6, with the practice's
+  stock phrases intruding on unrelated questions ("2, 4, 6, 8?" -> "Going from the last to the first: 8, 6, 4, 2."; "Who painted the Mona
+  Lisa?" -> "Counting from the start, ..."). Replaying general TEXT protects text, not the chat skills of earlier fine-tunes: those need
+  their own data replayed. The think-then-answer battery (queued) is the remaining test of whether the trained steps help when the model
+  may use them.
+- `2026-10-16 05:44 UTC` **GOAL 4, FEELING OF KNOWING -- WEAK (eval/know_probe_v1.txt, done 2026-10-15 15:30 UTC).** A linear read-out of the
+  hidden state, trained on 33,318 four-way items, tested on 5,030 (AUROC; softmax / prospective / retrospective / transfer pro / ret):
+  **ours** ARC-E 0.600 / 0.573 / **0.628** / 0.562 / 0.564, ARC-C 0.481 / 0.536 / 0.531 / 0.532 / 0.497, SciQ 0.625 / 0.575 / **0.659** / 0.541 /
+  0.583, OBQA 0.503 / 0.555 / 0.599 / 0.512 / 0.539. **GPT-2** retrospective 0.585 / 0.534 / 0.671 / 0.578 -- about ours. **SmolLM2**
+  retrospective **0.717 / 0.620 / 0.808 / 0.633**, transfer 0.662 / 0.566 / 0.736 / 0.591 -- clearly more of a "knowing" signal in its state
+  than in ours. Open-ended SciQ (4,000 train, the 1,000 test questions of self-agreement): prospective 0.585, retrospective 0.572 --
+  BELOW self-agreement (0.700). So for our model the strongest confidence signal is still agreement among its own samples; a read-out
+  of its state adds ~0.03-0.1 over the option softmax on four-way items, transfers poorly across sources, and trails SmolLM2's.
+- `2026-10-16 05:44 UTC` **GOAL 7 IN EPISODES (eval/continual3_v1.txt, done 15:48 UTC): rehearsing what fades prevents most of the forgetting;
+  one flaw of mine in the stopping rule.** Recall of each episode (untrained question phrasing, 30 facts each, chance 25%) at the end:
+  **control (no rehearsal)** after episode 1 / 2 / 3 / 4: ep1 87 -> 20 -> 17 -> **0%**, ep2 83 -> 60 -> 23%, ep3 87 -> 47%, ep4 80% --
+  catastrophic forgetting, each episode overwriting the last (72 earlier facts failing their flashcards at the end); OLD 77.1 -> 68.8,
+  TEXT 1.006 -> 1.032. **Rehearsal** (earlier facts failing their flashcard go back into the pool): ep1 83 -> 67 -> 80 -> **70%**, ep2 80 ->
+  70 -> **67%**, ep3 80 -> **87%** -- held; OLD 79.2 after episode 3, TEXT 1.022. **But episode 4 failed under rehearsal: it "stopped itself" at
+  200 steps with its flashcards at 0%** -- my rule (stop when the self-test has not risen for 3 checks) counted the flat START as a
+  plateau; in the control the same episode needed 700 steps. (0% on four-way cards = it picked other learned facts' answers, which are
+  the distractors here.) Fix: patience counts only once the self-test is above chance. The model chose 200-800 steps per episode itself.
+- `2026-10-16 05:44 UTC` **GOAL 2, THINK-THEN-ANSWER BATTERY (eval/cognitive_think_v1.txt, done 17:55 UTC): thinking does not help either.**
+  init / goal-2 v1 / goal-2 v2, INSTANT -> THINK, N=40: 2-back 50 -> 50 / 50 -> 50 / 50 -> 42% (chance 50); Wason abstract right 22 -> 25 /
+  30 -> 32 / 28 -> 30, social 20 -> 35 / 28 -> 15 / 40 -> 35 (chance 25); CRT right 0 -> 5 / 0 -> 0 / **32** -> 0 (v2 instant 32% with 5%
+  intuitive errors, gone when it thinks); conjunction 70 -> 40 / 55 -> 60 / 50 -> 50; false belief 60 -> 60 / 50 -> 45 / 50 -> 50 with true-belief
+  controls 20-55; belief bias THINK: init says "follows" to almost everything (90 / 95 / 85 / 90), v2 30 / 60 / 40 / 30 -- no sensitivity to
+  validity anywhere. Digit span forward in chat format 6 -> 9 / 10 -> 7 / 4 -> 2 (copying damaged by v2). Its thinking is not reasoning:
+  "5 minutes is equal to 5 x 60 = 300 minutes, so ..." (v2). Conclusion for goal 2: synthetic practice at 168M learns the practice, not
+  the faculty, with or without room to think; the one held-out gain is free recall. A different approach is needed.
+- `2026-10-16 05:44 UTC` **Slip (mine): I overwrote a tracked script.** eval/know_probe.sh was the knowledge-run scorer (2026-10-08); on
+  2026-10-15 I wrote the goal-4 job under the same name without checking. Restored from git (git checkout); the goal-4 job is now
+  eval/know_probe_v1.sh. Any uncommitted edits the old file may have had are lost (git showed it unmodified before? not checked -- unknown).
+  Also: the queued backlog ended 2026-10-15 17:55 UTC and the session ended; the side slot has been idle since (the main run, alone on
+  the card, went 45 -> 77-81 ktok/s). Main run at 833,600 (~39 h to 1,000,000).
+- `2026-10-16 05:45 UTC` **Goal 7 episodes v2 started** (eval/continual3.py with patience counted only above chance; REHEARSE=1 only -- the
+  control was unaffected by the flaw, every control episode passed 80%): TAG=v2 eval/continual3.sh -> eval/continual3_v2.txt, ~20 min.
+- `2026-10-16 05:57 UTC` **GOAL 7 IN EPISODES v2 (eval/continual3_v2.txt): LEARNING WITHOUT FORGETTING ACROSS FOUR EPISODES -- SHOWN.** With patience
+  counted only above chance, every episode stopped itself between 300 and 800 steps (flashcards 77-90%). Recall at the end (untrained
+  question phrasing, chance 25%): **83 / 70 / 73 / 90%** for episodes 1-4 (mean **79%**) vs the control without rehearsal 0 / 23 / 47 / 80%
+  (mean 37.5%); at most 18 of 90 earlier facts were fading at any check and went back into the pool. Costs: OLD (48 real facts, never
+  rehearsed) 77.1 -> 70.8% (control 68.8), TEXT 1.0060 -> 1.0248 (+1.9%; control 1.0324). What is still open: what the model already knew
+  before (OLD, TEXT) erodes slowly, because only facts it has a flashcard for are rehearsed.
+- `2026-10-16 06:00 UTC` **src/sft.py --rehearse (goal 7 for skills): eval/continual3.py's rule applied to whole fine-tune sets.** Each earlier
+  set's held-out answer loss (64 rows) is the model's self-test at every evaluation; a set above its step-0 value is FADING and joins the
+  sampling pool beside the new data (one source drawn uniformly per row) until it recovers -- no mixing ratio set by hand. Smoke test
+  (241 steps, eval every 60): both earlier sets faded at once (sft3_mix 1.0419 -> 1.0793, factual 1.2300 -> 1.2971), were rehearsed
+  (57 / 68 rows), factual recovered part-way (1.2557). **Launched eval/sft8_rehearse.sh** (logs/sft8.out -> eval/sft8_rehearse.txt, marker
+  SFT8_DONE): eval/sft7_cog2.sh exactly (init two-stage, cog2 data, psf, guards) plus --rehearse sft3_mix,sft_factual_clean, eval every
+  1,000; then bits/byte, chat questions, battery v4 -- against v2 without rehearsal (arithmetic 8 -> 3 / 8, bits/byte +1.9%). ~2 h + 30 min.
+- `2026-10-16 06:04 UTC` **Goal 2 battery: PRACTICE TRIALS mode (eval/cognitive_think.py MODES=...,practice), queued after SFT8_DONE
+  (scratchpad/queue_practice.sh -> eval/cognitive_practice.sh -> eval/cognitive_practice_v1.txt).** People get solved practice trials
+  before a task; here each item follows 3 solved items of the same task as earlier chat turns. Items are collected (the task run with
+  the helpers recording each item and returning its correct answer), SHUFFLED (2-back alternates match / non-match and belief bias
+  comes in blocks of one cell: in order, the earlier answers would give the next away), scored, then replayed on the same random
+  stream so every statistic is computed exactly as in the other modes. Checked on the CPU with a stand-in model: the random stream
+  ends identical after instant and practice, every stored answer is consumed, the practice answers arrive shuffled. A slip of mine
+  caught there: the patch had renamed the 2-back function's own definition (a text replace hit "def two_back"); fixed before any run.
+  Models: init, goal-2 v2, goal-2 with rehearsal; modes instant and practice.
+- `2026-10-16 06:04 UTC` Rehearsal fine-tune at step 1,000: both earlier sets FADING (sft3_mix 1.0419 -> 1.1910, factual 1.2300 -> 1.5953) --
+  the new practice erodes them fast; rehearsal starts now (the first 1,000 steps ran without it: the self-test runs at evaluations).
+- `2026-10-16 06:42 UTC` **THE MAIN RUN HAS STOPPED IMPROVING -- AND IS DRIFTING WORSE.** Its eval bits/byte (logs/many2.out, logs/many3.out; the
+  trainer's eval: 8 x 4 x 8,192 tokens drawn from the five training sources, seed 1234): ~0.952 from 650k to 700k (incl. the growth-trial
+  branches), down to **0.9485 at 750k / 0.9484 at 760k**, then up at every eval since: 0.9498 (776k), 0.9517 (784k), 0.9522 (800k), 0.9538
+  (816k), 0.9553 (832k), **0.9561 (836k)**. Training loss per 10k steps flat (2.09-2.12). So ~8.5B tokens since 650k bought nothing on
+  general text, and the last ~5B made it ~0.8% worse. Not yet known why (step size frozen at 3.3e-3 with no anneal; 32% of tokens
+  synthetic; wikipedia ~1.7 epochs; or the eval's own sample, which is drawn from the training bins, not held out). Queued after the
+  rehearsal fine-tune: eval/plateau_check.sh (per-source bits/byte and the benchmark suite, 760k vs the latest) -> eval/plateau_check.txt.
+  The best base checkpoint is ckpt_s760000.pt. Whether to stop, change or continue the run is the user's decision; raised with them.
+- `2026-10-16 06:56 UTC` **User: "do what needs to be done without wasting time and compute and what is needed for the vision."** Acting on it:
+  **the main run STOPPED at 836,200** (verified PIDs: queue 1818975, many_run 1895314 / 1895320, keep_training 1895323, then the trainer
+  1895325; MANY_STOPPED written to logs/many3.out). Its last 76,000 steps made it worse; best base = /mnt/kv_cache/many3/ckpt_s760000.pt.
+- `2026-10-16 06:56 UTC` **WHY IT DRIFTED (eval/sf_z_check.py -> eval/sf_z_check.txt; eval/plateau_check.txt):** the schedule-free iterate z has
+  WANDERED. ||z - x|| / ||x|| = 0.945 at 760k, 0.964 at 836k; scored on the same text (bpb_ckpt's 952k bytes): x 1.0083 -> 1.0153, the
+  gradient point y 1.0106 -> 1.0134, but **z alone 5.76 -> 13.07 bits/byte**, and x + 0.25 (z - x) 1.32 -> 2.68. The averaging clock reads
+  ~345,000 -> ~421,000 steps of weight (ws 3.77 -> 4.60 at d = 3.3e-3): x is a very long average that z keeps dragging. Cause: weight
+  decay 0 and the step size frozen at the value Prodigy ratcheted up to -- nothing pulls z back, so it random-walks away. Per source, 760k
+  -> 836k: dclm 1.1003 -> 1.1084, fineweb-edu 0.9010 -> 0.9067, wikipedia 0.8852 -> 0.8940 -- every source worse, as a drift of the
+  weights (not of the data mix) predicts. Also found: src/train.py's sf_restart (used at growths with --sf-restart) resets z and the
+  group clock but not the per-weight clocks wsp that sfp_clock=1 reads -- it restarts nothing there.
+- `2026-10-16 06:56 UTC` **FIX, CHOSEN BY THE MODEL'S OWN TRIAL (eval/sf_branches.sh -> eval/sf_branches.txt, marker SFB_DONE; trainer slot):** three
+  branches from 760k, each with the average restarted at the saved weights (eval/sf_seed.py: z := x, every clock 0 -- the model
+  unchanged) and the step size held at d = 3.3e-3, d/2, d/4; everything else the main run's (args, data, growth on: the next trial is due
+  at 907,400). 3,000 steps each (~55-70 min), the trainer's own eval every 500. The lowest eval bits/byte decides the step size the
+  run continues with -- a step size picked by trial, as growth is. First branch (d) started 06:54 UTC.
+- `2026-10-16 07:49 UTC` **Step-size branches, d = 3.3e-3 (eval/sf_branches_part1.txt): the restarted average at the old step size is WORSE and not
+  recovering** -- 0.9666 (760.5k), 0.9682 (761k), 0.9679 (761.5k) vs 0.9484 at the start (the long average). Running ~1,000 steps/hour
+  beside the rehearsal fine-tune and the benchmark check, so 3,000-step branches would take ~9 h: stopped at 1,500 (verified PIDs
+  2179393 script, 2179545 trainer) and the other two (d/2, d/4) run to the same 761,500 (DS="1.65e-3 8.3e-4" END=761500
+  eval/sf_branches.sh -> eval/sf_branches.txt). Comparison at equal steps.
+- `2026-10-16 08:04 UTC` **GOAL 7 FOR SKILLS -- REHEARSING WHAT FADES KEEPS EARLIER SKILLS (eval/sft8_rehearse.txt).** Same init, data and steps as goal-2
+  v2, plus --rehearse: held-out 0.0109 (v2 0.0098); 0 skipped. Self-tests: factual back to its start by ~5k steps (1.2270 vs 1.2300 at the
+  end, 3,291 rows rehearsed in all); sft3_mix (chat / code / reasoning) peaked 1.1910 at 1k, held ~1.095 to ~10k, then fell to 1.0582 by 40k
+  (start 1.0419; ~18k rows rehearsed). **Chat questions: facts 4 / 10, arithmetic 6 / 8, reasoning 2 / 6** -- vs v2 without rehearsal 1 / 3
+  / 2 and the init 2 / 8 / 1; the stock-phrase intrusions are gone ("2 plus 2 is 4.", "12 x 12 = 144", "Carbon dioxide.", "The capital of
+  Australia is Canberra."). Bits/byte 1.0183 -> **1.0328** (v2 1.0380). Battery and practice battery to follow.
+- `2026-10-16 08:04 UTC` Step-size branch d/2 (1.65e-3), first eval: **0.9493 at 760.5k** vs 0.9666 for d at the same step (start 0.9484).
+- `2026-10-16 08:18 UTC` **Rehearsed goal-2 model, battery v4 (eval/sft8_rehearse.txt; init in eval/sft7_cog2.txt, same items):** digit span 15 / 2;
+  2-back AUC 0.37; Wason abstract right **55%** (init 35, v2 28) but matching 42% -- it splits between the two "vowel and a number" options,
+  so a preference for that pair, not the rule; social 45; belief bias logic 0.51 / belief 0.44; CRT 25 (intuitive 18); conjunction 8% with
+  control 12% -- it picks the shorter option whatever the rule; false belief 62 / 45. **Free recall mean 40% (init 24, v2 42) and the curve
+  is U-shaped again: first three 47 / middle 35 / last three 40** -- the human pattern (primacy and recency), which v2 had flattened.
+  So: rehearsal kept the earlier skills and the one transferable gain (list memory); reasoning stays at chance.
+- `2026-10-16 08:28:05 UTC` **train** (39.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 761500 steps -> /mnt/kv_cache/sfb_1.65e-3
+  (log `logs/20261016-074858-train.log`, seed 36)
+- `2026-10-16 08:28 UTC` Step-size branch d/2: 0.9493 / 0.9514 / **0.9517** at 760.5 / 761 / 761.5k -- better than d (0.9679) but ALSO above the start
+  (0.9484): the restarted average gets worse at every step size tried so far. Queued eval/sf_general.sh (waits for SFB_DONE): the best
+  step size again from 760k, restarted, but GENERAL TEXT ONLY (--data2-frac 0, the five sources at the run's relative weights -- the
+  eval text is the same) -> eval/sf_general.txt. If general text alone improves where the mix does not, the synthetic 32% costs general
+  text, and the skills it carries should enter the stream only when their self-test fades (the --rehearse rule) -- an intrinsic mix.
+- `2026-10-16 08:44 UTC` **GOAL 2 WITH PRACTICE TRIALS (eval/cognitive_practice_v1.txt): practice does not reveal a faculty either.** init / v2 /
+  rehearsed, INSTANT -> PRACTICE (3 solved items before each): 2-back 50 -> 38 / 50 -> 52 / 50 -> 38% (chance 50); Wason abstract right
+  22 -> 20 / 28 -> 25 / 30 -> 20, social 20 -> 20 / 40 -> 22 / 25 -> 32 (chance 25); false belief 60 / 20 -> 65 / 65, 50 / 50 -> 50 / 55, 50 /
+  45 -> 70 / 50 (story / control; chance 50); belief bias still no validity effect (rehearsed, practice: valid 45 / 40, invalid 60 / 60);
+  CRT right 0 -> 28 / 32 -> 20 / 5 -> 25 (practice items share the three CRT schemas, so this is copying a schema's answer pattern, not
+  reflection); digit span forward in chat 6 -> 10 / 4 -> 5 / 6 -> 10, backward 2 everywhere. **Conclusion, three ways now (instant, think,
+  practice) and three trainings (none, v1, v2, rehearsed): at 168M the reasoning faculties of the battery are absent and are not taught
+  by synthetic practice; the only transferable gain is list memory (free recall).** Further goal-2 work waits for a stronger base (the
+  step-size fix, growth); no more GPU spent on goal-2 fine-tunes until then.
+- `2026-10-16 08:49 UTC` **Plateau check, benchmarks 760k -> 836k (eval/plateau_check.txt, N=500):** HellaSwag 31.8 -> 32.0, PIQA 63.2 -> 63.0, ARC-E 45.8
+  -> 46.0, ARC-C 26.0 -> 25.8, OBQA 26.6 -> 26.2, LAMBADA 18.0 -> 19.8, GSM8K 1.6 -> 1.2, facts 77.1 -> 79.2, arithmetic 4-way 48.3 -> 38.3,
+  exact 0 -> 3.3, reasoning 48.8 -> 44.2 -- no ability gained in 76,000 steps (~5B tokens); every difference within the sets' noise
+  except perhaps arithmetic 4-way. Together with the per-source bits/byte (all worse): stopping the run lost nothing.
+- `2026-10-16 08:52 UTC` **Step-size branch d/4 (8.3e-4) BEATS THE START: 0.9433 at 760.5k, 0.9448 at 761k** (start 0.9484; d/2 0.9493 / 0.9514; d
+  0.9666 / 0.9682). Smaller is better at every size tried, and every branch rises with time -- the signature of a step size that should
+  keep falling. Queued after the general-text branch: d/8 (4.1e-4), same 1,500 steps (scratchpad/queue_d8.sh -> eval/sf_branches_part3.txt).
+  If d/8 wins too, the run continues with a step size that halves whenever its own trial says so (an anneal chosen by trial, not by hand).
+- `2026-10-16 08:59:16 UTC` **train** (31.0 min) ok
+  d512 L12 mlp4 ctx8192 B1 761500 steps -> /mnt/kv_cache/sfb_8.3e-4
+  (log `logs/20261016-082818-train.log`, seed 36)
+- `2026-10-16 08:59 UTC` **Step-size branches at 1,500 steps (eval/sf_branches_part1.txt, eval/sf_branches.txt): d 0.9679, d/2 0.9517, d/4 0.9455**
+  (start 0.9484; d/4: 0.9433 / 0.9448 / 0.9455 at 760.5 / 761 / 761.5k). The quarter step size is the only one below the start, and
+  it rises with time. General-text branch at d/4 started (eval/sf_general.txt), then d/8.
+- `2026-10-16 09:22:33 UTC` **train** (22.7 min) ok
+  d512 L12 mlp4 ctx8192 B1 761500 steps -> /mnt/kv_cache/sfg_8.3e-4
+  (log `logs/20261016-085952-train.log`, seed 36)
+- `2026-10-16 09:22 UTC` **General text only at d/4 (eval/sf_general.txt): 0.9427 / 0.9444 / 0.9445** vs the mixed branch at d/4 0.9433 / 0.9448 / 0.9455 --
+  within 0.001: the synthetic 32% is NOT what drifts the run; the step size is. The mix stays (it carries the lookup / recall / arithmetic
+  skills). d/8 next.
+- `2026-10-16 09:29 UTC` **The main run's continuation, a step size chosen by trial (eval/anneal_run.py; queued by scratchpad/queue_anneal.sh after the
+  d/8 branch):** from the 761.5k checkpoint of the better of d/4 (0.9455) and d/8 (its average already restarted at 760k), to 1,000,000:
+  segments of 4,000 steps exactly as the main run (data mix kept, growth on with the stage clock carried -- next growth trial due at
+  907,400); after each segment a step-size trial: two branches of 1,000 steps from the segment's end, step size unchanged vs halved
+  (average not restarted), the trainer's own eval decides, the run continues from the winner (its steps kept; the loser's are the
+  cost, ~20%). A growth trial due inside a step-size trial skips that step-size trial. Every 5th segment's checkpoint kept, the rest
+  removed once superseded. Log eval/anneal_run.txt. An anneal whose timing is the model's own measurement, as growth is.
+- `2026-10-16 09:43:46 UTC` **train** (20.6 min) ok
+  d512 L12 mlp4 ctx8192 B1 761500 steps -> /mnt/kv_cache/sfb_4.1e-4
+  (log `logs/20261016-092312-train.log`, seed 36)
+- `2026-10-16 09:44 UTC` **d/8 (4.1e-4) branch: 0.9419 / 0.9422 / 0.9426 (eval/sf_branches_part3.txt)** -- the best and the flattest (d/4 0.9433 / 0.9448 /
+  0.9455). **The main run continues: eval/anneal_run.py from /mnt/kv_cache/sfb_4.1e-4/ckpt.pt (761,500, step size 4.1e-4) to 1,000,000**,
+  started 09:44 UTC (logs/anneal_run.out, eval/anneal_run.txt, /mnt/kv_cache/anneal). Summary of the step-size search at 761.5k (start
+  0.9484): d 0.9679, d/2 0.9517, d/4 0.9455, d/8 0.9426. **Fixed src/train.py sf_restart:** it now zeroes the per-weight clocks wsp as
+  well (with sfp_clock on, zeroing the group's ws alone restarted nothing). No running job uses --sf-restart; the fix takes effect at
+  the next launch that does.
+- `2026-10-16 09:45 UTC` **REPORT.md rewritten for 2026-10-16** (not pushed): base = 760k; ten goals (goal 10 added); goal 2 measured three
+  ways and paused; goal 4 at scale (0.599 / self-agreement 0.70 / hidden-state read-out below SmolLM2's); goal 7 largely met (facts,
+  episodes, skills by rehearsal); the main-run drift, its cause and the self-annealing continuation; the end-of-document flaw; the
+  withdrawn battery v1-v3 numbers listed under retractions.
+- `2026-10-16 10:00 UTC` **Goal 6, the last leak:** the 8 GB demo (cap 6.9 GiB, window 2,048 x 32, growth trial at once with 100-step branches) re-run
+  from 760k with MEMBRAE_MEMDBG=1 (logs/consumer_dbg2.out) to list what holds the 2.41 GiB left after the failed deepen. Side slot; the
+  main run's continuation is in segment 1 (eval 0.9432 at 762k).
+- `2026-10-16 10:20:35 UTC` **train** (20.4 min) ok
+  d512 L12 mlp4 ctx2048 B1 760400 steps -> /mnt/kv_cache/consumer_dbg2
+  (log `logs/20261016-100009-train.log`, seed 34)
+- `2026-10-16 10:30 UTC` Goal 6 memory trace, first try (logs/consumer_dbg2.out): **no growth trial ran** -- a 400-step run checks at step 200 and a
+  trial of 100-step branches needs 2 x 100 steps left (i + 1 + 2K < end), so it skipped itself; my sizing. It did show plain training
+  under the cap again: peak process memory **7,902 MiB** (CUDA context included; an 8 GB card has ~8,188 MiB), 3.5 GiB allocated, 21
+  ktok/s beside the main run. Re-run with 700 steps (logs/consumer_dbg3.out).
+- `2026-10-16 10:55:18 UTC` **train** (71.0 min) ok
+  d512 L12 mlp4 ctx8192 B1 765000 steps -> /mnt/kv_cache/anneal/seg1
+  (log `logs/20261016-094417-train.log`, seed 36)
+- `2026-10-16 10:57 UTC` **Goal 6, the failed-deepen leak FOUND and fixed (logs/consumer_dbg3.out, 8 GB demo from 760k, cap 6.9 GiB).** Trial at
+  760,200 (100-step branches): R ran (2.2667 -> 2.2672), the switch left 1.00 GiB; W "does not fit" (no crash), 1.06 GiB left; d "does not
+  fit", **2.41 GiB left** -- reproduced. The live-tensor list after the failed deepen held ~2x more weight-shaped tensors under torch.compile's
+  TrackedFake records than after the other switches (gc counts fakes too: 4.43 GiB "seen" of 2.41 allocated). Cause, read in src/train.py:
+  the deepen builds the deep model (deepen() copies every value into new tensors), then `m, opt = big, opt2` and `del old_m` -- the
+  shallow 168M model's weights and gradients (0.67 GiB each = the extra 1.35 GiB) were dropped by name only, while the compiler's records
+  of the shallow model's graphs still pointed at them; when the out-of-memory came after that swap (building the deep model's graphs),
+  install() emptied the DEEP model, not the shallow one. **Fix:** before `del old_m` its parameters, gradients and buffers are emptied in place
+  (identity-guarded against anything the deep model shares; the old optimizer's state, carried by reference, untouched). To verify with
+  a fresh 700-step demo after the current one ends. The anneal run's later segments load the fixed file (the deepen path only).
+- `2026-10-16 10:58:51 UTC` **train** (27.8 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 192.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 15.41 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.70 GiB memory in use. Process 2093500 has 39.52 GiB memory in use. Process 2095813 has 1.65 GiB memory in use. Process 2095812 has 1.69 GiB memory in use. Process 2095811 has 1.54 GiB memory in use. Process 2095810 has 1.65 GiB memory in use. Process 2119930 has 3.60 GiB memory in use. Including non-PyTorch memory, this process has 7.83 GiB memory in use. Process 2273688 has 17.38 GiB memory in use. 6.90 GiB allowed; Of the allocated memory 6.34 GiB is allocated by PyTorch, with 22.00 MiB allocated in private pools (e.g., CUDA Graphs), and 505.11 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx2048 B1 760700 steps -> /mnt/kv_cache/consumer_dbg2
+  (log `logs/20261016-103104-train.log`, seed 34)
+- `2026-10-16 11:19:48 UTC` **train** (24.4 min) ok
+  d512 L12 mlp4 ctx8192 B1 766000 steps -> /mnt/kv_cache/anneal/trial1_same
+  (log `logs/20261016-105524-train.log`, seed 36)
+- `2026-10-16 11:44:20 UTC` **train** (24.4 min) ok
+  d512 L12 mlp4 ctx8192 B1 766000 steps -> /mnt/kv_cache/anneal/trial1_half
+  (log `logs/20261016-111954-train.log`, seed 36)
+- `2026-10-16 11:47:25 UTC` **train** (48.3 min) ok
+  d512 L12 mlp4 ctx2048 B1 760700 steps -> /mnt/kv_cache/consumer_dbg2
+  (log `logs/20261016-105907-train.log`, seed 34)
+- `2026-10-16 11:47 UTC` **First step-size trial of the continuation (eval/anneal_run.txt): at 765,000, unchanged 4.1e-4 -> 0.9450, halved 2.05e-4 ->
+  0.9440: HALF.** The run goes on at 2.05e-4 from the halved branch (766,000). Segment 1 (761.5k -> 765k) ended at 0.9435.
+- `2026-10-16 11:47 UTC` **Goal 6 leak fix VERIFIED (logs/consumer_fix2.out, same demo, fixed code):** after R 1.00 GiB left, after the failed W 1.06, **after the
+  failed deepen 1.19 GiB (was 2.41)**, and the unchanged branch then trained its 100 steps (it ran out of memory before the fix); the
+  trial completed and installed its choice. 2026-10-16 11:47 UTC: exit 0, peak process GPU memory 7898 MiB (nvidia-smi, CUDA context included). **A second flaw it showed:** the
+  "R" (reach) branch logged "REACH not applied: it needs sliding windowed attention shorter than the training window (2048 vs 2048)" --
+  a no-op -- and still WON the trial on noise (2.2672 vs 2.2673): a growth chosen that never happened. Fixed in src/train.py: an option
+  that cannot apply is now "not a candidate", like one that does not fit (logged as "cannot apply here"). Neither fix touches the main
+  run's path except the deepen leftover (its reach applies: window 2,048 < 8,192).
+- `2026-10-16 12:15 UTC` **GOAL 10, idle thought by its own reward (eval/idle_gen.py) -- smoke tests say it will not learn rehearsal here; not run at
+  scale.** Base = the continuation's 766k (copied to /mnt/kv_cache/base_766k.pt). Three reward versions, each found wanting on 3-4 episodes:
+  (1) raw log p(answer) vs no thought: a prose ramble scored +1.0 nats/fact -- any 32 tokens swing raw recall +-2.7 nats, every answer
+  together; (2) four-way choice vs T tokens READ: every thought of its own beat reading (foreign text disturbs recall more than its own:
+  -1.61 vs -0.90 with nothing), and an empty thought would beat it most -- training would teach it to stop thinking; (3) four-way choice
+  vs NO thought (kept): best of 3 thoughts +0.04 / -0.21 / ... and **in no sampled thought did the model say any fact's answer** -- it
+  continues the prose. Best-of-K selection would train on noise; rehearsal never appears to be selected (an exploration problem at
+  168M). Decision: not spend GPU on rounds of it now. **Next for goal 10: IDLE CONSOLIDATION** -- with no question pending, the model
+  rehearses what it read into its weights, making its own flashcards (cloze on its input's sentences) and stopping when they stop
+  improving (goal 7's machinery), measured later in a fresh session with nothing in context.
+- `2026-10-16 12:24 UTC` **GOAL 10, IDLE CONSOLIDATION (eval/idle_consolidate.py) -- smoke test, capped at 100 idle steps:** a document of 18,199
+  characters (60 invented facts in two phrasings among Wikipedia paragraphs), 190 self-made flashcards (each sentence, last word hidden).
+  Session 1 with the document in view: new facts **78.3%** (the in-context bound). Session 2 (fresh context) WITHOUT idle: 23.3% (chance),
+  OLD 79.2%, TEXT 0.9973, its flashcards 13.2% (the fact sentences 0%). AFTER 100 idle steps: **new facts 48.3%**, OLD 77.1%, TEXT 1.0453
+  (+4.8%: the early jump continual2 also showed at step 100), the fact sentences' flashcards 46.4%. Full run launched (eval/idle_consolidate.sh
+  -> eval/idle_consolidate_v1.txt): it stops itself by its flashcards, max 1,500 steps.
+- `2026-10-16 12:55:42 UTC` **train** (71.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 770000 steps -> /mnt/kv_cache/anneal/seg2
+  (log `logs/20261016-114426-train.log`, seed 36)
+- `2026-10-16 13:09:02 UTC` **train** (13.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 771000 steps -> /mnt/kv_cache/anneal/trial2_same
+  (log `logs/20261016-125548-train.log`, seed 36)
+- `2026-10-16 13:22:25 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 771000 steps -> /mnt/kv_cache/anneal/trial2_half
+  (log `logs/20261016-130907-train.log`, seed 36)
+- `2026-10-16 14:13:15 UTC` **train** (50.8 min) ok
+  d512 L12 mlp4 ctx8192 B1 775000 steps -> /mnt/kv_cache/anneal/seg3
+  (log `logs/20261016-132230-train.log`, seed 36)
+- `2026-10-16 14:26:44 UTC` **train** (13.4 min) ok
+  d512 L12 mlp4 ctx8192 B1 776000 steps -> /mnt/kv_cache/anneal/trial3_same
+  (log `logs/20261016-141322-train.log`, seed 36)
+- `2026-10-16 14:40:05 UTC` **train** (13.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 776000 steps -> /mnt/kv_cache/anneal/trial3_half
+  (log `logs/20261016-142650-train.log`, seed 36)
+- `2026-10-16 15:31:18 UTC` **train** (51.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 780000 steps -> /mnt/kv_cache/anneal/seg4
+  (log `logs/20261016-144011-train.log`, seed 36)
+- `2026-10-16 15:45:14 UTC` **train** (13.8 min) ok
+  d512 L12 mlp4 ctx8192 B1 781000 steps -> /mnt/kv_cache/anneal/trial4_same
+  (log `logs/20261016-153125-train.log`, seed 36)
+- `2026-10-16 15:59:35 UTC` **train** (14.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 781000 steps -> /mnt/kv_cache/anneal/trial4_half
+  (log `logs/20261016-154520-train.log`, seed 36)
+- `2026-10-16 16:49:37 UTC` **train** (49.9 min) ok
+  d512 L12 mlp4 ctx8192 B1 785000 steps -> /mnt/kv_cache/anneal/seg5
+  (log `logs/20261016-155940-train.log`, seed 36)
+- `2026-10-16 17:02:56 UTC` **train** (13.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 786000 steps -> /mnt/kv_cache/anneal/trial5_same
+  (log `logs/20261016-164943-train.log`, seed 36)
+- `2026-10-16 17:16:19 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 786000 steps -> /mnt/kv_cache/anneal/trial5_half
+  (log `logs/20261016-170302-train.log`, seed 36)
+- `2026-10-16 18:06:36 UTC` **train** (50.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 790000 steps -> /mnt/kv_cache/anneal/seg6
+  (log `logs/20261016-171625-train.log`, seed 36)
+- `2026-10-16 18:19:56 UTC` **train** (13.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 791000 steps -> /mnt/kv_cache/anneal/trial6_same
+  (log `logs/20261016-180642-train.log`, seed 36)
+- `2026-10-16 18:33:14 UTC` **train** (13.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 791000 steps -> /mnt/kv_cache/anneal/trial6_half
+  (log `logs/20261016-182002-train.log`, seed 36)
+- `2026-10-16 19:23:19 UTC` **train** (50.0 min) ok
+  d512 L12 mlp4 ctx8192 B1 795000 steps -> /mnt/kv_cache/anneal/seg7
+  (log `logs/20261016-183320-train.log`, seed 36)
+- `2026-10-16 19:36:43 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 796000 steps -> /mnt/kv_cache/anneal/trial7_same
+  (log `logs/20261016-192325-train.log`, seed 36)
+- `2026-10-16 19:50:07 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 796000 steps -> /mnt/kv_cache/anneal/trial7_half
+  (log `logs/20261016-193649-train.log`, seed 36)
+- `2026-10-16 20:40:34 UTC` **train** (50.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 800000 steps -> /mnt/kv_cache/anneal/seg8
+  (log `logs/20261016-195013-train.log`, seed 36)
+- `2026-10-16 20:53:57 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 801000 steps -> /mnt/kv_cache/anneal/trial8_same
+  (log `logs/20261016-204040-train.log`, seed 36)
+- `2026-10-16 21:07:44 UTC` **train** (13.7 min) ok
+  d512 L12 mlp4 ctx8192 B1 801000 steps -> /mnt/kv_cache/anneal/trial8_half
+  (log `logs/20261016-205403-train.log`, seed 36)
+- `2026-10-16 21:57:45 UTC` **train** (49.9 min) ok
+  d512 L12 mlp4 ctx8192 B1 805000 steps -> /mnt/kv_cache/anneal/seg9
+  (log `logs/20261016-210750-train.log`, seed 36)
+- `2026-10-16 22:11:08 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 806000 steps -> /mnt/kv_cache/anneal/trial9_same
+  (log `logs/20261016-215752-train.log`, seed 36)
+- `2026-10-16 22:24:31 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 806000 steps -> /mnt/kv_cache/anneal/trial9_half
+  (log `logs/20261016-221114-train.log`, seed 36)
+- `2026-10-16 23:14:52 UTC` **train** (50.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 810000 steps -> /mnt/kv_cache/anneal/seg10
+  (log `logs/20261016-222436-train.log`, seed 36)
+- `2026-10-16 23:28:15 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 811000 steps -> /mnt/kv_cache/anneal/trial10_same
+  (log `logs/20261016-231458-train.log`, seed 36)
+- `2026-10-16 23:41:37 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 811000 steps -> /mnt/kv_cache/anneal/trial10_half
+  (log `logs/20261016-232821-train.log`, seed 36)
+- `2026-10-17 00:31:57 UTC` **train** (50.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 815000 steps -> /mnt/kv_cache/anneal/seg11
+  (log `logs/20261016-234143-train.log`, seed 36)
+- `2026-10-17 00:45:20 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 816000 steps -> /mnt/kv_cache/anneal/trial11_same
+  (log `logs/20261017-003204-train.log`, seed 36)
+- `2026-10-17 00:58:45 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 816000 steps -> /mnt/kv_cache/anneal/trial11_half
+  (log `logs/20261017-004526-train.log`, seed 36)
+- `2026-10-17 01:49:05 UTC` **train** (50.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 820000 steps -> /mnt/kv_cache/anneal/seg12
+  (log `logs/20261017-005851-train.log`, seed 36)
+- `2026-10-17 02:02:28 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 821000 steps -> /mnt/kv_cache/anneal/trial12_same
+  (log `logs/20261017-014912-train.log`, seed 36)
+- `2026-10-17 02:15:50 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 821000 steps -> /mnt/kv_cache/anneal/trial12_half
+  (log `logs/20261017-020234-train.log`, seed 36)
+- `2026-10-17 03:06:10 UTC` **train** (50.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 825000 steps -> /mnt/kv_cache/anneal/seg13
+  (log `logs/20261017-021555-train.log`, seed 36)
+- `2026-10-17 03:19:33 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 826000 steps -> /mnt/kv_cache/anneal/trial13_same
+  (log `logs/20261017-030617-train.log`, seed 36)
+- `2026-10-17 03:32:56 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 826000 steps -> /mnt/kv_cache/anneal/trial13_half
+  (log `logs/20261017-031939-train.log`, seed 36)
+- `2026-10-17 04:23:17 UTC` **train** (50.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 830000 steps -> /mnt/kv_cache/anneal/seg14
+  (log `logs/20261017-033301-train.log`, seed 36)
+- `2026-10-17 04:36:39 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 831000 steps -> /mnt/kv_cache/anneal/trial14_same
+  (log `logs/20261017-042323-train.log`, seed 36)
+- `2026-10-17 04:50:02 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 831000 steps -> /mnt/kv_cache/anneal/trial14_half
+  (log `logs/20261017-043645-train.log`, seed 36)
+- `2026-10-17 05:40:25 UTC` **train** (50.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 835000 steps -> /mnt/kv_cache/anneal/seg15
+  (log `logs/20261017-045007-train.log`, seed 36)
+- `2026-10-17 05:53:51 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 836000 steps -> /mnt/kv_cache/anneal/trial15_same
+  (log `logs/20261017-054031-train.log`, seed 36)
+- `2026-10-17 06:07:13 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 836000 steps -> /mnt/kv_cache/anneal/trial15_half
+  (log `logs/20261017-055357-train.log`, seed 36)
+- `2026-10-17 06:57:33 UTC` **train** (50.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 840000 steps -> /mnt/kv_cache/anneal/seg16
+  (log `logs/20261017-060719-train.log`, seed 36)
+- `2026-10-17 07:11:32 UTC` **train** (13.9 min) ok
+  d512 L12 mlp4 ctx8192 B1 841000 steps -> /mnt/kv_cache/anneal/trial16_same
+  (log `logs/20261017-065739-train.log`, seed 36)
+- `2026-10-17 07:25:04 UTC` **train** (13.4 min) ok
+  d512 L12 mlp4 ctx8192 B1 841000 steps -> /mnt/kv_cache/anneal/trial16_half
+  (log `logs/20261017-071138-train.log`, seed 36)
+- `2026-10-17 08:15:24 UTC` **train** (50.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 845000 steps -> /mnt/kv_cache/anneal/seg17
+  (log `logs/20261017-072510-train.log`, seed 36)
+- `2026-10-17 08:28:50 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 846000 steps -> /mnt/kv_cache/anneal/trial17_same
+  (log `logs/20261017-081530-train.log`, seed 36)
+- `2026-10-17 08:42:12 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 846000 steps -> /mnt/kv_cache/anneal/trial17_half
+  (log `logs/20261017-082856-train.log`, seed 36)
+- `2026-10-17 09:32:51 UTC` **train** (50.6 min) ok
+  d512 L12 mlp4 ctx8192 B1 850000 steps -> /mnt/kv_cache/anneal/seg18
+  (log `logs/20261017-084218-train.log`, seed 36)
+- `2026-10-17 09:47:09 UTC` **train** (14.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 851000 steps -> /mnt/kv_cache/anneal/trial18_same
+  (log `logs/20261017-093258-train.log`, seed 36)
+- `2026-10-17 10:00:32 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 851000 steps -> /mnt/kv_cache/anneal/trial18_half
+  (log `logs/20261017-094715-train.log`, seed 36)
+- `2026-10-17 10:51:06 UTC` **train** (50.5 min) ok
+  d512 L12 mlp4 ctx8192 B1 855000 steps -> /mnt/kv_cache/anneal/seg19
+  (log `logs/20261017-100037-train.log`, seed 36)
+- `2026-10-17 11:04:38 UTC` **train** (13.4 min) ok
+  d512 L12 mlp4 ctx8192 B1 856000 steps -> /mnt/kv_cache/anneal/trial19_same
+  (log `logs/20261017-105113-train.log`, seed 36)
+- `2026-10-17 11:18:25 UTC` **train** (13.7 min) ok
+  d512 L12 mlp4 ctx8192 B1 856000 steps -> /mnt/kv_cache/anneal/trial19_half
+  (log `logs/20261017-110444-train.log`, seed 36)
+- `2026-10-17 12:10:23 UTC` **train** (51.9 min) ok
+  d512 L12 mlp4 ctx8192 B1 860000 steps -> /mnt/kv_cache/anneal/seg20
+  (log `logs/20261017-111831-train.log`, seed 36)
+- `2026-10-17 12:25:00 UTC` **train** (14.5 min) ok
+  d512 L12 mlp4 ctx8192 B1 861000 steps -> /mnt/kv_cache/anneal/trial20_same
+  (log `logs/20261017-121029-train.log`, seed 36)
+- `2026-10-17 12:39:19 UTC` **train** (14.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 861000 steps -> /mnt/kv_cache/anneal/trial20_half
+  (log `logs/20261017-122506-train.log`, seed 36)
+- `2026-10-17 13:30:18 UTC` **train** (50.9 min) ok
+  d512 L12 mlp4 ctx8192 B1 865000 steps -> /mnt/kv_cache/anneal/seg21
+  (log `logs/20261017-123924-train.log`, seed 36)
+- `2026-10-17 13:43:41 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 866000 steps -> /mnt/kv_cache/anneal/trial21_same
+  (log `logs/20261017-133025-train.log`, seed 36)
+- `2026-10-17 13:57:09 UTC` **train** (13.4 min) ok
+  d512 L12 mlp4 ctx8192 B1 866000 steps -> /mnt/kv_cache/anneal/trial21_half
+  (log `logs/20261017-134347-train.log`, seed 36)
+- `2026-10-17 14:47:32 UTC` **train** (50.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 870000 steps -> /mnt/kv_cache/anneal/seg22
+  (log `logs/20261017-135715-train.log`, seed 36)
+- `2026-10-17 15:00:55 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 871000 steps -> /mnt/kv_cache/anneal/trial22_same
+  (log `logs/20261017-144739-train.log`, seed 36)
+- `2026-10-17 15:14:19 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 871000 steps -> /mnt/kv_cache/anneal/trial22_half
+  (log `logs/20261017-150101-train.log`, seed 36)
+- `2026-10-17 16:04:41 UTC` **train** (50.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 875000 steps -> /mnt/kv_cache/anneal/seg23
+  (log `logs/20261017-151424-train.log`, seed 36)
+- `2026-10-17 16:18:04 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 876000 steps -> /mnt/kv_cache/anneal/trial23_same
+  (log `logs/20261017-160448-train.log`, seed 36)
+- `2026-10-17 16:31:27 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 876000 steps -> /mnt/kv_cache/anneal/trial23_half
+  (log `logs/20261017-161810-train.log`, seed 36)
+- `2026-10-17 17:21:46 UTC` **train** (50.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 880000 steps -> /mnt/kv_cache/anneal/seg24
+  (log `logs/20261017-163132-train.log`, seed 36)
+- `2026-10-17 17:35:12 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 881000 steps -> /mnt/kv_cache/anneal/trial24_same
+  (log `logs/20261017-172152-train.log`, seed 36)
+- `2026-10-17 17:48:34 UTC` **train** (13.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 881000 steps -> /mnt/kv_cache/anneal/trial24_half
+  (log `logs/20261017-173518-train.log`, seed 36)
+- `2026-10-17 18:38:54 UTC` **train** (50.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 885000 steps -> /mnt/kv_cache/anneal/seg25
+  (log `logs/20261017-174839-train.log`, seed 36)
+- `2026-10-17 18:51 UTC` **GOAL 10, IDLE CONSOLIDATION -- SHOWN (eval/idle_consolidate_v1.txt, finished 2026-10-16 ~13:10 UTC; journaled now).** The model
+  read a document (60 invented facts in two phrasings among Wikipedia paragraphs, 18,199 characters), was asked nothing, and while idle
+  rehearsed it with half of every batch general text, testing itself on its own 190 flashcards (each sentence, last word hidden) and
+  **stopping itself at 1,100 steps** (flashcards best 87.4%). In a FRESH session, the document gone, asked in a phrasing it never read
+  (four-way, chance 25%): **new facts 23.3% -> 76.7%** -- the in-context bound (document in view) is 78.3%; OLD 79.2 -> 79.2%; TEXT 0.9973 ->
+  1.0219 (+2.5%). It thought about what it read on its own, while idle, and remembered it the next session nearly as well as with the
+  document in front of it. Open: the +2.5% on general text; the in-context form of idle thought (eval/idle_gen.py) did not get started.
+- `2026-10-17 18:51 UTC` **The continuation (eval/anneal_run.txt) CONVERGED by ~775,000 and then ran ~28 h for nothing; stopped now at ~885,000.**
+  Eval bits/byte: 0.9435 (765k), 0.9441 / 0.9441 / 0.9440 (770-780k), then 0.9440-0.9447 to 885k; the step-size trials halved 17 times (4.1e-4
+  -> 2e-7) on differences of 0.0001-0.0003, inside the eval's own noise -- a rule that compares two noisy numbers with no margin follows
+  the noise. Best of the whole step-size episode: the d/8 branch 0.9419 at 760.5k (its restarted average, early). **My failure:** the
+  session ended on 2026-10-16 ~13:10 UTC with this running unattended and no stop condition for a flat run; the side slot was idle the
+  whole time too. Stopped (verified PIDs 2260642 queue, 2262169 controller, 2467104 trainer). The 168M model is saturated at ~0.944 on
+  this data and recipe. Checkpoints: /mnt/kv_cache/anneal/seg25/ckpt.pt (885,000), every 5th segment kept.
+- `2026-10-19 06:21 UTC` **Idle again: nothing ran from 2026-10-17 18:51 to 2026-10-19 06:19 UTC (~35.5 h).** After stopping the converged
+  continuation I wrote the plan and the session ended before anything was launched. Mine, the third time this pattern (work that needs a
+  live session dies with it). At 06:19 UTC (11:49 IST) the growth stage was launched (eval/grow_stage.sh: seed = 885k with the average
+  restarted, eval/sf_seed.py, d 4.1e-4; --trial-now with 4,000-step branches R / W / d vs unchanged; growth on) -- and stopped 2 minutes
+  later (verified PIDs 2610670 / 2610672 / 2610674, before its first step) on the user's new rule:
+- `2026-10-19 06:21 UTC` **USER RULE: "from today onwards any training or finetune run that consumes too much gpu should run from 8PM to 6am, not
+  in office time; prod cant be slow coz people will be using it."** Saved to memory (gpu-night-window). **eval/night_run.sh** enforces it:
+  starts a command only inside 20:00-05:50 IST in its own process group, stops the whole group at 05:50 IST (wrapper and trainer
+  together), restarts it the next night, ends at its marker or after three failed starts. eval/grow_stage.sh made resumable (first start
+  runs the growth trial from the seed; later starts resume from its own checkpoint without --trial-now; checkpoints every 1,000 steps,
+  ~14 min). **Queued: night_run grow1** -- waits for 20:00 IST tonight (logs/night_grow1.out). Daytime from now: code, analysis, CPU work,
+  at most a few-minute smoke test.
+- `2026-10-19 07:48 UTC` **User: what can we do now without much GPU? -- and APPROVED vocabulary growth as a model-chosen option.** Daytime plan:
+  CPU work only (vocabulary, data, code), the night window for GPU. **Vocabulary:** tok_v16384.json (trained 2026-09) EXTENDS tok_v8192.json
+  exactly -- all 8,192 tokens at the same ids, all 7,936 merges a shared prefix (also true of v32768 and v65536) -- so growing the model's
+  vocabulary keeps every learned row. **tok_v16384e.json** = v16384 + "<|eod|>" (id 16384), a real end-of-document marker; " introduction" is a
+  word again (5540). 12% fewer tokens per byte (wikipedia 3.58 -> 4.01 bytes/token). The raw downloads are on disk (/mnt/kv_cache/hf_dl, 470 GB).
+  **eval/tokenize_v16k.py** (smoke: one wikipedia shard, 188.3M tokens in 216 s, document boundaries checked by decoding) now running on the
+  full plan: wikipedia 40 / finemath 63 / arxiv 6 / fineweb-edu 30 / dclm 120 shards, 16 workers at nice 19 (logs/tok16.out ->
+  /mnt/kv_cache/tokfull_v16384e); the last shard of each source held out, 200 raw documents each in /mnt/kv_cache/heldout_text.json.
+- `2026-10-19 07:54 UTC` **Daytime work (CPU), vocabulary growth and safe nights:**
+  (1) **eval/vocab_grow.py** grows a checkpoint 8,192 -> 16,385 rows on the CPU in 8 s: each new token's row = the mean of the two rows its
+  BPE merge joins (in merge order), "<|eod|>" = old row 8191 (the row that learned a document boundary), optimizer memory grown (z = the
+  rows, own averaging clocks at 0, second-moment rows the mean of the joined tokens'). /mnt/kv_cache/base_885k_v16k.pt made from 885k.
+  (2) **eval/bpb_text.py**: bits per byte on 1,000 RAW held-out documents (200 per source, from the never-tokenized last shard), each
+  model with its own tokenizer -- the trainer's eval scores different text per vocabulary and counted every old marker 8191 as the 13
+  bytes of " introduction". Smoke (3 documents per source): 885k 0.9586; the grown model before any training 1.3495 (new rows unlearned).
+  (3) **eval/reencode_v16k.py** (running, nice 19): the 32% generated corpora decoded and re-encoded at 16k (/mnt/kv_cache/tokmany_v16384e).
+  (4) **eval/anneal_run.py v2**: the halved step size must win by more than 2 sigma of the run's own consecutive-eval differences; the run
+  STOPS after 3 segments without a gain beyond that margin; state saved after every segment / trial so eval/night_run.sh can stop it at
+  05:50 IST and it resumes the next night; VOCAB=16385 trains on the 16k corpora. Tested on the CPU with a stand-in trainer (improves
+  20k steps then flat): margin 0.0007-0.0009, no halving on noise, plateau stop after segment 7. The test caught a bug of mine (the
+  margin read its history in the wrong form; it would have crashed after the first segment) -- fixed before any GPU use.
+- `2026-10-19 07:57 UTC` **Goal 6 toward 4 GB: optimizer state offload (src/optim.py Fabric.offload, src/train.py --offload-opt 1).** sfp's iterate z and
+  per-weight clocks wsp (0.63 + 0.63 GiB at 168M -- as much as weights and gradients together) live in pinned host memory; each weight's
+  pair is copied in for its update and back after it (stream-ordered; the step is not graph-captured then). Checked on a small model,
+  5 steps, fused and unfused: **bit-identical** to the normal path (max difference 0.000e+00), z on the CPU. Also: the eval/train switch
+  now moves z to the weight's device. **Queued for tonight, side slot** (eval/night_side1.sh via night_run side1): the 4 GB test -- the 8 GB
+  demo's recipe with offload, a 3.0 GiB cap (process with context under ~4 GB), window 1,024 x 64, growth trial included -- then the raw-text
+  bits/byte of 885k (the vocabulary trial's baseline).
+- `2026-10-19 07:57 UTC` **The night chain, so no night goes idle:** tonight 20:00 IST grow1 (growth trial + training to 925k) and side1; after GROW1_DONE,
+  **eval/vocab_trial.sh** (night_run vtrial): from grow1's checkpoint, U (8,192 vocabulary) vs V (grown to 16,385, the 16k corpora with
+  <|eod|>), 12,000 steps each, raw-text bits/byte at start and end, the larger gain per hour wins (VOCAB_WINNER); after VOCAB_DONE,
+  **eval/main_after_vocab.sh** (night_run main2): eval/anneal_run.py v2 from the winner to 1,200,000 (noise margin, plateau stop, resumes
+  nightly). Every heavy job only inside 20:00-05:50 IST.
+- `2026-10-19 14:30:53 UTC` **train** (0.0 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 16.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 26.72 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.67 GiB memory in use. Process 2119930 has 3.60 GiB memory in use. Process 2572834 has 38.50 GiB memory in use. Process 2574215 has 1.57 GiB memory in use. Process 2574214 has 1.65 GiB memory in use. Process 2574216 has 1.53 GiB memory in use. Process 2574217 has 1.57 GiB memory in use. Process 2652493 has 11.57 GiB memory in use. Including non-PyTorch memory, this process has 3.59 GiB memory in use. 3.00 GiB allowed; Of the allocated memory 2.97 GiB is allocated by PyTorch, and 29.34 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx1024 B1 885700 steps -> /mnt/kv_cache/consumer_4gb
+  (log `logs/20261019-143051-train.log`, seed 34)
+- `2026-10-20 15:37:00 UTC` **train** (66.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 925000 steps -> /mnt/kv_cache/grow1
+  (log `logs/20261020-143057-train.log`, seed 36)
+- `2026-10-21 06:05:25 UTC` **train** (0.4 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 40.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 41.36 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.67 GiB memory in use. Process 2119930 has 3.60 GiB memory in use. Process 2820283 has 37.68 GiB memory in use. Process 2821866 has 946.00 MiB memory in use. Process 2821865 has 946.00 MiB memory in use. Process 2821867 has 946.00 MiB memory in use. Process 2821864 has 946.00 MiB memory in use. Including non-PyTorch memory, this process has 3.97 GiB memory in use. 3.00 GiB allowed; Of the allocated memory 2.91 GiB is allocated by PyTorch, with 690.00 MiB allocated in private pools (e.g., CUDA Graphs), and 75.81 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx1024 B1 925002 steps -> /mnt/kv_cache/consumer_4gb
+  (log `logs/20261021-060459-train.log`, seed 34)
+- `2026-10-21 06:07:07 UTC` **train** (0.5 min) ok
+  d512 L12 mlp4 ctx1024 B1 885002 steps -> /mnt/kv_cache/consumer_4gb
+  (log `logs/20261021-060636-train.log`, seed 34)
+- `2026-10-21 06:08 UTC` **NIGHTS OF 2026-10-19/20 AND 10-20/21 (night_run logs):**
+  **GROWTH -- THE MODEL CHOSE TO GROW: 168M -> 257.4M (W, width 1,024 -> 1,280) at step 898,001** (logs/grow1.out). Trial from 886,000, 4,000-step
+  branches: R (reach) 2.0762 -> 2.0720, 0.685 s/step; **W 2.0762 -> 2.0689, 1.145 s/step**; d (deeper) does not fit 32 GiB, not a candidate;
+  unchanged -> 2.0701, 0.772 s/step. Held-out gain per hour: W 0.0037 vs unchanged 0.0026 -> GROW (W). Eval bits/byte after: 0.9445 (900k),
+  0.9440, 0.9439, 0.9438, 0.9440, 0.9436, 0.9436, 0.9433 (914k), 0.9431 (920k), 0.9429 (922k), 0.9436 (924k); done at 925,000 on night 2
+  (21:07 IST). A second trial at 914,200 (R vs unchanged; W and d no longer fit 32 GiB at 257M) was cut by the 05:50 IST pause and not
+  repeated after the resume (trial-now 0; the stage clock will call the next one). The width growth moved the plateau from ~0.944 to ~0.943.
+  **Side, night 1 (eval/night_side1.txt):** the 4 GB test FAILED 2.4 s in -- the trainer read the whole checkpoint onto the card and the
+  optimizer's load cast z / wsp there before the offload ever ran (out of memory at the 3.0 GiB cap); raw-text bits/byte of 885k (v8192),
+  1,000 held-out documents: **0.9453** (wikipedia 0.8957, finemath 0.8641, arxiv 0.9662, fineweb-edu 0.9411, dclm 1.0618).
+  **Re-tokenization finished** (logs/tok16.out, TOK16_DONE): /mnt/kv_cache/tokfull_v16384e -- wikipedia, finemath, arxiv, fineweb-edu 24.84B,
+  dclm 16.17B tokens; the generated corpora at /mnt/kv_cache/tokmany_v16384e (REENC_DONE).
+  **THE VOCABULARY TRIAL NEVER RAN -- my error: eval/vocab_trial.sh was not executable.** night_run tried at 21:07, 21:18, 21:28 IST
+  ("Permission denied") and gave up as designed; the trainer slot was then idle 21:29 -> 05:50 IST on the night of 10-20/21.
+- `2026-10-21 06:08 UTC` **Fixed (daytime, CPU + two short smoke tests):** chmod +x eval/vocab_trial.sh (every queued script now checked
+  executable before queueing). Offload loading: the trainer reads the checkpoint into host memory with --offload-opt, and Fabric.load_state_dict
+  puts z / wsp straight into pinned host memory (a first attempt of mine SHADOWED Fabric's existing load_state_dict and would have skipped
+  its fixups in every run -- caught by a small test (KeyError 'sf') and merged into the original instead). Resume test on a small model:
+  offload and normal resumes agree with the uninterrupted run to 1e-5 / 7e-6. **4 GB smoke (2 steps, 168M at 885k, 3.0 GiB cap, window
+  1,024): exit 0, peak process memory 3,328 MiB with the CUDA context -- under a 4 GB card.** (A first smoke used grow1's checkpoint, which
+  is now 257M -- my slip; the 168M one passes.) The trial's starting checkpoints pre-built on the CPU (/mnt/kv_cache/vtrial/base.pt 925k
+  at 257.4M, d 1,280; v_seed.pt grown to 16,385).
+- `2026-10-21 06:08 UTC` **Tonight (2026-10-21, 20:00 IST):** night_run vtrial (U 8,192 vs V 16,385 at 257M, 12,000 steps each) and night_run side2
+  (the full 4 GB test with the growth trial, eval/night_side2.sh); queue_main2 waits for VOCAB_DONE.
+- `2026-10-21 06:16 UTC` **User: how much compute can our jobs use without affecting prod? Measured: prod is nearly idle in office hours.** vLLM since
+  its 02:30 IST restart (~9 h): **31 requests, 102 s of work (~0.3% of the time)**, none running; the card's utilization over 65 s, all
+  processes incl. voice: 0%. Prod baseline now: first token 35 ms, 64 tokens 0.64 s. Found: an **NVIDIA MPS daemon** serves prod (pipe dir
+  /opt/code/mps; vLLM is an MPS client). Joining it would let our jobs run beside prod capped to a share of SMs, but MPS clients share one
+  server: a fatal fault in our experimental kernels could take the server -- and vLLM -- down. Our jobs stay OUT of MPS. Proposal (user:
+  yes): **pause on demand** -- eval/yield_gpu.py freezes our job groups (SIGSTOP; memory stays reserved within the caps) the moment vLLM has
+  a running / waiting request or a voice service shows GPU activity, and resumes them after 5 s of quiet. Built and tested on a stand-in
+  job: paused within a quarter second of a prod request (the request itself unaffected, 34 ms to the first token), resumed 5 s later,
+  everything resumed when the watcher exits. **eval/prod_load_logger.sh** started (logs/prod_load.csv every 5 s, nice 19, no GPU work):
+  prod's real daily load over the next days. **eval/latency_test.sh** queued for tonight: A 19:40 IST none of ours, B 20:25 IST ours
+  running, C ours under the watcher -- ten 64-token requests each -> eval/prod_latency_v1.txt. Daytime use stays OFF until both are in.
+- `2026-10-21 06:45 UTC` **User: "do it now so we can resume our research work".** The night waiters cancelled (verified PIDs 2862236 latency_test,
+  2860568 / 2860569 night_run, 2620290 queue_main2) and **eval/run_yield.sh** written: a job at any hour in its own process group under
+  eval/yield_gpu.py (frozen while prod is busy), restarted after failures. Tested end to end on a stand-in job. **Prod latency, measured now**
+  (eval/prod_latency_v1.txt; ten streamed 64-token requests, 15 s apart, the prod vLLM):
+    A none of ours running ........................ first token 0.034 s, whole reply **0.639 s** (worst 0.640)
+    B ours running, no watcher ...................... 0.077 s, **2.235 s** (worst 2.834) -- 3.5x slower: unprotected sharing is not acceptable
+    C under the watcher (0.25 s poll) ............... 0.059 s, 0.851 s (worst 0.987) -- every request just after a resume, the worst case
+    C2 watcher polling 50 ms ........................ 0.087 s, 0.908 s -- detection speed is not the limit
+    C3 watcher, the 4 GB test stopped, only an eval . 0.054 s, **0.702 s** (worst 0.729) -- +10%
+  The remaining cost is GPU work already queued when the job is frozen: the 4 GB test's trainer (64 micro-steps per update, launched
+  before any sync) could queue seconds of work. Added: src/train.py syncs after every micro-step when MEMBRAE_YIELD_SYNC=1 or the file
+  .yield_sync exists (created), so at most one micro-step drains after a freeze; eval/yield_gpu.py polls every 50 ms and manages only
+  process-group leaders. The 4 GB test stopped for the clean measurement (to re-run with the sync). Measuring the vocabulary trial's
+  trainer next (sync on). We stay out of prod's MPS server (a fault in our code could take vLLM down with it).
+- `2026-10-21 07:16 UTC` **Prod latency, final (eval/prod_latency_v1.txt):** C4 watcher + the vocabulary trial's trainer in its start-up 0.049 / 0.700 s;
+  **C5 watcher + the 257M trainer in steady training (sync on): first token 0.057 s, whole reply 0.774 s (worst 0.832)** -- vs 0.034 / 0.639 with
+  none of ours and 0.077 / 2.235 unprotected. The worst case (a request right after a resume) costs prod ~+0.13 s; requests later in a busy
+  stretch see none (the job stays frozen until 5 s of quiet). Our trainer under it: 51 ktok/s (~90% of its unhindered speed). Real prod
+  traffic during the hour: ~15 requests besides my ~50 test requests. **Daytime research is ON under the watcher** (memory updated:
+  gpu-night-window). Running: vtrial branch U (logs/vtrial_U.out, 925k -> 937k at 257M); vstart (the grown model's opening raw-text score,
+  with eval/bpb_text.py now padding documents to multiples of 256 -- 1,000 lengths had cost ~40 min per model in kernel tuning, so the first
+  start evaluation was stopped after its v8192 row: **257M at 925k, raw text 0.9450** vs 168M at 885k 0.9453); then side2 (the 4 GB test again,
+  with the sync); after VOCAB_DONE the main run (eval/main_after_vocab.sh) -- all through eval/run_yield.sh.
+- `2026-10-21 08:27:24 UTC` **train** (36.3 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 192.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 12.78 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.67 GiB memory in use. Process 2119930 has 3.60 GiB memory in use. Process 2820283 has 38.25 GiB memory in use. Process 2821866 has 946.00 MiB memory in use. Process 2821865 has 946.00 MiB memory in use. Process 2821867 has 946.00 MiB memory in use. Process 2821864 has 946.00 MiB memory in use. Process 2898952 has 28.10 GiB memory in use. Including non-PyTorch memory, this process has 3.88 GiB memory in use. 3.00 GiB allowed; Of the allocated memory 2.52 GiB is allocated by PyTorch, and 383.73 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx1024 B1 885700 steps -> /mnt/kv_cache/consumer_4gb
+  (log `logs/20261021-075108-train.log`, seed 34)
+- `2026-10-21 10:54:56 UTC` **train** (228.8 min) ok
+  d512 L12 mlp4 ctx8192 B1 937000 steps -> /mnt/kv_cache/vtrial/U
+  (log `logs/20261021-070606-train.log`, seed 36)
+- `2026-10-21 12:20 UTC` **Vocabulary trial so far (eval/vocab_trial.txt):** start rows on raw held-out text -- v8192 (257M, 925k) **0.9450**, grown to
+  16,385 before any training **1.3209**. Branch U (8,192) done: 12,000 steps in 13,742 s (3.8 h, under the watcher). Branch V (16,385) at
+  929,200 / 937,000, ~2.5 h to go (its per-token loss 2.42-2.49 is not comparable across vocabularies; the raw-text score at the end
+  decides). The watcher paused our jobs 334 times today. **The 4 GB test failed again** (eval/night_side2.txt): 2,176 s in, out of memory
+  in the growth trial's held-out measurement (32,768-token samples through the recall attention) under the 3.0 GiB cap; peak 3,970 MiB.
+  Also its seed was the 885k checkpoint, annealed to step size 2e-7 -- its trial branches could have learned nothing (my oversight).
+  Fixed for the re-run: eval/consumer_demo.sh takes HL (the held-out sample length; 8,192 here) and the seed is 885k at step size 4.1e-4
+  (/mnt/kv_cache/seed_885k_d4e-4.pt). Re-run queued to start with the main run when the vocabulary trial ends.
+- `2026-10-21 14:26:46 UTC` **train** (211.6 min) ok
+  d512 L12 mlp4 ctx8192 B1 937000 steps -> /mnt/kv_cache/vtrial/V
+  (log `logs/20261021-105508-train.log`, seed 36)
+- `2026-10-21 14:34:38 UTC` **train** (5.6 min) FAILED: OutOfMemoryError('CUDA out of memory. Tried to allocate 192.00 MiB. GPU 0 has a total capacity of 93.09 GiB of which 37.15 GiB is free. Process 368682 has 60.00 MiB memory in use. Process 1640387 has 2.73 GiB memory in use. Process 2119930 has 3.60 GiB memory in use. Process 2820283 has 39.28 GiB memory in use. Process 2821866 has 1.51 GiB memory in use. Process 2821865 has 1.57 GiB memory in use. Process 2821867 has 1.73 GiB memory in use. Process 2821864 has 1.53 GiB memory in use. Including non-PyTorch memory, this process has 3.87 GiB memory in use. 3.00 GiB allowed; Of the allocated memory 2.57 GiB is allocated by PyTorch, and 317.29 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)')
+  d512 L12 mlp4 ctx1024 B1 885700 steps -> /mnt/kv_cache/consumer_4gb
+  (log `logs/20261021-142900-train.log`, seed 34)
+- `2026-10-21 15:40:25 UTC` **train** (65.6 min) ok
+  d512 L12 mlp4 ctx8192 B1 941000 steps -> /mnt/kv_cache/anneal_main2/seg1
+  (log `logs/20261021-143451-train.log`, seed 36)
+- `2026-10-21 15:57:57 UTC` **train** (17.4 min) ok
+  d512 L12 mlp4 ctx8192 B1 942000 steps -> /mnt/kv_cache/anneal_main2/trial1_same
+  (log `logs/20261021-154032-train.log`, seed 36)
+- `2026-10-21 16:16:54 UTC` **train** (18.8 min) ok
+  d512 L12 mlp4 ctx8192 B1 942000 steps -> /mnt/kv_cache/anneal_main2/trial1_half
+  (log `logs/20261021-155804-train.log`, seed 36)
+- `2026-10-21 17:26:47 UTC` **train** (69.8 min) ok
+  d512 L12 mlp4 ctx8192 B1 946000 steps -> /mnt/kv_cache/anneal_main2/seg2
+  (log `logs/20261021-161701-train.log`, seed 36)
+- `2026-10-21 17:43:59 UTC` **train** (17.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 947000 steps -> /mnt/kv_cache/anneal_main2/trial2_same
+  (log `logs/20261021-172654-train.log`, seed 36)
+- `2026-10-21 18:01:12 UTC` **train** (17.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 947000 steps -> /mnt/kv_cache/anneal_main2/trial2_half
+  (log `logs/20261021-174406-train.log`, seed 36)
+- `2026-10-21 19:12:20 UTC` **train** (71.0 min) ok
+  d512 L12 mlp4 ctx8192 B1 951000 steps -> /mnt/kv_cache/anneal_main2/seg3
+  (log `logs/20261021-180119-train.log`, seed 36)
+- `2026-10-21 19:33:02 UTC` **train** (20.5 min) ok
+  d512 L12 mlp4 ctx8192 B1 952000 steps -> /mnt/kv_cache/anneal_main2/trial3_same
+  (log `logs/20261021-191234-train.log`, seed 36)
+- `2026-10-21 19:53:19 UTC` **train** (20.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 952000 steps -> /mnt/kv_cache/anneal_main2/trial3_half
+  (log `logs/20261021-193308-train.log`, seed 36)
+- `2026-10-21 21:02:58 UTC` **train** (69.5 min) ok
+  d512 L12 mlp4 ctx8192 B1 956000 steps -> /mnt/kv_cache/anneal_main2/seg4
+  (log `logs/20261021-195325-train.log`, seed 36)
+- `2026-10-25 14:12 UTC` **SINCE 2026-10-21 (journaled now):**
+  **Vocabulary trial: U (8,192) wins** (eval/vocab_trial.txt, VOCAB_DONE 10-21 14:28 UTC). Raw held-out text after 12,000 steps each: U 0.9455
+  (from 0.9450; 3.82 h), **V (16,385) 0.9920** (from 1.3209 before training; 3.53 h) -- V learned fast (-0.33 in 3.5 h) but was still far
+  behind at the trial's horizon; by the rule (gain per hour from the 8,192 model's start) U. Whether V would overtake with more training is
+  not known -- the trial measured only 3.5 h.
+  **Main run from U (eval/anneal_main2.txt), stopped itself on the plateau rule:** 941k 0.9452, 946k 0.9470, 951k 0.9479, 956k 0.9486 -- rising
+  again (step size halved once on a margin-beating trial); ANNEAL_DONE (plateau) 10-21 21:03 UTC. The 257M model drifts upward like the
+  168M one did.
+  **The 4 GB test failed a third time** (eval/night_side2.txt, 10-21 14:34 UTC): the trial ran (R measured; W and d "do not fit", leftovers
+  0.30 / 0.42 GiB), then out of memory in the unchanged branch's held-out measurement at 8,192 tokens (the recall attention's dense path,
+  src/model.py _swa_dense). Re-queued with a 2,048-token held-out sample (HL=2048).
+  **THE GPU SLOTS WERE IDLE FROM 2026-10-22 02:33 IST TO NOW (~3.7 days).** The main run stopped correctly on its plateau rule and nothing
+  was queued after it, and no session ran. Mine: the chain ended with a stop and no next step. Prod meanwhile: busy 0.61% of samples.
+  Disk: 155 GB free (96% used).
+- `2026-10-25 14:12 UTC` **Where we stand, measuring now:** eval/bpb_text.py now scores HuggingFace models too (their own tokenizer and window);
+  eval/ref_bpb.sh (under the watcher): ours 257M (937k) and 168M (885k) against GPT-2 124M, Pythia-160M (300B tokens) and SmolLM2-135M (2T
+  tokens) on the same 1,000 raw held-out documents -> eval/ref_bpb_v1.txt. Then the 4 GB re-test.
+- `2026-10-25 14:19 UTC` **WHERE WE STAND, raw held-out text (eval/ref_bpb_v1.txt; 1,000 documents from never-tokenized shards; bits per byte, each model
+  with its own tokenizer; ALL / wikipedia / finemath / arxiv / fineweb-edu / dclm):** ours 257M (937k) **0.9455** / 0.895 / 0.864 / 0.967 / 0.942 /
+  1.062; ours 168M (885k) 0.9453 (growth bought nothing here); GPT-2 124M 1.1023 (window 1,024); Pythia-160M (300B tokens) 1.2038 (window 2,048);
+  **SmolLM2-135M (2T tokens) 0.8797** / 0.931 / 0.782 / 0.864 / 0.854 / 0.955. Ours beats GPT-2 by 14% and Pythia by 21%, is better than SmolLM2 on
+  wikipedia, and **trails SmolLM2 by 7%** -- most on math (0.864 vs 0.782), arxiv and edu. A 135M model is not saturated at 0.945: our recipe
+  is. **The drift is REAL (eval/drift_check_v1.txt):** the same documents, 257M at 937k 0.9455 -> 956k **0.9502**, every source worse -- not an
+  artefact of the trainer's eval. Training past the plateau with this recipe damages the model.
+- `2026-10-25 14:19 UTC` **Tonight (under the watcher): eval/mix_test.sh** -- the suspect is the generated corpora (32% of every batch, ~2B tokens, seen
+  ~9 times each). 10,000 steps each from 937k: GENERAL (the five text sources only) vs MIXED (the run's mix), raw held-out text at the end.
+  The 1,500-step version (2026-10-16) was too short to see a drift of ~0.5% per 20,000 steps. Side slot: the 4 GB re-test (held-out 2,048).
+- `2026-10-25 14:21 UTC` **User approved (1) teacher data from the prod Qwen 27B at night, only while prod has no users, AND public high-quality corpora;
+  (2) deleting intermediate checkpoints of finished experiments, keeping every final and best.** Deleted (66 files, ~149.5 GB;
+  the exact list in logs/deleted_2026-10-25.txt): the stopped 750k-836k run's 2-GB snapshots except 760k (its best) and 836k (its end);
+  the step-size continuation's every-5th segment checkpoints and start copy except seg25 (885k, its end); the finished step-size and
+  general-text branches (d, d/2, d/8 and sfg) except sfb_4.1e-4 (the continuation's seed); the vocabulary trial's duplicate base (= grow1's
+  final), its grown seed and previous-checkpoint copies; grow1's resume copies. KEPT: many3 760k / 836k / ckpt.pt, anneal seg25 (885k),
+  sfb_4.1e-4, vtrial U (937k) and V (the 16k branch), grow1 ckpt (925k) and seed, anneal_main2 seg4 (956k), every earlier run untouched.
+- `2026-10-25 14:39 UTC` **New data, both routes running:**
+  **Cosmopedia-v2** (the SmolLM corpus's synthetic textbooks, 104 parquet files, 122 GB) downloaded in ~1 min (eval/get_cosmopedia.py) and being
+  tokenized at v8192 on the CPU (eval/tokenize_cosmo.py, 16 workers, nice 19: ~11B tokens in the first 13 min; the last file held out,
+  200 documents in /mnt/kv_cache/heldout_cosmo.json, kept apart from the 1,000-document comparison set) -> /mnt/kv_cache/tokcosmo_v8192.
+  **The teacher** (eval/teacher_gen.py): the prod Qwen 27B writes training text at night (20:00-05:50 IST) only while prod has no users.
+  2,391 topics bootstrapped from the teacher (60 per 40 domains); six genres aimed at goals 2 / 4-5 and knowledge (worked textbook
+  sections, a student reasoning aloud and correcting a mistake, stories where characters know different things, original everyday
+  puzzles with checked step-by-step solutions, what is known vs uncertain, a common reasoning error and the correct reasoning) -- the
+  human battery's own paradigms excluded by instruction. 32 requests in flight: **~460 tokens/s, ~16M tokens a night**; it backs off and
+  cancels at any real request (it did once at 20:04 IST) and publishes its in-flight count so eval/yield_gpu.py (now subtracting it; the
+  running watchers replaced) does not freeze our trainer for our own teacher. Slip: during the teacher's 4-min topic bootstrap (before
+  the count was published) the watcher froze our jobs as if users were active. Cost: the trainer shares the GPU with vLLM at night
+  (23 vs ~51 ktok/s); the mix test runs under the watcher day and night, so it finishes tomorrow by day.
+- `2026-10-25 14:54:01 UTC` **train** (36.4 min) ok
+  d512 L12 mlp4 ctx1024 B1 885700 steps -> /mnt/kv_cache/consumer_4gb
+  (log `logs/20261025-141737-train.log`, seed 34)
+- `2026-10-25 19:42:01 UTC` **train** (318.4 min) ok
+  d512 L12 mlp4 ctx8192 B1 947000 steps -> /mnt/kv_cache/mixtest/GENERAL
+  (log `logs/20261025-142338-train.log`, seed 36)
+- `2026-10-26 00:32:44 UTC` **train** (290.6 min) ok
+  d512 L12 mlp4 ctx8192 B1 947000 steps -> /mnt/kv_cache/mixtest/MIXED
+  (log `logs/20261025-194206-train.log`, seed 36)
+
+## 2026-10-26: the mix test, Cosmopedia ready, the first teacher night, 4 GB training passes; the GPU sat idle 5.4 h (my failure)
+- `2026-10-26 00:34 UTC` **MIX TEST (eval/mix_test_v1.txt): the generated corpora hurt the text.** 10,000 steps each from 937k, step size
+  4.1e-4, raw held-out text (1,000 documents): **general text only 0.9446**, the run's mix (generated corpora at 32%) **0.9465**, start
+  0.9455. Worse on every one of the five sources (wikipedia 0.8945 / 0.8960, finemath 0.8635 / 0.8655, arxiv 0.9661 / 0.9680, fineweb-edu
+  0.9407 / 0.9428, dclm 1.0610 / 1.0630). Trainer eval: general 0.9440 -> 0.9433 over 938k-946k (still falling, slowly); mixed 0.9446 ->
+  0.9447 (flat). So the drift past 937k was the ~9-times-repeated generated data; but general text alone gains only ~0.001 per 10,000
+  steps -- the plateau is mostly not the data mix.
+- `2026-10-25 20:41 UTC` **Cosmopedia-v2 tokenized: 36.21B tokens** (/mnt/kv_cache/tokcosmo_v8192/cosmopedia.bin, 103 files in 47 min, CPU
+  only; the 104th held out, 200 documents in /mnt/kv_cache/heldout_cosmo.json). The raw parquet (114 GB) deleted 2026-10-26 05:57 UTC
+  as announced to the user; /mnt/kv_cache 98% -> 94% (209 GB free).
+- **First teacher night (eval/teacher_gen.py, 20:00-05:50 IST): 3,176 documents, ~2.4M tokens -- NOT the ~16M I projected.** It ran at
+  52-74 tokens/s all night, not ~460: the 460 was measured in its first minutes while the watcher had our trainer frozen; with the mix
+  test's trainer sharing the card, vLLM (MPS client) and our trainer time-slice and each request decodes at ~2 tokens/s. 12 back-offs
+  for real users, all before 23:00 IST. My projection was wrong by ~7x.
+- **Goal 6, training inside 4 GB (eval/night_side2.txt, 2026-10-25 14:16-14:54 UTC): PASSES.** The 168M model (885k) trained 700 steps
+  under a 3 GiB cap with growth trials on, optimizer state in host memory, held-out 2,048: peak process GPU memory **4,034 MiB** including
+  the CUDA context (nvidia-smi). Its growth trial at 885,200: R cannot apply, W and d do not fit under 3 GiB -> STAY. So a 4 GB card
+  trains this model (with ~60 MiB to spare on a 4,096 MiB card), but cannot grow it; 8 GB grows it (7,898 MiB, 2026-10-21).
+- **The GPU sat idle 00:34-05:59 UTC (06:04-11:29 IST, 5.4 h): the mix test was the chain's last job and nothing was queued after it.**
+  The third such gap (after 35 h on 10-17/19 and 3.7 days on 10-22/25). My failure.
+- `2026-10-26 05:59 UTC` **MAIN RUN 3 STARTED (eval/main3_cosmo.sh under eval/run_yield.sh, any hour):** from the general branch's end
+  (947k), eval/anneal_run.py v2 (segments of 4,000, step-size trials with the noise margin, growth on, stop after 3 segments without
+  a gain) with the generated corpora's 32% given to Cosmopedia-v2; the five text sources at the run's weights. anneal_run.py now takes
+  DATA2 / WEIGHTS / DATA2_FRAC from the environment. Its trainer eval samples the five sources only, comparable with the general
+  branch (0.9433 at 946k). At the end: raw held-out text and held-out Cosmopedia, final vs 947k (eval/bpb_text.py now takes HELD=).
+  Log eval/anneal_main3.txt, marker MAIN3_DONE.
+- `2026-10-26 06:07 UTC` **Teacher and trainer now take turns at night instead of sharing (eval/teacher_gen.py TURNS).** Sharing wasted most of
+  both (teacher ~68 of ~460 tokens/s, trainer ~half speed). The teacher now publishes 0 in flight, so eval/yield_gpu.py counts its
+  requests as load and freezes our trainer while it writes; after QUOTA (8M tokens) in a night it stops and the trainer has the rest.
+  Restarted (PID 1177685 -> 1617674, exact PID; it sleeps until 20:00 IST). Main run 3 at 66 ktok/s by day with prod idle.
+- `2026-10-26 06:40 UTC` **User asked why the disk is 94% full; approved deleting the old 65,536-vocabulary text (515 GB), the raw downloads
+  (470 GB, all tokenized; held-out documents saved separately) and old intermediate checkpoints; the 16,384-vocabulary text kept.**
+  Deleted: tokfull_v65536, hf_dl, and 195 snapshot / previous-copy checkpoints (291 GB) -- every final ckpt.pt kept, every snapshot named
+  anywhere in eval/ src/ REPORT.md PROGRESS.md CONSTRAINTS.md kept, the running run untouched (exact list: logs/deleted_2026-10-26.txt).
+  /mnt/kv_cache 94% -> 57% (1.5 TB free). Not ours and untouched: prod's lmcache_disk (153 GB, gpt-oss-20b from April).
+- **User (2026-10-26): "we need to figure out a way even Billions of paramerter model trains and inference on 4Gb card"** (goal 6 as
+  written: "at any parameter count"). The maths: memory is solvable -- inference: ~3 GB of resident weights (~6B at 4-bit), beyond that
+  weights streamed from host RAM per token (7B 4-bit ~3.5 GB/token: ~7 tok/s on PCIe 4 x16); training: ~20 bytes/parameter of state in
+  host RAM (1B 20 GB, 3B 60 GB), one layer on the card at a time (forward, recomputed backward, gradients out): card memory set by the
+  layer and the context, not the total; PCIe ~6 bytes/parameter/step, small next to compute. The wall is compute (1B x 20B tokens
+  ~2-3 months on a 4-8 GB card), so practicality needs growth (most compute while small), training mainly the newly grown parts
+  (old frozen, 4-bit), and learning more per token. Plan: (1) quantized + streamed inference measured at 1B / 3B / 7B under a 4 GB
+  cap; (2) a streaming trainer, checked equal to the normal one at 257M, measured at 1B / 3B under 4 GB with growth trials;
+  (3) frozen-old / train-new after growth against full training.
+- `2026-10-26 07:00 UTC` **Goal 6, billions on 4 GB -- first pieces built and measured.**
+  **src/stream.py** (inference): each unit (mix[i], mlp[i]) packed into one blob, in pinned host memory (STREAM: copied to one of two
+  card slots while the previous unit computes) or on the card (RESIDENT); large matrices at 16, 8 (per-row scale) or 4 bits; small
+  tensors exact. **eval/stream_infer_v1.txt (257M, 50 held-out documents, chunks of 2,048):** bf16 0.9623 bits/byte, int8 0.9628
+  (+0.05%), 4-bit chosen by measurement among six forms: uniform int4 / 64 absmax 1.0346 (+7.5%) ... **NF4 / groups of 32 / per-group
+  clip search 0.9986 (+3.8%, 4.5 bits a weight)** -- 4-bit still costs a small model real quality; 8-bit is free. STREAM gives exactly
+  RESIDENT's bits/byte (the code path is right). Host->card 57 GB/s here (PCIe 5 x16). 1B: resident 4-bit 2.53 GiB, streamed 2.25.
+  **Decode (eval/decode_profile.txt, 257M):** ~96 ms/token -- not the model: the main trainer time-slices the card and each of
+  ~1,000 small kernels per token waits behind it; plus recall's host store, streamed to the card for EVERY token (143 ms/token at a
+  73k context). Speed must be measured with the card otherwise idle; the host-store decode path needs a per-token index on the card.
+  **Watcher fix:** with two eval/run_yield.sh jobs, each watcher counted the other job's GPU work as a voice service and froze its own
+  job forever (the first smoke test sat frozen); eval/yield_gpu.py now ignores every process running from the repository. Main run 3's
+  watcher replaced by the fixed one (exact PIDs; the old one resumed its group on exit). Also: eval/guarded.sh takes whole GiB only
+  ("4.5" disabled the guard in the smoke test; nothing exceeded it).
+  **The 1B memory was not the weights:** eval/act_mem.txt (d2560, 2,048-token chunk): carrier +178 MiB, MLP +80, attention +1,305-1,431
+  (with or without recall) -- the reading-only sliding window built a 1,024-query fp32 score block and its softmax, 8 bytes x heads x
+  queries x keys = 1.3 GiB at 40 heads. src/model.py _swa_dense now halves its chunk until that fits MEMBRAE_SWA_BUDGET (256 MB):
+  exact (a query's keys do not depend on the chunk); the main model's own evals now use chunks of 512 instead of 1,024.
+  **src/stream_train.py** (training): everything in pinned host memory (fp32 weights, gradients, optimizer state); per step, unit-major:
+  forward over every micro-batch with each unit copied in once (bf16 matrices = what autocast feeds the matmuls, fp32 small tensors,
+  fp32 residual stream to host), head, backward unit by unit recomputing each micro-batch's forward (gradients summed in fp32 on the card,
+  out once), the embeddings' gradient, the non-finite guard, then src/optim.Fabric with offload="all" (new: each weight, its gradient and
+  every state tensor to the card for its update and back; on_update refreshes the unit's compute copy). Queued (eval/goal6_chain.sh under
+  the watcher): the inference sweep 1B-15B, then equality with the ordinary trainer at 257M (8 steps, carried state, two ordinary runs
+  as the noise yardstick), then streamed training at 1B / 3B / 5B under the 4 GB cap.
+- `2026-10-26 07:09:49 UTC` **train** (70.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 951000 steps -> /mnt/kv_cache/anneal_main3/seg1
+  (log `logs/20261026-055935-train.log`, seed 36)
+- `2026-10-26 07:28 UTC` **Streamed inference at size (eval/stream_infer_v2.txt, 4 GB card cap: PyTorch 3.3 GiB + context; bits/byte on
+  50 held-out documents):** 0.99B resident 8-bit 0.9620 in 2.14 GiB, resident 4-bit 0.9984 in 1.75 GiB, streamed 4-bit 1.48 GiB (0.54 GB
+  host); 1.93B resident 8-bit does not fit, resident 4-bit 2.71 GiB, streamed 4-bit 1.93 GiB (1.07 GB host). **4.32B and 8.57B did not
+  fit in any mode** -- not the weights: recall's tails, up to window + 8,192 keys per attention layer on the card (~150 MB per layer at
+  60 heads; it also explains streamed memory rising 1.48 -> 1.93 GiB from 12 to 24 layers at the same width). src/model.py Attn.TAIL_SLACK
+  (default 8,192, unchanged for training) sets it; the 4B-15B rerun keeps only the window (TAIL=0; same result). Slips: the 15B attempt
+  at the old setting used ~20 CPU cores quantizing on the host and slowed main run 3 from 66 to 47 ktok/s -- side jobs now use 8 threads;
+  my first edit for that broke stream_infer.py's import line (caught before it ran; chain restarted, superseded step dropped).
+- `2026-10-26 07:34:05 UTC` **train** (24.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 952000 steps -> /mnt/kv_cache/anneal_main3/trial1_same
+  (log `logs/20261026-070957-train.log`, seed 36)
+- `2026-10-26 07:35 UTC` **The 4.3B wall was recall's gather, not the window.** eval/act_mem.txt at d3840 (60 heads), 8-bit streamed,
+  window-only tails: attention +1,386-1,391 MiB per 2,048-token chunk even after the _swa_dense bound (my reading of the d2560 profile --
+  "the dense window" -- was wrong: the window fix alone did not move it). The far-recall gather built ~6 copies of (heads, 1,024 x 16,
+  64) for keys and values; src/model.py now chunks it to fit the same 256 MB budget (exact, per query): attention +499-503 MiB, process
+  peak 2,938 MiB at d3840 -- under a 4 GB card. src/stream.py: one dequantize buffer instead of two (written on the compute stream just
+  before its unit, so stream order already protects it): -354 MiB at d3840. 4B / 8B / 15B rerun queued (eval/stream_infer_v3.txt).
+- `2026-10-26 07:53:59 UTC` **train** (19.8 min) ok
+  d512 L12 mlp4 ctx8192 B1 952000 steps -> /mnt/kv_cache/anneal_main3/trial1_half
+  (log `logs/20261026-073413-train.log`, seed 36)
+- `2026-10-26 08:30 UTC` **Streamed inference reaches 15B inside a 4 GB card (eval/stream_infer_v3-v5.txt, PyTorch cap 3.3 GiB; process peak
+  from nvidia-smi incl. the CUDA context):** 4.32B streamed 8-bit 2.36 GiB (bits/byte 0.9629 vs bf16 0.9623 at 257M), 4-bit 2.22 GiB
+  (0.9989); 8.57B 8-bit 2.52 GiB / 8.5 GB host (0.9632), 4-bit 2.37 GiB / 4.8 GB host; **15.21B (d5120, 48 layers) 4-bit 1.89 GiB
+  allocated, process peak 2,724 MiB, 8.5 GB host (0.9991)**. Two more walls found on the way: (1) after a spill recall kept a VIEW of
+  the concatenated tail, holding ~2x the window per attention layer -- now a copy; (2) every layer's carried state stayed on the card
+  (0.5 GB of attention windows alone at 15B) -- src/stream.py state_host=True moves each layer's state in and out with its unit, so the
+  card holds one unit's weights and state whatever the depth. Not yet: resident (all weights on the card) above ~2B; decode speed
+  measured with the card otherwise idle.
+- `2026-10-26 08:40 UTC` **FINDING: the trained attention is nearly hard, and reading and training compute different functions.**
+  eval/stream_diag.txt, one 4 x 2,048 batch, 257M: ordinary trunk with gradients 2.39501, under no_grad 2.42050 (+0.0255 nats, ~1%).
+  eval/stream_diag2.txt: carrier and MLP identical in both modes; only attention differs (2-3% of its output). eval/swa_check.txt:
+  on random inputs both window kernels match a float64 reference to 3e-7 (fp32); on the REAL layer's q, k, v the reading path
+  (_swa_dense, exact fp32) is 9.3% from float64 and the training path (flex attention: TF32 scores) 5.6%. Cause: the QK-norm gains --
+  keys 260 / 370 / 358 (mean, layers 3 / 7 / 11), queries 14.4 / 1.6 / 0.3 -- put scores in the hundreds to thousands, so attention
+  picks single keys and which one wins depends on the scores' rounding. So: (a) every bits/byte reported so far was read with a
+  different kernel than the one the model was trained with -- probably ~1% pessimistic, being measured now (MEMBRAE_SWA_READ=flex
+  reads with the training kernel; off by default so main run 3's evals stay comparable); (b) the model's attention is fragile to
+  numerics -- a defect of the recipe (unbounded QK-norm gains) to fix in the next stage, not just an evaluation detail.
+  **Streamed training's mismatch is mostly this:** its forward ran under no_grad (the reading kernel). Being re-tested with the
+  training kernel for reading and fp32 compute copies (must match) and bf16 copies. Also: (c) bf16-rounding the large matrices
+  first, with gradients, moved the loss 2.39501 -> 2.39701 -- with attention this sharp a tiny change shows.
+  **Its card memory:** eval/stream_diag2.txt at 1B, one step, no cap: forward/backward ~2.0 GiB allocated; the optimizer phase 2.93
+  (the whole-matrix update's ~10 fp32 temporaries of the largest matrix); process 5.1 GB. src/optim.py _sfp_update_rows: a factored
+  matrix above 8M elements is updated in row blocks straight from host memory (three passes: second moment, rms, apply; Prodigy's
+  every-11th-element statistics on the same elements) -- equal to the one-shot update on CPU tests (weights, z, clocks, moments,
+  s exactly; the Prodigy sums to 1e-7, summation order), and the compute copy refreshed block by block.
+- `2026-10-26 09:05 UTC` **Read with the training kernel, the 947k model is 1.2% better than every number reported so far**
+  (eval/bpb_flexread.txt, the same 1,000 raw held-out documents, MEMBRAE_SWA_READ=flex): wikipedia 0.8846 (dense 0.8945), finemath
+  0.8489 (0.8635), arxiv 0.9515 (0.9661), fineweb-edu 0.9323 (0.9407), dclm 1.0524 (1.0610), **ALL 0.9333 (dense 0.9446)**. Against
+  SmolLM2-135M's 0.8797 the gap is 6.1%, not 7.4%. Main run 3 keeps the dense reading to its end so its own comparisons stay
+  consistent; the next stage reads with the training kernel and bounds the QK-norm gains so the function stops depending on rounding.
+- `2026-10-26 09:25 UTC` **Streamed training checked against the ordinary trainer (257M, 8 steps of 4 x 2,048, carried state, the training
+  kernel for reading):** first runs drifted (fp32 copies: step 1 2.57596 vs 2.57657; bf16: 2.57685; weights 5-6% apart at the worst
+  tensor) -- the streamed forward ran under no_grad, so the compiler chose INFERENCE kernels, which round differently from the training
+  ones (even on a well-conditioned attention: 0.0003 nats at step 1, eval/stream_train_equal_wellcond.txt). src/stream_train.py now runs
+  the forward in training mode (the unit's weights require gradients; the graph is dropped). Then: **step 1 identical to the last digit**
+  (2.57657, and 3.07241 with every QK-norm gain at 1); **step 1's GRADIENTS bit-identical for 212 of 213 weights, the tied embedding
+  4.8e-8** (its head and lookup parts are summed in another order; eval/stream_train_grad.txt). After 8 steps the losses stay within
+  0.0003-0.0007 nats and all weights within 2-9e-4 -- a last-bit difference amplified by the first, sign-like optimizer steps (and, on
+  the trained model, by its near-hard attention). A one-update check of every weight is queued to confirm the optimizer path is exact.
+- `2026-10-26 09:05 UTC` **Streamed training IS the ordinary training:** after one update, 230 of 231 weights bit-identical to the ordinary
+  trainer's, the tied embedding 7.5e-10 (eval/stream_train_step1.txt). Fixed on the way: the row-block update failed on a weight born all
+  zero (its Prodigy p0 is 0-d) -- now equal to the one-shot update there too.
+- `2026-10-26 09:05 UTC` **4 GB training, first sizes (eval/stream_train_size2.txt, 4 x 1,024 tokens a step, PyTorch cap 3.3 GiB): 1B
+  trained, PyTorch peak 1.52 GiB, 18 GB host, 3.8 GB of weights to the card a step** (28 s a step -- time-sliced with main run 3; ~20,000
+  small kernels a step each wait for a slice: not a speed measurement). 3B and 5B were killed by the guard at 7.7-8.5 GB on the card
+  under the 3.3 GiB PyTorch cap. Not pinned host memory (60 GiB pinned: card unchanged, scratchpad pin_test2), not the expandable-segments
+  allocator (same without it), but **CUDA local memory** (eval/stream_mem3b.txt, eval/lmem_check.txt): during the first backward a kernel
+  (most likely a candidate the Triton autotuner tried) raised the per-thread stack limit 1 KB -> 22 KB, and the driver reserves that for
+  every thread the card can hold and keeps it -- +5.8 GB on this 132-SM card, outside PyTorch's accounting; cudaDeviceSetLimit(stack, 1 KB)
+  returns it at once and later backwards did not raise it again. src/stream_train.release_local_memory() runs after every streamed step
+  (and once after the first inference pass). On a 4 GB consumer card (~20-24 SMs) the same transient would be ~0.7 GB. Rerun at 1B / 3B / 5B
+  queued with the guard at 9 GiB so the first step's transient is measured, not killed.
+- `2026-10-26 09:20 UTC` **Main run 3 (Cosmopedia at 32%) is losing ground on the five sources:** trainer eval (dense reading) 951k 0.9443,
+  trial 952k 0.9447, 953k 0.9454, 954k 0.9455, 955k 0.9460 -- where the general-only branch from the same seed improved 0.9440 -> 0.9433
+  over 938-946k. Synthetic textbooks pull the model away from web / encyclopedia / math / arXiv text. Left to its plateau stop (3 segments
+  without a gain, ~3 h): its end evaluation scores held-out Cosmopedia too, and whether textbook text helps knowledge benchmarks while it
+  costs web-text bits is still the open question. Streamed training at 4.9B was 30 MiB over a 4 GB card as one unit per layer
+  (4,126 MiB); src/stream_train.py now streams mixer and MLP as separate units (half the slot and gradient-sum size); the one-update
+  check is re-run before the 1B / 3B / 5B rerun.
+- `2026-10-26 09:18:39 UTC` **train** (84.5 min) ok
+  d512 L12 mlp4 ctx8192 B1 956000 steps -> /mnt/kv_cache/anneal_main3/seg2
+  (log `logs/20261026-075407-train.log`, seed 36)
+- `2026-10-26 09:45 UTC` **4.9B TRAINS INSIDE A 4 GB CARD (eval/stream_train_size5.txt; streamed, mixer / MLP sub-units, 4 x 1,024 tokens a
+  step, Prodigy's own step size from d0, PyTorch cap 3.3 GiB; process memory from nvidia-smi after each step, CUDA context included):**
+  0.99B 2,260 MiB, 19 GB host, 1.3 s/step; 2.77B 2,580 MiB, 53 GB host, 12.2 s/step; **4.91B 3,486 MiB, 93 GB host, 15.1 s/step,
+  19.4 GB of weights to the card a step**; loss 2.69 -> 2.48 in six steps at every size (the same function, grown). One update with
+  sub-units: still 230 of 231 weights bit-identical to the ordinary trainer (eval/stream_train_step1b.txt). Caveats, not hidden:
+  (1) host memory ~19 bytes a weight -- 93 GB at 4.9B, beyond most consumer PCs (32-64 GB): a leaner optimizer state or NVMe is next;
+  (2) the first step's CUDA local-memory transient (guard peak 8,668 MiB on this 132-SM card) -- being tested as an autotuner artefact
+  (TRITON_CACHE_AUTOTUNING); (3) speeds are on a shared H100 (time-sliced with main run 3), not a consumer card; (4) the grown copies
+  compute the 257M model's function -- this is capacity to train at size on a small card, not a better model.
+- `2026-10-26 09:41:26 UTC` **train** (22.7 min) ok
+  d512 L12 mlp4 ctx8192 B1 957000 steps -> /mnt/kv_cache/anneal_main3/trial2_same
+  (log `logs/20261026-091846-train.log`, seed 36)
+- `2026-10-26 10:00 UTC` **4.9B TRAINS ON A 4 GB CARD WITH 54 GB OF HOST RAM, NO TRANSIENT (eval/stream_train_size6.txt):** src/optim.py now
+  splits the schedule-free step into begin / one weight / end (bit-identical to the old step for the ordinary path: CPU test, frozen and
+  adaptive d, shared and per-group), which allows FUSED streamed training -- each unit's weights updated on the card as soon as its
+  gradient is complete, so no gradient ever sits in host memory -- and COMPACT clocks (one averaging-clock number per tensor while it is
+  uniform; exact). One update against the ordinary trainer: still 230 of 231 weights bit-identical (eval/stream_train_step1_fused.txt).
+  4 x 1,024 tokens a step, Prodigy from d0, card memory per step (nvidia-smi, CUDA context included) / host / time:
+  **0.99B 2,098 MiB / 11 GB / 4.2 s; 2.77B 2,520 MiB / 31 GB / 21.6 s; 4.91B 3,372 MiB / 54 GB / 10.1 s** (19 -> 11 bytes a weight
+  of host memory; 3B fits a 32 GB PC, 5B a 64 GB one); loss 2.79 -> 2.45 at every size. **Guard peak over the whole run 3,372 MiB:**
+  with TRITON_CACHE_AUTOTUNING=1 the first-step local-memory transient never appeared (3B twice: 2,520 / 2,520 MiB; 1B: 2,434) -- the
+  5.8 GB transient most likely came from Triton's autotuner launching candidate kernels with a large stack (with the cache it never appeared, even on a first run -- the mechanism is not fully understood).
+  Not yet: these speeds are a shared H100's; the grown copies compute the 257M function; growth trials and the data pipeline are not
+  yet in streamed mode (train.py integration is next).
+- `2026-10-26 10:20 UTC` **The attention fragility, measured (eval/swa_check2.txt, eval/attn_scores.txt).** Even with every input in fp32 (TF32
+  off) both window kernels stay 5.6% (flex, training) and 9.3% (dense, reading) from a float64 reference on a real layer -- so it is not
+  bf16 or TF32 rounding but an ill-conditioned function. In float64 on a real 2,048-token batch: **layer 3 is a hard lookup** -- each
+  query's best score ~30,000 (p99 32,900), best-minus-second median 23 but p10 2.5, the top key's softmax weight median 1.000; layer 7
+  best ~1,550 (gap median 1.35, p10 0.10, top weight 0.42); layer 11 ~365 (gap 0.87, p10 0.08, top weight 0.26). Near-ties among keys
+  with scores in the thousands are decided by the last bits of the arithmetic, which differ between kernels. Not fixable in kernels;
+  a model-level bound (e.g. a logit soft-cap) would saturate layer 3's lookup entirely (scores ~30k vs a cap ~50) and starve it of
+  gradient, so it is a separate experiment, not a quick fix. Decision for now: every reading uses the TRAINING kernel
+  (MEMBRAE_SWA_READ=flex) from the next stage on, so evaluations measure the function that was trained; the fp32-attention switch
+  (MEMBRAE_ATTN_FP32) stays off -- it does not help.
+- `2026-10-26 10:30 UTC` **Queued after main run 3 (eval/after_main3.sh, waiting on MAIN3_DONE):** the idle-card speed measurement
+  (eval/speed_idle.sh: streamed inference 1B-15B, streamed training 1B-5B -- every earlier timing shared the card with a trainer), then
+  **main run 4** (eval/main4_general.sh): from the general branch's end (947k), five text sources only, reading with the training kernel,
+  anneal_run v2 with growth on (its trial is due at 962,799), plateau stop, end evaluation on both held-out sets.
+- `2026-10-26 10:02:29 UTC` **train** (20.6 min) ok
+  d512 L12 mlp4 ctx8192 B1 957000 steps -> /mnt/kv_cache/anneal_main3/trial2_half
+  (log `logs/20261026-094153-train.log`, seed 36)
+- `2026-10-26 10:55 UTC` **Main run 3 to be stopped by hand after segment 3 (eval/main3_stop.sh):** its trainer eval rose monotonically 0.9443
+  (951k) -> 0.9454 -> 0.9455 -> 0.9460 -> 0.9465 (trial) -> 0.9473 -> 0.9474 (959k) while the general-only branch had improved; its own
+  plateau stop would come only after segment 4 and the growth trial due at 962,799 (~3.5 h more) -- compute spent on a known answer. Its
+  961k end is then scored on both held-out sets with the training kernel against 947k, and MAIN3_DONE releases the speed measurement and
+  main run 4. (Overriding the run's own stop is a judgment call; the evidence is in eval/anneal_main3.txt.)
+- `2026-10-26 11:21:27 UTC` **train** (78.9 min) ok
+  d512 L12 mlp4 ctx8192 B1 961000 steps -> /mnt/kv_cache/anneal_main3/seg3
+  (log `logs/20261026-100236-train.log`, seed 36)
+- `2026-10-26 11:25 UTC` **src/train_small.py -- training on a small card with growth trials (goal 6 + 7).** Everything in host memory, the model
+  streamed through the card (StreamTrainer: fused updates, compact clocks), the main trainer's corpora as carried streams, held-out loss on
+  the main trainer's trial sample, checkpoints in its format. **Test 1 (eval/small_test.txt): 300 steps from 947k (257M) under the 4 GB card's
+  cap: card 1,796 MiB, ~1,600 tok/s (sharing the card with main run 3), held-out 2.3006 -> 2.3010 (flat, as the model is).** Growth trials as
+  src.train runs them (each time the stage's length doubles; W = widen by 256 with Fabric.grew, d = deepen with every old layer's state carried
+  and the added layers at the absolute step 3e-4; same batches for every branch; the marginal-returns rule) with the snapshots on DISK.
+  **Test 2 (eval/small_grow_test.txt, forced trial, 40 steps each): W to d1536 (0.366B), d to 24 layers (0.494B), both trained under the 4 GB
+  cap (guard peak 1,930 MiB); decision STAY (W's marginal gain per hour 0.0122 vs unchanged 0.0199).** It exposed a measurement problem: one
+  snapshot reload moved the held-out loss 2.3006 -> 2.3018 -- the schedule-free train/eval switch rewrites every weight y -> x -> y, and that
+  fp32 round trip is amplified by the near-hard attention to ~0.001, the size of a trial's differences. Fixed: StreamTrainer.eval_weights
+  reads at x computed BESIDE y (never rewriting y); trial snapshots hold y in training form; growth acts on y (Fabric.grew gives the new slots
+  z = the grown weights, so x is grown consistently). Rerun queued after the speed measurement (eval/small_grow_test2.sh). The main trainer
+  (src/train.py) has the same round trip around every eval and growth -- noted, not changed while main run 4 uses it.
+- `2026-10-26 11:35 UTC` **Main run 3's end (961k, Cosmopedia at 32%) vs its start (947k), read with the training kernel (eval/anneal_main3.txt):**
+  raw held-out text **0.9385 vs 0.9333** -- worse on every source (wikipedia 0.8896 / 0.8846, finemath 0.8551 / 0.8489, arxiv 0.9572 / 0.9515,
+  fineweb-edu 0.9370 / 0.9323, dclm 1.0568 / 1.0524); held-out Cosmopedia **0.6499 vs 0.7470** (13% better). The model learned the synthetic
+  textbooks' style quickly and paid for it on real text; whether textbook text adds knowledge (benchmarks) was not measured. Main run 4 goes
+  back to the five text sources.
+- `2026-10-26 11:40 UTC` **Teacher corpus tokenized (eval/tokenize_teacher.py -> /mnt/kv_cache/tokteacher_v8192, one file per genre; every 20th
+  document held out): 3,018 documents, 2.81M tokens -- and a waste found:** minds 1,379 / dialogue 1,063 / errors 519 / uncertain 49 /
+  textbook 8 / puzzles 0. The long genres (two worked examples; four problems with checked solutions) ran past MAXTOK 900, finished on
+  "length", and were discarded -- about a third of the night's generation thrown away, the most valuable genres most. MAXTOK now 2000;
+  the teacher restarted (exact PID 1617674 -> new; it sleeps until 20:00 IST). My failure: I did not check the genre balance after night 1.
+- `2026-10-26 11:45 UTC` **Goal 10 experiment queued (eval/idle_thought_train.py, eval/idle_thought_chain.sh, after the speed measurement):
+  idle thought TRAINED by how much it helps predict what comes next** -- no labels, no teacher. Passages A (1,024 tokens) and the 256 that
+  follow (B); after A the model writes 4 thoughts of 64 tokens on its own; reward = B's loss given A minus given A + thought; rounds of
+  keeping each passage's best helpful thought and fine-tuning on it (thought tokens only, general text rehearsed 1:1, its own held step size);
+  the test on 400 held-out passages: mean reward of fresh thoughts, share that help, and B's loss given A alone. Speed so far (idle card):
+  0.99B resident 8-bit ingest 5,500 tok/s, decode 48.5 ms/token; 4-bit 8,486 / 64.2; streamed 4-bit 8,477 / 67.2 ms (537 MB/token; at
+  PCIe 4 x16 / x8 >= 21 / 45 ms) -- at 1B the per-token cost is our eager decode (~1,000 kernels, every weight dequantized per token), not
+  PCIe: CUDA-graph decode and fused low-bit matmuls are the next speed work.
+- `2026-10-26 12:20 UTC` **Goal 6 speeds with the card to itself (eval/speed_infer.txt, eval/speed_train.txt; H100, PCIe 5 x16 57.7 GB/s; a 4 GB
+  card's caps).** Inference (ingest tok/s / decode ms per token / bytes per token, and the floor a consumer card's PCIe 4 x16 / x8 would set):
+  0.99B resident 8-bit 5,500 / 48.5; resident 4-bit 8,486 / 64.2; streamed 4-bit 8,477 / 67.2 / 537 MB (>= 21 / 45 ms); 4.32B streamed
+  8-bit 1,037 / 184 / 4.26 GB (>= 170 / 355 ms), 4-bit 2,763 / 198 / 2.40 GB (>= 96 / 200 ms); 8.57B streamed 8-bit 736 / 344 / 8.5 GB
+  (>= 341 / 710 ms), 4-bit 1,399 / 389 / 4.8 GB (>= 192 / 399 ms). 15.2B did not fit in the SPEED run (65k-token ingest): recall's host
+  chunk (65,536 keys) and its score block took ~1.2 GB at 80 heads -- now sized to the 256 MB budget (src/model.py; exact). Reading: up to
+  ~1-2B our eager decode dominates (fused low-bit matmuls and CUDA-graph decode are the fix); from ~4B the bus does -- a consumer card
+  streams a 4B model at ~3-10 tokens/s, an 8B one at ~1.5-5. Training (fused, compact clocks, cached kernel tunings; 4 x 1,024 tokens a
+  step): **0.99B 1.0 s/step (~4,100 tok/s), 2.77B 2.4 s (~1,700), 4.91B 3.7 s (~1,100)**, card 2.1 / 2.5 / 3.4 GB, host 11 / 31 / 54 GB.
+  Projected for a 4 GB consumer card at 4.9B: compute ~6 s and optimizer-state traffic ~3 s a step (PCIe 4) -> ~10 s, ~400 tok/s, ~35M
+  tokens a day: enough to fine-tune and keep learning at 5B, nowhere near pretraining a 5B model from scratch (~100B tokens: years).
+- `2026-10-26 12:45 UTC` **The small-card trainer's growth trial, rechecked (eval/small_grow_test2.txt, eval/lmem_trace.txt; 40-step forced trials
+  from 947k under the 4 GB cap):** restoring a disk snapshot is now EXACT (held-out 2.3012 before and after); a deepen is exact (2.3012 ->
+  2.3012: the new layers output zero and the old ones compute as before); a widen moves it 2.3012 -> 2.3018 -- wider matmuls sum in another
+  order and the near-hard attention amplifies the last bits (function-preserving in exact arithmetic, not in fp32 here). Trials: W 2.3012 ->
+  2.3020-2.3030, d -> 2.3067-2.3079 (its 12 new layers costing at first), unchanged -> 2.3017; decisions STAY. Card: steady under 2.0 GB at
+  0.37-0.49B. A one-time 7.5 GB transient (CUDA local memory, outside PyTorch's cap) appeared in two runs and not in two others -- most likely
+  a first-time kernel tuning at the grown shapes (later runs had the tunings cached); not fully explained. Released now after every step,
+  evaluation and growth (src/stream_train.release_local_memory); LMEM_TRACE=1 names the unit that raises the stack if it recurs.
+- `2026-10-26 12:55 UTC` **Goal 10 experiment, smoke tests (eval/idle_thought_smoke_freshopt.txt):** untrained, the model's own thoughts HURT --
+  64 sampled tokens between A and B make B 0.08-0.09 nats/token harder, only 0-1.6% of thoughts help (they continue the passage's surface:
+  after a list of file names, more file names). Fixed on the way: the design now trains B after the thought too (the model must learn to read
+  past its own thought, as Quiet-STaR trains the continuation), not only the helpful thoughts; generation batches 16 -> 4 passages, one
+  graph per backward, z / clocks in host memory, layer recompute (the 7 GiB slot ran out twice); and the fine-tune continues the CHECKPOINT'S
+  optimizer state -- a fresh one at the held step size took sign-like first steps and 10 of them worsened B given A alone 2.5245 -> 2.5920.
+  The full run (2,000 / 400 passages, 2 rounds of 300 steps) starts after a clean smoke test.
+- `2026-10-26 13:35 UTC` **Goal 10, idle thought v1 round 1 (eval/idle_thought_v1.txt, 2,000 training / 400 held-out passages):** base -- the
+  model's own thoughts make B 0.1104 nats/token harder (0.3% help, best of 4 -0.0758), B given A alone 2.4610; after round 1 (300 steps on
+  A + best thought + B, thought tokens where they helped: only 1.0% of passages) -0.1077 (0.6% help, best of 4 -0.0744), B given A 2.4611 --
+  reading itself untouched, the thoughts barely better. Diagnosis: with no marker the model cannot tell its thought from the document. v2
+  queued after v1 (eval/idle_thought_chain2.sh): MARK=1 (the thought between "[thought] ... [/thought]") and BEST=1 (every passage's best-of-4
+  thought trained, a relative signal instead of the ~1% absolute one).
+- `2026-10-26 13:55 UTC` **Goal 10, idle thought v1 done (eval/idle_thought_v1.txt): no gain.** Held-out mean reward base -0.1104, round 1 -0.1077,
+  round 2 -0.1085 nats/token of B (thoughts that help 0.3 / 0.6 / 0.6%; best of 4 -0.0758 / -0.0744 / -0.0758); B given A alone 2.4610 /
+  2.4611 / 2.4611 (reading untouched). Without a marker and with ~1% of passages giving any helpful thought, two rounds teach nothing
+  measurable. v2 (markers + best-of-K) starting.
+- `2026-10-26 13:45:35 UTC` **train** (105.8 min) ok
+  d512 L12 mlp4 ctx8192 B1 951000 steps -> /mnt/kv_cache/anneal_main4/seg1
+  (log `logs/20261026-115946-train.log`, seed 36)
+- `2026-10-26 14:16:18 UTC` **train** (30.6 min) ok
+  d512 L12 mlp4 ctx8192 B1 952000 steps -> /mnt/kv_cache/anneal_main4/trial1_same
+  (log `logs/20261026-134542-train.log`, seed 36)
+- `2026-10-26 17:15:45 UTC` **train** (179.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 952000 steps -> /mnt/kv_cache/anneal_main4/trial1_half
+  (log `logs/20261026-141625-train.log`, seed 36)
+- `2026-10-26 18:21:10 UTC` **train** (65.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 956000 steps -> /mnt/kv_cache/anneal_main4/seg2
+  (log `logs/20261026-171551-train.log`, seed 36)
+- `2026-10-26 18:38:21 UTC` **train** (17.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 957000 steps -> /mnt/kv_cache/anneal_main4/trial2_same
+  (log `logs/20261026-182116-train.log`, seed 36)
+- `2026-10-26 18:55:32 UTC` **train** (17.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 957000 steps -> /mnt/kv_cache/anneal_main4/trial2_half
+  (log `logs/20261026-183827-train.log`, seed 36)
+- `2026-10-26 20:00:36 UTC` **train** (65.0 min) ok
+  d512 L12 mlp4 ctx8192 B1 961000 steps -> /mnt/kv_cache/anneal_main4/seg3
+  (log `logs/20261026-185538-train.log`, seed 36)
+- `2026-10-26 20:17:49 UTC` **train** (17.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 962000 steps -> /mnt/kv_cache/anneal_main4/trial3_same
+  (log `logs/20261026-200044-train.log`, seed 36)
+- `2026-10-26 20:35:00 UTC` **train** (17.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 962000 steps -> /mnt/kv_cache/anneal_main4/trial3_half
+  (log `logs/20261026-201756-train.log`, seed 36)
+- `2026-10-26 21:37:20 UTC` **train** (62.2 min) ok
+  d512 L12 mlp4 ctx8192 B1 966000 steps -> /mnt/kv_cache/anneal_main4/seg4
+  (log `logs/20261026-203506-train.log`, seed 36)
+
+## 2026-10-27
+- **Night 2 of the teacher (turns, MAXTOK 2000): the quota of 8.03M tokens was written by 17:02 UTC (22:32 IST), ~2.5 h with the card to itself
+  (~890 tok/s; night 1 shared it at ~68)** -- 6,392 documents; the trainer had the rest of the night.
+- **Idle thought v2 (markers + best-of-K, eval/idle_thought_v2.txt): no gain either.** Held-out mean reward base -0.1193, round 1 -0.1169, round 2
+  -0.1152 nats/token of B (help 0.4 / 0.5 / 0.4%); B given A alone 2.4614 / 2.4612 / 2.4611. After "[thought]" the 257M model writes
+  fragments (mixed scripts, numbers); best-of-4 selection does not pull that toward anything useful in two rounds. Goal 10 by trained
+  thought is not reachable this way at this size; the result that stands is idle CONSOLIDATION (eval/idle_consolidate_v1.txt).
+- **Main run 4 (eval/anneal_main4.txt): plateau.** 951k 0.9334 (best), 956k 0.9337, step size halved by trial (0.9338 vs 0.9341, margin 0.0003),
+  961k 0.9340, 966k 0.9340 -> ANNEAL_DONE (plateau) at 21:37 UTC. Raw held-out text read with the training kernel: end 0.9336 vs start (947k)
+  0.9333; held-out Cosmopedia 0.7468 vs 0.7470.
+- **BUG FOUND (mine, in eval/anneal_run.py): no growth trial had been able to finish since 898k.** src.train's trial runs each option and the
+  unchanged model K steps in turn (R, W, d + unchanged: 4K; K = the stage length / 16 = 4,049 at 962,799), but the controller's segments are
+  4,000 steps: the trial starting at 962,800 was cut off in its FIRST branch, main run 4's end checkpoint is that R branch (attention window
+  4,096) mid-trial, and its stage clock moved the next trial to 1,027,599. "Growth always enabled" was in force on paper only. Fixed: a
+  segment holding a due trial now runs to its end (+1,000 steps); EXTRA_ARGS passes memory flags when the model outgrows the 32 GiB cap.
+- **The card sat idle 21:39 UTC -> 06:18 UTC (03:09 -> 11:48 IST, 8.6 h): main run 4's plateau stop had no successor queued, and the session
+  ended.** The fourth such gap. My failure. Every chain from here ends by queueing its successor (main run 5 queues main run 6).
+- `2026-10-27 06:18 UTC` **MAIN RUN 5 (eval/main5_growth.sh): the overdue growth trial, allowed to finish.** From 947k (best), src.train with
+  --trial-now (K = 4,049, the stage clock's), options R / W / d vs unchanged, its own marginal-returns rule; --remat 1 --offload-opt 1 so the
+  514M deepened branch fits the 32 GiB cap (every branch pays the same: the per-hour comparison stays fair; 10.2 GiB reserved at 257M);
+  then 3,000 steps with the winner; raw held-out text at the end; successor main run 6 (anneal_run v2 with growth-aware segments) queued
+  by the script itself.
+- `2026-10-27 06:35 UTC` **User: the server is going down; move the project to their consumer-GPU machine.** Prepared
+  /mnt/kv_cache/transfer (14 GB, README_TRANSFER.md inside): the best checkpoint (947k, with optimizer state) and a bf16 weights-only copy,
+  both tokenizers, the three held-out sets, the first 2 GiB (~1.07B tokens) of each of the five text sources, the teacher's two nights
+  (raw and tokenized), the flash-linear-attention 0.5.2 wheels (installed from local wheels here), the server's exact package list
+  (requirements-lock.txt, also in the repo), and Claude Code's project memory. The repo itself (~1.8 GB without .venv, git history and
+  every uncommitted file) is pulled as is. Needs an RTX 30-series or newer locally (bf16 and the Triton kernels); local entry points:
+  src.train_small (training on a small card), eval/bpb_text.py, eval/stream_infer.py.
+- `2026-10-27 06:32 UTC` User has a 4.5 TB drive: eval/pull_membrae.sh (also in the bundle) pulls everything of ours (~1.75 TB) in priority order -- code, bundle, the 630 GB corpora, the rest -- skipping prod's lmcache_disk and the running main5.
+- `2026-10-27 06:39 UTC` User's machine: Windows + WSL2, RTX 4060 (8 GB, PCIe 4.0 x8), 4.6 TB D: (/mnt/d, NTFS). Pull to /mnt/d with rsync -rltvP; working copy on ext4 after moving WSL's disk to D:; the overdue growth trial to run there with src.train_small (README_TRANSFER.md).
+- `2026-10-27 07:13 UTC` Claude Code memory and this session's transcript added to the bundle (claude_memory/, claude_project/, 191 MB); server-era memories (prod safety, caps, night window) marked as such; handover-2026-10-27.md written.
+- `2026-10-28 02:21:15 UTC` **train** (1203.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 968500 steps -> /mnt/kv_cache/main5
+  (log `logs/20261027-061809-train.log`, seed 36)
+- `2026-10-28 03:16:26 UTC` **train** (53.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 972000 steps -> /mnt/kv_cache/anneal_main6/seg1
+  (log `logs/20261028-022307-train.log`, seed 36)
+- `2026-10-28 03:32:22 UTC` **train** (15.8 min) ok
+  d512 L12 mlp4 ctx8192 B1 973000 steps -> /mnt/kv_cache/anneal_main6/trial1_same
+  (log `logs/20261028-031634-train.log`, seed 36)
+- `2026-10-28 03:48:11 UTC` **train** (15.7 min) ok
+  d512 L12 mlp4 ctx8192 B1 973000 steps -> /mnt/kv_cache/anneal_main6/trial1_half
+  (log `logs/20261028-033228-train.log`, seed 36)
+- `2026-10-28 04:47:46 UTC` **train** (59.5 min) ok
+  d512 L12 mlp4 ctx8192 B1 977000 steps -> /mnt/kv_cache/anneal_main6/seg2
+  (log `logs/20261028-034817-train.log`, seed 36)
+- `2026-10-28 05:03:31 UTC` **train** (15.6 min) ok
+  d512 L12 mlp4 ctx8192 B1 978000 steps -> /mnt/kv_cache/anneal_main6/trial2_same
+  (log `logs/20261028-044753-train.log`, seed 36)
+- `2026-10-28 05:19:36 UTC` **train** (16.0 min) ok
+  d512 L12 mlp4 ctx8192 B1 978000 steps -> /mnt/kv_cache/anneal_main6/trial2_half
+  (log `logs/20261028-050338-train.log`, seed 36)
+- `2026-10-28 06:15 UTC` **MAIN RUN 5 RESULT -- the overdue growth trial finished: STAY** (eval/main5.txt). From 947k: R (window 4096), W (d1536,
+  365.6M) and d (24 layers, 493.8M) each 4,049 steps vs unchanged. Held-out after the trial: R 2.3331, W 2.3348, unchanged 2.3357, d 2.3361.
+  Per hour the unchanged model gained most (0.0021 vs W 0.0007); W ran 7.75 s/step vs 1.99 under the remat/offload settings, which weighs
+  against it -- on another card the per-hour answer can differ. Checkpoint /mnt/kv_cache/main5/ckpt.pt (step 968,500): raw held-out text
+  **0.9330** vs 947k 0.9333 (training kernel) -- inside the ~0.001 noise, so a tie, but the newest state with the trial done.
+- `2026-10-28 02:23 UTC` (logged 06:15) **main6 = eval/anneal_run.py from main5** (queued by main5_growth.sh): segments 0.9333 / 0.9335, step-size
+  trials SAME both times; it stops by itself after 3 segments without a gain. The plateau holds at 0.9330-0.9335.
+- `2026-10-28 06:15 UTC` The user's pull is stalled: the external D: drive dropped out of WSL (/mnt/d "No such device"); remount steps given.
+  No rsync from the user is connected to the server now. main5/ckpt.pt (3.3 GB) is now finished and should be pulled too.
+- `2026-10-28 06:21:03 UTC` **train** (61.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 982000 steps -> /mnt/kv_cache/anneal_main6/seg3
+  (log `logs/20261028-051942-train.log`, seed 36)
+- `2026-10-28 06:37:29 UTC` **train** (16.3 min) ok
+  d512 L12 mlp4 ctx8192 B1 983000 steps -> /mnt/kv_cache/anneal_main6/trial3_same
+  (log `logs/20261028-062110-train.log`, seed 36)
+- `2026-10-28 06:53:37 UTC` **train** (16.0 min) ok
+  d512 L12 mlp4 ctx8192 B1 983000 steps -> /mnt/kv_cache/anneal_main6/trial3_half
+  (log `logs/20261028-063735-train.log`, seed 36)
+- `2026-10-28 08:08:47 UTC` **train** (75.1 min) ok
+  d512 L12 mlp4 ctx8192 B1 987000 steps -> /mnt/kv_cache/anneal_main6/seg4
+  (log `logs/20261028-065343-train.log`, seed 36)

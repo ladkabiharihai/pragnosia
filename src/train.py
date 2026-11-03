@@ -208,6 +208,9 @@ def main():
     ap.add_argument("--grow-to", type=int, default=0, help="width to grow to at --grow-at")
     ap.add_argument("--fused", type=int, default=1, help="one compiled kernel group per parameter update")
     ap.add_argument("--graph", type=int, default=1, help="replay the optimizer step as a CUDA graph")
+    ap.add_argument("--offload-opt", type=int, default=0,
+                    help="goal 6, a 4 GB card: keep sfp's iterate z and averaging clocks wsp (1.26 GiB at 168M) in pinned host memory, "
+                         "copied in per weight for its update (src/optim.py Fabric.offload); the optimizer step is then not captured")
     ap.add_argument("--ctx-mix", default="", help="train on a MIX of context lengths, e.g. 1024,2048,4096,8192; "
                     "the batch scales so every length carries the same tokens per micro-step")
     ap.add_argument("--graph-step", type=int, default=1,
@@ -362,8 +365,9 @@ def main():
                 return o_
             if a.optim == "sfp":
                 o_ = Fabric([{"params": g["params"]} for g in model.param_groups(lr=a.lr, new_lr=a.new_lr)], lr=1.0,
-                            fused=bool(a.fused), sfp=True, sfp_clock=bool(a.sf_clock), cuda_graph=bool(a.graph and a.fused))
-                o_.recaptures = getattr(o_, "recaptures", 0)
+                            fused=bool(a.fused), sfp=True, sfp_clock=bool(a.sf_clock),
+                            cuda_graph=bool(a.graph and a.fused and not a.offload_opt))
+                o_.recaptures = getattr(o_, "recaptures", 0); o_.offload = bool(a.offload_opt)
                 return o_
             return Fabric(model.param_groups(lr=a.lr, new_lr=a.new_lr), lr=a.lr, fused=bool(a.fused),
                           hyper=a.intrinsic_lr == 1, hyper_beta=a.hyper_beta, dog=a.intrinsic_lr == 2,
@@ -394,6 +398,9 @@ def main():
                 for p_ in g["params"]:
                     st_ = o_.state.get(p_)
                     if st_ and "z" in st_: st_["z"] = p_.detach().clone().to(st_["z"].dtype)
+                    # THE PER-WEIGHT CLOCKS TOO (2026-10-16): with sfp_clock each weight's average reads its own sum wsp, not
+                    # the group's ws, so zeroing ws alone restarted nothing (found while diagnosing the 760k-836k drift)
+                    if st_ and "wsp" in st_: st_["wsp"].zero_()
         def psf_carry(old, new, grown=None, pairs=None):
             """CARRY SCHEDULE-FREE PRODIGY'S MEMORY ACROSS A GROWTH, as Fabric.grew does for Fabric. Rebuilding it fresh
             restarted every weight's statistics, which hurt the grown branch of a trial more than the unchanged one
@@ -567,7 +574,9 @@ def main():
         # checkpoint, so the only survivor was a copy taken by accident for a probe.
         start = 0; grew_ctx = None
         if a.resume and os.path.exists(a.resume):
-            sd = torch.load(a.resume, map_location="cuda")
+            # with --offload-opt the checkpoint is read into HOST memory: on the card, its optimizer state alone (z, wsp: 1.26 GiB at
+            # 168M) beside the model ran a 3 GiB cap out of memory before the first step (the 4 GB test, 2026-10-19)
+            sd = torch.load(a.resume, map_location="cpu" if a.offload_opt else "cuda")
             if sd["cfg"].get("ctx", PT) != PT:
                 # A LONG-CONTEXT PHASE. The positional table is sized to the old window; tile the trained
                 # pattern to fill the new one. That is exactly what inference already does when it processes a
@@ -649,6 +658,7 @@ def main():
             elif "opt" in sd:
                 try:
                     opt.load_state_dict(sd["opt"])
+                    if getattr(opt, "offload", False): opt.offload_now()
                     if SF: opt.train()   # checkpoints hold the averaged weights; back to training ones
                     if grew_ctx is not None:
                         # the positional table grew with the window, so its second moment is still sized to
@@ -955,10 +965,39 @@ def main():
             # ...and every other name that held them: the step loop's own handle on the carried graphs (C_ kept the whole
             # ~20 GiB pool alive after carry_g was dropped: the fourth failure, 06:10 UTC) and a widening's map of old to new
             # parameters
+            # FREE THE STORAGE, NOT ONLY THE NAMES (2026-10-13). The memory probe (MEMBRAE_MEMDBG) found ~2.5 GiB of the outgoing
+            # branch's weights and optimizer state still on the card after every name was dropped -- held by torch.compile's
+            # tracing records (TrackedFake), which _dynamo.reset() does not release: 2.46 GiB under the 8 GB cap (an OOM when
+            # the snapshot came back), ~6.1 GiB at every main-run trial. The outgoing branch is already snapshotted to the CPU,
+            # so its tensors are emptied in place: whatever still points at them now points at nothing.
+            if m is not None:
+                for p_ in m.parameters():
+                    p_.grad = None; p_.data = torch.empty(0, device=p_.device, dtype=p_.dtype)
+                for b_ in m.buffers(): b_.data = torch.empty(0, device=b_.device, dtype=b_.dtype)
+            if opt is not None:
+                for st_ in list(getattr(opt, "state", {}).values()):
+                    for k_, v_ in list(st_.items()) if isinstance(st_, dict) else []:
+                        if torch.is_tensor(v_) and v_.is_cuda: v_.data = torch.empty(0, device=v_.device, dtype=v_.dtype)
             carry_g = None; C_ = None; grown_ = None; m = None; opt = None
             fwd = trunk = None; torch._dynamo.reset(); gc.collect(); torch.cuda.empty_cache()
             r.log(f"    install: {torch.cuda.memory_allocated() / 2**30:.2f} GiB still allocated after releasing the outgoing "
                   f"branch ({torch.cuda.memory_reserved() / 2**30:.2f} reserved)")
+            if os.environ.get("MEMBRAE_MEMDBG"):
+                # WHAT STAYS ON THE CARD ACROSS A BRANCH SWITCH (2026-10-13): 2.46 GiB under the 8 GB cap (an OOM restoring the
+                # snapshot), ~6.1 GiB in every main-run trial. The live CUDA tensors, largest groups first, with who holds them.
+                live = {}
+                for o_ in gc.get_objects():
+                    try:
+                        if torch.is_tensor(o_) and o_.is_cuda:
+                            k_ = (tuple(o_.shape), str(o_.dtype)); n_ = o_.numel() * o_.element_size()
+                            c_, b_, h_ = live.get(k_, (0, 0, set()))
+                            h_ = h_ | {type(x_).__name__ for x_ in gc.get_referrers(o_)[:4] if not isinstance(x_, (list, tuple)) or True}
+                            live[k_] = (c_ + 1, b_ + n_, h_)
+                    except Exception: pass
+                for k_, (c_, b_, h_) in sorted(live.items(), key=lambda kv: -kv[1][1])[:15]:
+                    r.log(f"      [mem] {b_ / 2**20:9.1f} MiB  {c_:4d} x {k_[0]} {k_[1]}  held by {sorted(h_)[:5]}")
+                r.log(f"      [mem] tensors seen by gc: {sum(v[1] for v in live.values()) / 2**30:.2f} GiB of "
+                      f"{torch.cuda.memory_allocated() / 2**30:.2f} allocated (the rest: graph pools or tensors gc cannot see)")
             shapes = S["shapes"]; a.accum = S["accum"]; a.batch = S["batch"]
             rng.bit_generator.state = S["rng"]; nxt = S["nxt"]
             m = S["m"].to("cuda")
@@ -967,6 +1006,7 @@ def main():
                     if hasattr(mx_, "need_sent"): mx_.need_sent = False
             opt = make_opt(m)
             opt.load_state_dict(to_dev(S["opt"], "cuda"))
+            if getattr(opt, "offload", False): opt.offload_now()
             if SF: opt.train()
             if a.share_d: opt.share_d = True          # the rebuilt optimizer keeps one step size, as the run does
             if a.freeze_d:
@@ -1144,7 +1184,7 @@ def main():
                 T_n, B_n = shapes[0]
                 nxt = [batch(bins, ks, ps, rng, B_n, T_n, extra, a.data2_frac) for _ in range(a.accum)]
                 r.log(f"    SPLIT micro-steps {grow_a[i]} ways at step {i}: shapes {shapes}, accumulation {a.accum}")
-            unfit_ = False
+            unfit_ = False; unfit_why_ = None
             try:
                 if i in grow_r:
                     # REACH (goals 7 + 9): double how far back the windowed attention sees exactly. Exact retrieval lives
@@ -1155,6 +1195,10 @@ def main():
                     if not ats or not all(mx.sliding for mx in ats) or ats[0].window >= a.ctx:
                         r.log(f"    REACH not applied at step {i}: it needs sliding windowed attention shorter than the "
                               f"training window ({ats[0].window if ats else 0} vs {a.ctx})")
+                        # NOT A CANDIDATE EITHER (2026-10-16): in the 8 GB demo (window 2,048 = the training window) the trial
+                        # ran this no-op "R" branch as if grown and it won on noise (2.2672 vs 2.2673) -- a growth chosen
+                        # that never happened. An option that cannot apply is treated as one that does not fit.
+                        if trial is not None and trial["phase"] == "grow": unfit_ = True; unfit_why_ = "cannot apply here"
                     else:
                         if SF: opt.eval()
                         xg = batch(bins, ks, ps, np.random.default_rng(7), 1, 2048)
@@ -1321,6 +1365,17 @@ def main():
                     if a.share_d: opt.share_d = True          # the rebuilt optimizer keeps ONE step size, as before the growth
                     if a.freeze_d:
                         for g_f in opt.param_groups: g_f["freeze_d"] = True
+                    # EMPTY THE SHALLOW MODEL IN PLACE (2026-10-16, goal 6). Its names alone were dropped, but torch.compile's
+                    # tracing records (TrackedFake) still held its weights and gradients: after a deepen that then did not fit,
+                    # 2.41 GiB stayed on the card against ~1.0 after any other switch -- the 168M shallow model's weights and
+                    # grads, 0.67 GiB each (logs/consumer_dbg3.out). deepen() copied every value into new tensors and the old
+                    # optimizer's STATE is carried by reference (left alone); a parameter the deep model shares is skipped.
+                    big_ids_ = {id(t_) for t_ in list(big.parameters()) + list(big.buffers())}
+                    for p_ in old_m.parameters():
+                        if id(p_) in big_ids_: continue
+                        p_.grad = None; p_.data = torch.empty(0, device=p_.device, dtype=p_.dtype)
+                    for b_ in old_m.buffers():
+                        if id(b_) not in big_ids_: b_.data = torch.empty(0, device=b_.device, dtype=b_.dtype)
                     del old_m, opt2, big, pairs      # pairs held every shallow parameter (and its grad) alive
                     base = [g["lr"] for g in opt.param_groups]
                     set_none = False if SF else not opt.cuda_graph   # psf: graphs write into fixed grad buffers
@@ -1346,11 +1401,25 @@ def main():
             if unfit_:
                 # (outside the except clause: inside it the traceback kept the half-built model and its graphs alive,
                 # and restoring the snapshot found 25.75 GiB still allocated -- tested 2026-10-09 at a 26 GiB cap)
-                r.log(f"    TRIAL {'+'.join(trial['ev'])}: does not fit under the {a.cap:g} GiB cap (out of memory building "
-                      f"it at step {i}); not a candidate")
+                r.log(f"    TRIAL {'+'.join(trial['ev'])}: " + (f"{unfit_why_} (step {i}); not a candidate" if unfit_why_ else
+                      f"does not fit under the {a.cap:g} GiB cap (out of memory building it at step {i}); not a candidate"))
                 trial.setdefault("unfit", []).append(trial["ev"])
                 grow_d.discard(i); grow_w.pop(i, None); grow_r.discard(i); grow_m.discard(i)
-                big = opt2 = old_m = pairs = None; xg = None; gc.collect(); torch.cuda.empty_cache()
+                # the half-built bigger model and its optimizer: emptied in place first, as install() does for an outgoing
+                # branch (2026-10-14: names alone left 2.41 GiB after the failed deepen under the 8 GB cap -- the unchanged
+                # branch then ran out of memory)
+                try: big_ = big                              # unset when the widen (W), not a deepen, ran out of memory
+                except NameError: big_ = None
+                try: opt2_ = opt2
+                except NameError: opt2_ = None
+                for mm_ in (big_,) if big_ is not None and big_ is not m else ():
+                    for p_ in mm_.parameters(): p_.grad = None; p_.data = torch.empty(0, device=p_.device, dtype=p_.dtype)
+                    for b_ in mm_.buffers(): b_.data = torch.empty(0, device=b_.device, dtype=b_.dtype)
+                if opt2_ is not None and opt2_ is not opt:
+                    for st_ in list(getattr(opt2_, "state", {}).values()):
+                        for k_, v_ in list(st_.items()) if isinstance(st_, dict) else []:
+                            if torch.is_tensor(v_) and v_.is_cuda: v_.data = torch.empty(0, device=v_.device, dtype=v_.dtype)
+                big = opt2 = old_m = pairs = big_ = opt2_ = None; xg = None; gc.collect(); torch.cuda.empty_cache()
                 if trial["ai"] + 1 < len(trial["alts"]):
                     install(_copy.deepcopy(trial["S0"]))
                     hist.fill_(float("nan")); g0 = i
@@ -1382,6 +1451,10 @@ def main():
                 opt.param_groups[2]["lr"] *= min(1.0, (i - grown_at + 1) / max(1, a.new_warm))
             opt.zero_grad(set_to_none=set_none)
             loss = None
+            # YIELDING TO PROD (2026-10-21): under eval/yield_gpu.py the job is frozen when prod gets a request, but GPU work already
+            # queued still runs; measured +0.21 s on a 0.64 s prod reply. With MEMBRAE_YIELD_SYNC=1 (or the file .yield_sync in the
+            # repo) each micro-step finishes before the next is launched, so at most one micro-step drains after a freeze
+            ysync = os.environ.get("MEMBRAE_YIELD_SYNC") == "1" or os.path.exists("/opt/code/membrae/.yield_sync")
             for _acc in range(a.accum):
                 if carry_g is not None:
                     # this group's streams continue: its saved states into the graphs' buffer, the window in, replay,
@@ -1397,6 +1470,7 @@ def main():
                             for bt, st in zip(b_, s_): st.copy_(bt)
                     l_ = (C_["lf"] if fresh_ else C_["lc"]).clone()
                     loss = l_ if loss is None else loss + l_
+                    if ysync: torch.cuda.synchronize()
                     continue
                 x = nxt[_acc]
                 g_ = graphs.get((x.shape[0], x.shape[1] - 1)) if len(shapes) > 1 else gs
@@ -1411,6 +1485,7 @@ def main():
                         l_ = F.cross_entropy(fwd(x[:, :a.ctx]).reshape(-1, a.vocab), x[:, 1:a.ctx + 1].reshape(-1))
                 if (g_ if len(shapes) > 1 else gs) is None: (l_ / a.accum).backward()   # else the replay did
                 loss = l_.detach() if loss is None else loss + l_.detach()
+                if ysync: torch.cuda.synchronize()
             loss = loss / a.accum
             # the next step's batches are sampled NOW, while the card is still busy with this one; the
             # gradient-norm read below is a sync and everything after it is a gap the card sits through

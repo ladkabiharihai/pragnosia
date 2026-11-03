@@ -1,0 +1,12 @@
+
+######## smoke-base (/mnt/kv_cache/final_base_v3.pt); N=4 per cell
+DIGIT SPAN       forward 2, backward 2   (humans ~7 / ~5)   by length F 3:0 4:100 5:0 6:100 7:100 8:100 9:0 10:100 11:100 12:100 13:0 14:100 15:100  B 3:0 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:0 12:0 13:0 14:0 15:0
+FREE RECALL      by position 1-15: 100 100 50 50 50 50 50 50 50 50 100 100 50 50 50   first3 83 / middle 50 / last3 50   (humans U-shaped)
+2-BACK           sensitivity (AUC, match vs non-match) 0.69   (humans ~90% right; no sensitivity 0.50)
+WASON abstract   right 100%, matching (P and Q) 0%, P only 0%, all 0%   (humans ~10% right)
+WASON social     right 100%, matching 0%, P only 0%, all 0%   (humans ~75% right)
+BELIEF BIAS      accepted at its own median: valid-believable 50, valid-unbelievable 75, invalid-believable 50, invalid-unbelievable 25   (humans 89 / 56 / 71 / 10); sensitivity to logic 0.59, to belief 0.45 (AUC; none 0.50)
+CRT              right 25%, intuitive error 25%   (humans ~41% right, most errors intuitive; chance 25)
+CONJUNCTION      'A and B' judged more probable: 25%   (humans ~85; chance 50)
+FALSE BELIEF     false-belief stories 75% right, true-belief controls 75%   (adults ~100 / ~100; chance 50)
+GUARD: peak 3650 MiB of 7 GiB (.venv/bin/python -u eval/cognitive.py /mnt/kv_cache/final_base_v3.pt=smoke-base)

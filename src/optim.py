@@ -161,6 +161,54 @@ def _sfp_update(p, g, z, vr, vc, v, p0, s, d, dlr, ckp1, xy, du, acc, b2: float,
     p.copy_(y.to(p.dtype))
 
 
+@torch.no_grad()
+def _sfp_update_rows(p, g, z, wsp, vr, vc, p0, s, d, dlr, du, acc, b2: float, b3: float, eps: float, w, b1: float, live, dev, rows: int,
+                     on_rows=None):
+    """_sfp_update for a FACTORED 2-D weight, ROW BLOCK BY ROW BLOCK (goal 6, 2026-10-26: the whole-matrix update made ~10 weight-sized
+    fp32 temporaries, 2.7 GB for one 4,096 x 16,384 matrix -- more than a 4 GB card has). p, g, z, wsp may live in host memory: each
+    block comes to `dev`, is updated and goes back. The same mathematics in three passes, because two quantities need the whole matrix
+    first: (A) the factored second moment (row means per block, column sums accumulated), (B) the update's rms over all of it, (C) the
+    update applied, with Prodigy's statistics on every 11th element of the flattened weight (the same elements as the one-shot form).
+    Only reduction order differs from _sfp_update. vr, vc, p0, s, acc and the scalars are already on `dev`."""
+    L = live; R, C = p.shape; d2 = d * d
+    blocks = [(r0, min(R, r0 + rows)) for r0 in range(0, R, rows)]
+    def gblk(r0, r1): return torch.nan_to_num(g[r0:r1].to(dev, non_blocking=True).float(), nan=0.0, posinf=0.0, neginf=0.0)
+    colsum = torch.zeros(C, device=dev, dtype=torch.float32)
+    for r0, r1 in blocks:                                                              # (A)
+        sq = gblk(r0, r1).square()
+        vr[r0:r1].mul_(1 - L * (1 - b2)).add_(sq.mean(dim=1) * ((1 - b2) * d2) * L); colsum += sq.sum(0)
+    vc.mul_(1 - L * (1 - b2)).add_(colsum / R * ((1 - b2) * d2) * L)
+    vrm = vr.mean().clamp_min(1e-30)
+    def upd_blk(r0, r1):
+        gf = gblk(r0, r1)
+        den = vr[r0:r1].sqrt().unsqueeze(1).expand_as(gf) if R > C else ((vr[r0:r1] / vrm).unsqueeze(1) * vc.unsqueeze(0)).sqrt()
+        return gf, (gf * d) / (den + d * eps)
+    nsq = torch.zeros((), device=dev)
+    for r0, r1 in blocks: nsq += upd_blk(r0, r1)[1].square().sum()                   # (B)
+    rs = torch.rsqrt((nsq.sqrt() / (R * C) ** 0.5).clamp_min(1.0))
+    for r0, r1 in blocks:                                                              # (C)
+        gf, u = upd_blk(r0, r1); u = u * rs
+        zb = z[r0:r1].to(dev, non_blocking=True); zf = zb.float()
+        f0 = r0 * C; t0 = -(-f0 // 11); t1 = -(-(r1 * C) // 11); off = t0 * 11 - f0
+        if t1 > t0:
+            sg = gf.reshape(-1)[off::11]; sz = zf.reshape(-1)[off::11]
+            p0b = p0 if p0.dim() == 0 else p0[t0:t1]                                   # a weight born all-zero keeps a 0-d p0
+            acc[0] += torch.dot(sg, p0b.float() - sz) * du * L
+            s[t0:t1].mul_(1 - L * (1 - b3)).add_((sg * du * L).to(s.dtype))           # in s's own dtype, as _sfp_update does
+            acc[1] += s[t0:t1].float().abs().sum() * L
+        y = p[r0:r1].to(dev, non_blocking=True).float()
+        if wsp is not None:
+            wb = wsp.to(dev, non_blocking=True) if wsp.dim() == 0 else wsp[r0:r1].to(dev, non_blocking=True)   # a compact clock: one number
+            tot = wb + w * L; c = torch.where(tot > 0, w * L / tot.clamp_min(1e-38), torch.zeros_like(tot))
+            y = y + c * (zf - y); zb.sub_((u * dlr * L).to(zb.dtype)); y = y - u * (dlr * (1 - b1 * (1 - c))) * L
+            if wsp.dim(): wb.add_(w * L); wsp[r0:r1].copy_(wb, non_blocking=True)
+        else:
+            raise ValueError("_sfp_update_rows: the per-weight clock is expected (sfp_clock)")
+        if on_rows is not None: on_rows(r0, r1, y)                                    # e.g. the streamer's compute copy of these rows
+        z[r0:r1].copy_(zb, non_blocking=True); p[r0:r1].copy_(y.to(p.dtype), non_blocking=True)
+    if wsp is not None and wsp.dim() == 0: wsp.copy_(wsp.to(dev, non_blocking=True) + w * L, non_blocking=True)  # the compact clock, once
+
+
 _sfp_fused = None  # torch.compile(_sfp_update), built on first use
 _fused = None      # torch.compile(_update), built on first use
 
@@ -206,6 +254,15 @@ class Fabric(Optimizer):
         if fused and intrinsic_lr:
             raise ValueError("the intrinsic-rate path is python per step and cannot be fused")
         self.fused, self.cuda_graph = fused, cuda_graph
+        # OFFLOAD (2026-10-19, goal 6: training on a 4 GB card). sfp keeps two weight-sized fp32 tensors per weight -- the iterate z
+        # and the per-weight averaging clock wsp, 1.26 GiB at 168M, as much as the weights and their gradients together. With
+        # offload they live in pinned host memory and each weight's pair is copied in for its update and back after it (stream
+        # order keeps the copies safe; ~2.5 GB over PCIe per step, small beside a step of 1-3 s). Not with a captured step.
+        self.offload = False
+        # offload = "all" (src/stream_train.py, 2026-10-26): every state tensor in host memory, and the weight and its gradient too when
+        # the weight lives there; on_update(p, new value on the card) lets the streamer refresh its compute copy of the weight
+        self.on_update = None
+        self.row_block_elems = 1 << 23   # offload "all": a factored matrix larger than this (8M elements) is updated in row blocks
         self._graph = None; self._ptrs = None; self._warm = False; self.recaptures = 0
         for gp in self.param_groups:
             gp["lr_t"] = None; gp["acc"] = None; gp["sf"] = None
@@ -231,13 +288,14 @@ class Fabric(Optimizer):
             w = (1 - 0.9) if train else (1 - 1 / 0.9)
             for p in gp["params"]:
                 st = self.state.get(p)
-                if st and "z" in st: p.lerp_(st["z"].to(p.dtype), w)
+                if st and "z" in st: p.lerp_(st["z"].to(device=p.device, dtype=p.dtype), w)
             gp["train_mode"] = train
 
     def train(self): self._sf_train_mode(True)
     def eval(self): self._sf_train_mode(False)
 
     def state_dict(self):
+        if self.offload and torch.cuda.is_available(): torch.cuda.synchronize()   # the host copies of z / wsp are complete
         for gp in self.param_groups:             # an intrinsic rate lives on the device; bring it home to save
             if gp.get("hyper") and gp["lr_t"] is not None:
                 gp["lr"] = float(gp["lr_t"])
@@ -262,7 +320,21 @@ class Fabric(Optimizer):
         return out
 
     def load_state_dict(self, sd):
+        # WITH OFFLOAD, z AND wsp GO STRAIGHT TO PINNED HOST MEMORY (2026-10-21): the base class casts every state tensor to its
+        # weight's device first, and that alone (1.26 GiB at 168M, beside the weights) ran a 3 GiB cap out of memory before
+        # offload_now could move them
+        hold = {}
+        if getattr(self, "offload", False):
+            st2 = {}
+            for k, v in sd["state"].items():
+                hold[k] = {kk: v[kk] for kk in ("z", "wsp") if kk in v}
+                st2[k] = {kk: vv for kk, vv in v.items() if kk not in ("z", "wsp")}
+            sd = {"state": st2, "param_groups": sd["param_groups"]}
         super().load_state_dict(sd)
+        if hold:
+            params = [p for g in self.param_groups for p in g["params"]]
+            for k, h in hold.items():
+                for kk, t in h.items(): self.state[params[int(k)]][kk] = t.detach().cpu().pin_memory()
         self._graph = None; self._warm = False   # state tensors were replaced; a captured graph is stale
         # the SHARED step size's device state (one d for the whole model) is rebuilt from the loaded groups too. Kept, it
         # carried the d (and numerator) of whichever growth-trial branch ran last into the next branch and into the run
@@ -293,7 +365,10 @@ class Fabric(Optimizer):
         if gp.get("hyper"):
             st["dsp"] = torch.zeros_like(p, dtype=torch.bfloat16)
         if gp.get("sfp"):
-            st["wsp"] = torch.zeros_like(p, dtype=torch.float32)     # its own averaging clock starts now
+            # its own averaging clock starts now; compact_clock (streamed training): ONE number while every element shares it (always,
+            # until a growth gives the tensor elements of different ages) -- 4 bytes a weight less in host memory
+            st["wsp"] = (torch.zeros((), dtype=torch.float32, device=p.device) if getattr(self, "compact_clock", False)
+                         else torch.zeros_like(p, dtype=torch.float32))
             st["z"] = p.detach().clone()
             sl = p.detach().reshape(-1)[::11]
             st["p0"] = sl.to(torch.bfloat16).clone() if bool(p.detach().any()) else torch.zeros((), dtype=torch.bfloat16, device=p.device)
@@ -334,35 +409,60 @@ class Fabric(Optimizer):
            st.get("dsp") if gp.get("hyper") else None,
            (st["w0"], st["rg"]) if gp.get("dog") else None)
 
-    def _run_sfp(self, gp):
+    def _sfp_fn(self):
         global _sfp_fused
-        fn = _sfp_update
-        if self.fused:
-            if _sfp_fused is None:
-                import torch._dynamo as _dyn     # (an "import torch..." here would make torch local to the function)
-                _dyn.config.cache_size_limit = max(_dyn.config.cache_size_limit, 64)
-                _sfp_fused = torch.compile(_sfp_update, dynamic=True, fullgraph=True)
-            fn = _sfp_fused
-        dev = next((p.device for p in gp["params"] if p.grad is not None), None)
-        if dev is None: return
+        if not self.fused: return _sfp_update
+        if _sfp_fused is None:
+            import torch._dynamo as _dyn     # (an "import torch..." here would make torch local to the function)
+            _dyn.config.cache_size_limit = max(_dyn.config.cache_size_limit, 64)
+            _sfp_fused = torch.compile(_sfp_update, dynamic=True, fullgraph=True)
+        return _sfp_fused
+
+    def _sfp_begin(self, gp, dev):
+        """the group's per-step scalars from the step-start d, all on the device (so this lives inside the captured graph)"""
         f = self._sf(gp, dev)
-        b1, b2 = gp["betas"]; b3 = b2 ** 0.5; d0 = 1e-6
-        # per-step scalars from the step-start d, all on the device (so this lives inside the captured graph)
+        b1, b2 = gp["betas"]; d0 = 1e-6
         f["dlr"].copy_(f["d"] * gp["lr"]); f["w"].copy_(f["dlr"] * f["dlr"])
         tot = f["ws"] + f["w"]
         f["ckp1"].copy_(torch.where(tot > 0, f["w"] / tot.clamp_min(1e-38), torch.zeros_like(tot)))
         f["xy"].copy_(1 - b1 * (1 - f["ckp1"])); f["du"].copy_(f["d"] * f["d"] / d0 ** 0.5)
-        for p in gp["params"]:
-            if p.grad is None: continue
-            st = self.state[p] or self._init_state(p, gp)
-            st["step"] += 1
-            if "wsp" not in st:                  # a weight's own clock starts where its group's stands (0 at the start;
-                st["wsp"] = torch.zeros_like(p, dtype=torch.float32) + f["ws"]   # a checkpoint without clocks keeps its average)
-            fn(p.detach(), p.grad, st["z"], st.get("vr"), st.get("vc"), st.get("v"), st["p0"], st["s"],
-               f["d"], f["dlr"], f["ckp1"], f["xy"], f["du"], f["acc"], b2, b3, 1e-8,
-               st["wsp"] if gp.get("sfp_clock", True) else None, f["w"], b1, self._live_t(dev))
-        # end of step: the Prodigy estimate, exactly as the package (numerator decays by b3; a negative contribution is
-        # kept only once d has left d0 or the contribution is positive; d_hat limited to 2^0.25 d; d only rises)
+        return f
+
+    def _sfp_one_all(self, gp, p, g, f, dev):
+        """offload "all": one weight's update -- its state (and the weight and its gradient, if they live in host memory) comes to the
+        card for the update and goes back after it; stream order keeps the copies safe"""
+        fn = self._sfp_fn(); b1, b2 = gp["betas"]; b3 = b2 ** 0.5
+        st = self.state[p] or self._init_state(p, gp)
+        st["step"] += 1
+        if "wsp" not in st:                      # a weight's own clock starts where its group's stands
+            st["wsp"] = torch.zeros_like(p, dtype=torch.float32) + f["ws"].to(p.device)
+        S_ = {k: st[k] for k in ("z", "wsp", "vr", "vc", "v", "p0", "s") if torch.is_tensor(st.get(k))}
+        for k, t in S_.items():
+            if t.is_cuda or not t.is_pinned(): st[k] = S_[k] = t.cpu().pin_memory()
+        if p.dim() == 2 and "vr" in S_ and p.numel() > self.row_block_elems and S_.get("wsp") is not None and gp.get("sfp_clock", True):
+            # a large factored matrix: updated in row blocks straight from host memory (_sfp_update_rows)
+            D_ = {k: S_[k].to(dev, non_blocking=True) for k in ("vr", "vc", "p0", "s")}
+            _sfp_update_rows(p.data, g, S_["z"], S_["wsp"], D_["vr"], D_["vc"], D_["p0"], D_["s"], f["d"], f["dlr"],
+                             f["du"], f["acc"], b2, b3, 1e-8, f["w"], b1, self._live_t(dev), dev,
+                             max(1, self.row_block_elems // p.shape[1]),
+                             (lambda r0, r1, yb, p=p: self.on_update(p, yb, (r0, r1))) if self.on_update is not None else None)
+            for k in ("vr", "vc", "s"): S_[k].copy_(D_[k], non_blocking=True)
+            return
+        D_ = {k: t.to(dev, non_blocking=True) for k, t in S_.items()}
+        pd = p.data if p.is_cuda else p.data.to(dev, non_blocking=True)
+        gd = g if g.is_cuda else g.to(dev, non_blocking=True)
+        fn(pd, gd, D_["z"], D_.get("vr"), D_.get("vc"), D_.get("v"), D_["p0"], D_["s"],
+           f["d"], f["dlr"], f["ckp1"], f["xy"], f["du"], f["acc"], b2, b3, 1e-8,
+           D_.get("wsp") if gp.get("sfp_clock", True) else None, f["w"], b1, self._live_t(dev))
+        for k in ("z", "wsp", "vr", "vc", "v", "s"):
+            if k in D_: S_[k].copy_(D_[k], non_blocking=True)
+        if not p.is_cuda: p.data.copy_(pd, non_blocking=True)
+        if self.on_update is not None: self.on_update(p, pd)
+
+    def _sfp_end(self, gp, f, dev):
+        """end of step: the Prodigy estimate, exactly as the package (numerator decays by b3; a negative contribution is kept only once
+        d has left d0 or the contribution is positive; d_hat limited to 2^0.25 d; d only rises)"""
+        b3 = gp["betas"][1] ** 0.5; d0 = 1e-6
         L = self._live_t(dev)                    # a skipped step moves none of these either
         if getattr(self, "share_d", False):
             # ONE step size for the whole model, as in Prodigy itself (Mishchenko & Defazio): this group's statistics go
@@ -377,6 +477,65 @@ class Fabric(Optimizer):
         if not gp.get("freeze_d"):              # (train.py --freeze-d: a diagnostic, the step size held where it stands)
             f["d"].copy_(torch.where((den > 0) & (L > 0), torch.maximum(f["d"], dhat), f["d"]))
         f["ws"].add_(f["w"] * L); f["acc"].zero_()
+
+    def _run_sfp(self, gp):
+        fn = self._sfp_fn()
+        dev = next((p.device for p in gp["params"] if p.grad is not None), None)
+        if dev is None: return
+        if self.offload == "all": dev = torch.device("cuda")
+        f = self._sfp_begin(gp, dev)
+        b1, b2 = gp["betas"]; b3 = b2 ** 0.5
+        for p in gp["params"]:
+            if p.grad is None: continue
+            if self.offload == "all":
+                self._sfp_one_all(gp, p, p.grad, f, dev); continue
+            st = self.state[p] or self._init_state(p, gp)
+            st["step"] += 1
+            if "wsp" not in st:                  # a weight's own clock starts where its group's stands (0 at the start;
+                st["wsp"] = torch.zeros_like(p, dtype=torch.float32) + f["ws"]   # a checkpoint without clocks keeps its average)
+            z_, w_ = st["z"], st.get("wsp")
+            if self.offload:
+                # state that arrived on the card (a checkpoint load, a growth) moves off at its first step
+                if z_.is_cuda: st["z"] = z_ = z_.cpu().pin_memory()
+                if w_ is not None and w_.is_cuda: st["wsp"] = w_ = w_.cpu().pin_memory()
+                zd = z_.to(dev, non_blocking=True); wd = w_.to(dev, non_blocking=True) if w_ is not None else None
+            else:
+                zd, wd = z_, w_
+            fn(p.detach(), p.grad, zd, st.get("vr"), st.get("vc"), st.get("v"), st["p0"], st["s"],
+               f["d"], f["dlr"], f["ckp1"], f["xy"], f["du"], f["acc"], b2, b3, 1e-8,
+               wd if gp.get("sfp_clock", True) else None, f["w"], b1, self._live_t(dev))
+            if self.offload:
+                z_.copy_(zd, non_blocking=True)
+                if w_ is not None: w_.copy_(wd, non_blocking=True)
+        self._sfp_end(gp, f, dev)
+
+    # FUSED INTO THE BACKWARD PASS (offload "all", src/stream_train.py fuse=True, 2026-10-26): begin every group's step, update each weight
+    # as soon as its gradient is complete (no gradient ever stored in host memory: -4 bytes a weight), then end the step. The same
+    # mathematics as step(); only the order of the weights differs (Prodigy's sums: summation order).
+    def fused_begin(self):
+        dev = torch.device("cuda"); self._fz = {}
+        self._gof = {p: gp for gp in self.param_groups for p in gp["params"]}
+        for gp in self.param_groups:
+            if gp.get("sfp"): self._fz[id(gp)] = self._sfp_begin(gp, dev)
+
+    def fused_update(self, p, g):
+        gp = self._gof[p]; self._sfp_one_all(gp, p, g, self._fz[id(gp)], torch.device("cuda"))
+
+    def fused_end(self):
+        dev = torch.device("cuda")
+        for gp in self.param_groups:
+            if gp.get("sfp"): self._sfp_end(gp, self._fz[id(gp)], dev)
+        if getattr(self, "share_d", False): self._share_d_update()
+        self._fz = None
+
+    def offload_now(self):
+        """move every z / wsp to pinned host memory at once (after a load_state_dict, which puts them on the card): the 4 GB test
+        died 2.4 s in with the whole optimizer state resident before its first step (2026-10-19)"""
+        if not self.offload: return
+        for st in self.state.values():
+            for k in ("z", "wsp"):
+                if k in st and torch.is_tensor(st[k]) and st[k].is_cuda: st[k] = st[k].cpu().pin_memory()
+        if torch.cuda.is_available(): torch.cuda.empty_cache()
 
     def _live_t(self, dev):
         """the spike guard's keep flag as a persistent 0-d device tensor (1.0 unless set_live says otherwise), so the

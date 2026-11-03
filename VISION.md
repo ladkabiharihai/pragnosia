@@ -17,3 +17,5 @@
 8. **Everything intrinsic to the model, instead of scaffolding.**
 
 9. **Solve context rot.**
+
+10. **Intrinsic thought: it thinks on its own while idle, as a human does — not only when asked a question.**

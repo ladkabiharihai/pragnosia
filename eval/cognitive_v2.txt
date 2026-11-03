@@ -1,1 +1,25 @@
 GOAL 2 BATTERY v2 (labelled options over every ordering; threshold-free yes/no; standard span), queued 2026-10-13 07:19 UTC
+
+######## base-604k (/mnt/kv_cache/final_base_v3.pt); N=40 per cell
+DIGIT SPAN       forward 15, backward 2   (humans ~7 / ~5)   by length F 3:90 4:80 5:90 6:60 7:100 8:80 9:100 10:100 11:90 12:70 13:90 14:90 15:90  B 3:10 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:0 12:0 13:0 14:0 15:0
+FREE RECALL      by position 1-15: 65 65 55 65 60 50 55 55 50 45 50 45 45 50 50   first3 62 / middle 51 / last3 48   (humans U-shaped)
+2-BACK           sensitivity (AUC, match vs non-match) 0.31   (humans ~90% right; no sensitivity 0.50)
+WASON abstract   right 98%, matching (P and Q) 2%, P only 0%, all 0%   (humans ~10% right)
+WASON social     right 100%, matching 0%, P only 0%, all 0%   (humans ~75% right)
+BELIEF BIAS      accepted at its own median: valid-believable 35, valid-unbelievable 40, invalid-believable 72, invalid-unbelievable 52   (humans 89 / 56 / 71 / 10); sensitivity to logic 0.30, to belief 0.57 (AUC; none 0.50)
+CRT              right 30%, intuitive error 28%   (humans ~41% right, most errors intuitive; chance 25)
+CONJUNCTION      'A and B' judged more probable: 10%   (humans ~85; chance 50)
+FALSE BELIEF     false-belief stories 60% right, true-belief controls 40%   (adults ~100 / ~100; chance 50)
+
+######## finetuned-v3 (/mnt/kv_cache/final_v3_sft/ckpt.pt); N=40 per cell
+DIGIT SPAN       forward 2, backward 2   (humans ~7 / ~5)   by length F 3:30 4:10 5:20 6:30 7:20 8:40 9:30 10:50 11:50 12:60 13:50 14:40 15:10  B 3:0 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:0 12:0 13:0 14:0 15:0
+FREE RECALL      by position 1-15: 100 100 95 90 85 80 80 80 70 75 75 70 75 80 75   first3 98 / middle 77 / last3 77   (humans U-shaped)
+2-BACK           sensitivity (AUC, match vs non-match) 0.42   (humans ~90% right; no sensitivity 0.50)
+WASON abstract   right 42%, matching (P and Q) 18%, P only 0%, all 40%   (humans ~10% right)
+WASON social     right 78%, matching 0%, P only 0%, all 22%   (humans ~75% right)
+BELIEF BIAS      accepted at its own median: valid-believable 32, valid-unbelievable 55, invalid-believable 48, invalid-unbelievable 65   (humans 89 / 56 / 71 / 10); sensitivity to logic 0.43, to belief 0.41 (AUC; none 0.50)
+CRT              right 30%, intuitive error 28%   (humans ~41% right, most errors intuitive; chance 25)
+CONJUNCTION      'A and B' judged more probable: 68%   (humans ~85; chance 50)
+FALSE BELIEF     false-belief stories 52% right, true-belief controls 50%   (adults ~100 / ~100; chance 50)
+GUARD: peak 3650 MiB of 7 GiB (.venv/bin/python -u eval/cognitive.py /mnt/kv_cache/final_base_v3.pt=base-604k /mnt/kv_cache/final_v3_sft/ckpt.pt=finetuned-v3)
+COGNITIVE_DONE
